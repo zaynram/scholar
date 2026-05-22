@@ -176,7 +176,202 @@ scholar/
     └── first-run.ts           (interactive PDF-root wizard)
 ```
 
-## 6. Plugin Manifest
+### Target files (load-bearing units of work)
+
+The following individual files are enumerated for the threshold helper and the plan-split overlap analyzer. Each is a distinct unit of work tracked across plans.
+
+### 5.1 src/server/index.ts
+Stdio entry. Wires the McpServer, registers tools and the UI resource, opens the active corpus DB, spawns the child pdf process.
+
+### 5.2 src/server/db/schema.ts
+Drizzle schema for both the config DB and per-corpus DB. Listed in §9.
+
+### 5.3 src/server/db/migrations.ts
+Drizzle migration runner invoked at corpus open.
+
+### 5.4 src/server/db/sqlite-vec.ts
+Loader for the `sqlite-vec` extension; handles platform-specific dll/dylib resolution.
+
+### 5.5 src/server/tools/corpus.ts
+`scholar.corpus.list / create / activate / status` tools.
+
+### 5.6 src/server/tools/roots.ts
+`scholar.roots.list / add / remove / set-default` tools; triggers pdf child restart on mutation.
+
+### 5.7 src/server/tools/papers.ts
+`scholar.papers.search / update / text` tools.
+
+### 5.8 src/server/tools/annotations.ts
+`scholar.annotations.list / upsert / delete`; bidirectional reconciliation with pdf MCP.
+
+### 5.9 src/server/tools/digest.ts
+`scholar.digest.generate / show / change-since-last-open`; Ollama-driven by default, opt-in Claude fallback.
+
+### 5.10 src/server/tools/prompts.ts
+`scholar.prompts.generate / show`.
+
+### 5.11 src/server/tools/ingest.ts
+`scholar.ingest.bibtex / doi / arxiv / manual`.
+
+### 5.12 src/server/tools/pdf.ts
+`scholar.pdf.open / search-text / extract-anchors / refresh-extraction`; proxies into the child pdf MCP.
+
+### 5.13 src/server/tools/snapshot.ts
+`scholar.snapshot.take` and the change-since-last-open delta logic.
+
+### 5.14 src/server/ingest/citation-js.ts
+BibTeX / RIS adapter wrapping `citation.js`.
+
+### 5.15 src/server/ingest/crossref.ts
+CrossRef API adapter with polite-tier `mailto`.
+
+### 5.16 src/server/ingest/arxiv.ts
+arXiv Atom API adapter with optional PDF download.
+
+### 5.17 src/server/ollama/client.ts
+Ollama HTTP client (`/api/tags`, `/api/embeddings`, `/api/chat`).
+
+### 5.18 src/server/ollama/chunker.ts
+Token-aware chunker producing 512-token windows with 64-token overlap.
+
+### 5.19 src/server/pdf/lifecycle.ts
+Child process supervisor: spawn / SIGTERM / restart / health check, keyed to corpus + roots set.
+
+### 5.20 src/server/ui/resource.ts
+Registers `ui://scholar/app.html` and serves the single-file React bundle.
+
+### 5.21 src/ui/App.tsx
+React root; wires the App SDK lifecycle (`ontoolinput`, `ontoolresult`, `onhostcontextchanged`).
+
+### 5.22 src/ui/views/CorpusDashboard.tsx
+Scope picker, filters, search, paper-card list.
+
+### 5.23 src/ui/views/PaperDetail.tsx
+pdf-viewer iframe embed + annotations panel + similar-papers via sqlite-vec.
+
+### 5.24 src/ui/views/DigestPanel.tsx
+Synthesis pane + change-since-last-open tab + Claude opt-in.
+
+### 5.25 src/ui/views/ReadingPromptsPane.tsx
+Per-paper or per-scope reading-questions panel.
+
+### 5.26 src/ui/views/ReaderProgress.tsx
+Chart.js progress charts.
+
+### 5.27 src/ui/lib/app.ts
+App SDK wrapper, host-styles wiring, callServerTool helper.
+
+### 5.28 src/vendor/pdf-server/dist/index.js
+Vendored forked dist with the `MCP_PDF_CLIENT_ROOTS` patch and `roots` propagation fix.
+
+### 5.29 src/vendor/pdf-server/PATCH.md
+Documents the upstream diff for future re-vendoring.
+
+### 5.30 nu/scholar.nu
+User-facing nu module.
+
+### 5.31 commands/ingest.md
+`/scholar:ingest` slash command.
+
+### 5.32 commands/digest.md
+`/scholar:digest` slash command.
+
+### 5.33 commands/status.md
+`/scholar:status` slash command.
+
+### 5.34 skills/scholar-workflow/SKILL.md
+Skill explaining when to use scholar's surfaces.
+
+### 5.35 skills/scholar-ingest/SKILL.md
+Skill for ingestion workflows.
+
+### 5.36 scripts/build-plugin.ts
+Build orchestrator that assembles `scholar.plugin`.
+
+### 5.37 scripts/first-run.ts
+Interactive PDF-root wizard.
+
+### 5.38 package.json
+Manifest with dependencies and Bun scripts.
+
+### 5.39 vite.config.ts
+Single-file UI build configuration.
+
+### 5.40 drizzle.config.ts
+Drizzle Kit migration generator configuration.
+
+## 6. Implementation Cycles
+
+**Complexity:** 8 (high — multi-process orchestration, vendored fork, embeddings, UI, and CLI wired together).
+
+The following cycles capture TDD-structured work units. Each cycle is independently testable; the dependency relationships are documented per cycle and inform the plan-split (multi-plan) overlap analysis.
+
+### 6.1 Project scaffolding
+`package.json`, `tsconfig.json`, `drizzle.config.ts`, Bun runner, basic CI. Owns the empty server skeleton (`src/server/index.ts`), the schema migration bootstrap (`src/server/db/migrations.ts`), and the config DB.
+**Touches:** §5.1, §5.2, §5.3, §5.38, §5.40.
+**Depends-on:** none.
+
+### 6.2 Bundled forked pdf MCP
+Vendor v1.7.2 dist into `src/vendor/pdf-server/`, apply the two-line patch preserving the `MCP_PDF_CLIENT_ROOTS` boundary, add `MCP_PDF_CLIENT_ROOTS_PATHS` env support. Tests: child spawn lifecycle.
+**Touches:** §5.19, §5.28, §5.29.
+**Depends-on:** 6.1.
+
+### 6.3 Corpus + roots tools
+`scholar.corpus.*` and `scholar.roots.*` tools. First-run wizard wired so the wizard's output flows to the config DB.
+**Touches:** §5.5, §5.6, §5.37.
+**Depends-on:** 6.1, 6.2.
+
+### 6.4 Ingestion adapters and tools
+citation.js / CrossRef / arXiv adapters plus the `scholar.ingest.*` tools.
+**Touches:** §5.11, §5.14, §5.15, §5.16.
+**Depends-on:** 6.1, 6.3.
+
+### 6.5 Text extraction + chunk embeddings
+`scholar.pdf.refresh-extraction`, chunker, Ollama client, sqlite-vec wiring.
+**Touches:** §5.4, §5.12, §5.17, §5.18.
+**Depends-on:** 6.1, 6.2, 6.3.
+
+### 6.6 Search + reading queue
+`scholar.papers.search` (hybrid lexical + sqlite-vec), the `reading_queue` view, `scholar.papers.update` for status/priority/depth/role/section.
+**Touches:** §5.7.
+**Depends-on:** 6.1, 6.5.
+
+### 6.7 Annotation round-trip
+`scholar.annotations.*` tools and the bidirectional reconciliation with the child pdf MCP.
+**Touches:** §5.8.
+**Depends-on:** 6.1, 6.2, 6.3.
+
+### 6.8 Digest + reading prompts
+Ollama chat path for syntheses and per-paper reading questions; `cowork.askClaude` opt-in escape.
+**Touches:** §5.9, §5.10, §5.17.
+**Depends-on:** 6.1, 6.5.
+
+### 6.9 MCP App UI bundle
+Five React views, host styling, vite singlefile build, UI-resource registration.
+**Touches:** §5.20, §5.21, §5.22, §5.23, §5.24, §5.25, §5.26, §5.27, §5.39.
+**Depends-on:** 6.4, 6.5, 6.6, 6.7, 6.8.
+
+### 6.10 nu module + slash commands + skills
+User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scholar:status`, and the two skills.
+**Touches:** §5.30, §5.31, §5.32, §5.33, §5.34, §5.35.
+**Depends-on:** 6.4, 6.5, 6.6, 6.7, 6.8.
+
+### 6.11 Snapshots + change-since-last-open
+`scholar.snapshot.take` and the delta-digest computation that diffs against the most recent snapshot.
+**Touches:** §5.13.
+**Depends-on:** 6.1.
+
+### 6.12 sqlite3-mcp registration integration
+`register_db` on corpus activation, documentation of the backup-via-sqlite3-mcp recipe.
+**Touches:** §5.5.
+**Depends-on:** 6.1.
+
+### 6.13 Plugin build + first-run wizard
+`scripts/build-plugin.ts` and the interactive PDF-root wizard. Produces `scholar.plugin` archive.
+**Touches:** §5.36, §5.37.
+**Depends-on:** 6.9, 6.10.
+
+## 7. Plugin Manifest
 
 `.claude-plugin/plugin.json`:
 ```json
@@ -564,25 +759,9 @@ ID stability is preserved across both paths.
 - First launch invokes `scripts/first-run.ts` which elicits the default PDF root (per the user's "user-pick" choice).
 - The user can later distribute a *corpus* (not the plugin itself) via sqlite3-mcp's `pack_repo` against `scholar-<corpus>.db`, producing a git ref another user can `unpack_from_git_ref` into their scholar installation.
 
-## 15. Cycle Sequencing (handoff to spec-pipeline)
+## 15. Cycle Sequencing
 
-The spec-pipeline will read this design and synthesize plan-mds. As a recommendation, the spec-pipeline should consider these load-bearing cycles in order:
-
-1. **Cycle 1: project scaffolding** — `package.json`, `tsconfig.json`, drizzle config, Bun runner, basic CI. Owns: src/server/index.ts skeleton, schema migrations bootstrap, config DB.
-2. **Cycle 2: bundled forked pdf MCP** — vendor v1.7.2 dist, apply the two-line patch, add `MCP_PDF_CLIENT_ROOTS_PATHS` env support. Tests: child spawn lifecycle.
-3. **Cycle 3: corpus + roots tools** — `scholar.corpus.*`, `scholar.roots.*` tools. First-run wizard.
-4. **Cycle 4: ingestion** — citation.js / CrossRef / arXiv adapters and tools.
-5. **Cycle 5: text extraction + chunk embeddings** — `scholar.pdf.refresh-extraction`, chunker, Ollama client, sqlite-vec wiring.
-6. **Cycle 6: search + queue** — `scholar.papers.search` (hybrid), reading_queue view, `scholar.papers.update`.
-7. **Cycle 7: annotation round-trip** — schema + tools + reconciliation.
-8. **Cycle 8: digest + reading prompts** — Ollama chat path, `cowork.askClaude` opt-in escape.
-9. **Cycle 9: MCP App UI bundle** — five views, host styling, vite singlefile build.
-10. **Cycle 10: nu module + slash commands + skill** — user-facing surfaces.
-11. **Cycle 11: snapshots + change-since-last-open** — `scholar.snapshot.take`, delta digest tool.
-12. **Cycle 12: build-plugin + first-run wizard** — `.plugin` archive build + Cowork install path.
-13. **Cycle 13: sqlite3-mcp register integration** — `register_db` on activate, backup recipe documentation.
-
-Each cycle is independently testable. Cycles 4 / 5 / 6 / 7 / 8 are largely independent and could parallelize via `spec-to-multi-plan` if isolation is preserved.
+Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / `Depends-on` declarations. The spec-pipeline `ingest-spec` workflow uses §6 as the authoritative cycle list when deriving the plan-split. The dependency graph supports a multi-plan split with up to three independent waves between scaffolding and final packaging.
 
 ## 16. Risks and Mitigations
 
