@@ -34,7 +34,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
     - arXiv abstract API ingest (no auth, free).
     Manual entry (single-paper form) is the fallback.
 7. **Semantic search** — `sqlite-vec` index over paper title + abstract + extracted text chunks; embeddings produced via local Ollama (`nomic-embed-text` default; user-pluggable).
-8. **Annotation surface** — schema-compatible with the Daisy round-trip (`{ id, page?, anchor?, body, created_at, updated_at, source }`), bidirectional with pdf-viewer through the bundled pdf MCP.
+8. **Annotation surface** — schema-compatible with the Daisy round-trip (`{ id, page?, anchor?, body, created_at, updated_at, source }`); round-trips with the child pdf MCP (scholar→viewer push, viewer→scholar reconcile-on-read — see §13).
 9. **Synthesis / digest / reading prompts** — local Ollama by default (Qwen-class chat model, user-pluggable). Escape hatch to `cowork.askClaude` for high-stakes synthesis where the user explicitly opts in.
 10. **Reading queue** — simple priority queue (manual `priority` integer + computed staleness signals); no FSRS in v1.
 11. **MCP App view surfaces (5)** — corpus dashboard, paper detail, digest panel, reading prompts pane, reader progress (charts).
@@ -50,6 +50,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 - Mobile / non-Windows packaging.
 - Multi-user / shared-corpus syncing.
 - Certified PDF signing (the bundled pdf MCP supports image-stamp signatures only).
+- Filesystem watcher for auto-ingest of newly-dropped PDFs. v1 ingestion is explicitly user-triggered (BibTeX/RIS, DOI, arXiv, manual); a directory watcher is deferred to v2.
 
 ### Non-goals
 
@@ -92,7 +93,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
         │  scholar fork:  │    │  sqlite3-mcp      │    │  Local services      │
         │  mcp-pdf-server │    │  (existing)       │    │  - Ollama (embeds +  │
         │  (child proc)   │    │  registers        │    │    chat)             │
-        │                 │    │  scholar DB       │    │  - File watcher      │
+        │                 │    │  scholar DB       │    │                      │
         └─────────────────┘    └───────────────────┘    └──────────────────────┘
                 │                       │                          │
                 └───────────────────────┼──────────────────────────┘
@@ -139,8 +140,8 @@ scholar/
 ├── src/
 │   ├── server/                (scholar MCP server)
 │   │   ├── index.ts           (stdio entry)
-│   │   ├── tools/             (one file per tool)
-│   │   ├── db/                (drizzle schema + migrations)
+│   │   ├── tools/             (registry.ts + one file per tool)
+│   │   ├── db/                (drizzle schema + migrations + raw-ddl)
 │   │   ├── ingest/            (citation.js + crossref + arxiv adapters)
 │   │   ├── ollama/            (embedding + chat client)
 │   │   ├── pdf/               (lifecycle for the child pdf process)
@@ -184,7 +185,7 @@ The following individual files are enumerated for the threshold helper and the p
 Stdio entry. Wires the McpServer, registers tools and the UI resource, opens the active corpus DB, spawns the child pdf process.
 
 ### 5.2 src/server/db/schema.ts
-Drizzle schema for both the config DB and per-corpus DB. Listed in §9.
+Drizzle schema for both the config DB and per-corpus DB. Listed in §8.
 
 ### 5.3 src/server/db/migrations.ts
 Drizzle migration runner invoked at corpus open.
@@ -300,6 +301,18 @@ Single-file UI build configuration.
 ### 5.40 drizzle.config.ts
 Drizzle Kit migration generator configuration.
 
+### 5.41 src/server/tools/registry.ts
+Tool-registration barrel (foundation-owned). Statically imports every tool module and exposes `registerAll(server, ctx)`. Declares the `ServerContext` type that all tool modules import (type-only). See §7.6.
+
+### 5.42 .claude-plugin/plugin.json
+Plugin manifest. Content in §7.1. Foundation-owned (cycle 6.1).
+
+### 5.43 .mcp.json
+MCP server registration for the scholar server. Content in §7.1. Foundation-owned (cycle 6.1).
+
+### 5.44 src/server/db/raw-ddl.ts
+Idempotent raw-SQL DDL that Drizzle cannot manage: the `chunk_vec` `vec0` virtual table and the `reading_queue` view (`CREATE ... IF NOT EXISTS`). Owned by the `extraction` plan (cycle 6.5 creates `chunk_vec`, cycle 6.6 creates `reading_queue`).
+
 ## 6. Implementation Cycles
 
 **Complexity:** 8 (high — multi-process orchestration, vendored fork, embeddings, UI, and CLI wired together).
@@ -307,8 +320,8 @@ Drizzle Kit migration generator configuration.
 The following cycles capture TDD-structured work units. Each cycle is independently testable; the dependency relationships are documented per cycle and inform the plan-split (multi-plan) overlap analysis.
 
 ### 6.1 Project scaffolding
-`package.json`, `tsconfig.json`, `drizzle.config.ts`, Bun runner, basic CI. Owns the empty server skeleton (`src/server/index.ts`), the schema migration bootstrap (`src/server/db/migrations.ts`), and the config DB.
-**Touches:** §5.1, §5.2, §5.3, §5.38, §5.40.
+`package.json`, `tsconfig.json`, `drizzle.config.ts`, Bun runner, basic CI. Owns the server skeleton (`src/server/index.ts`), the Drizzle schema (`src/server/db/schema.ts`), the migration bootstrap (`src/server/db/migrations.ts`), the `sqlite-vec` loader (`src/server/db/sqlite-vec.ts`), and the config DB. Scaffolds the tool-registration skeleton — `src/server/tools/registry.ts` plus a no-op stub for every tool module (`corpus`, `roots`, `snapshot`, `ingest`, `pdf`, `papers`, `digest`, `prompts`, `annotations`) — so downstream plans fill an already-wired file (see §7.6). Authors the plugin manifest (`.claude-plugin/plugin.json`) and `.mcp.json`.
+**Touches:** §5.1, §5.2, §5.3, §5.4, §5.38, §5.40, §5.41, §5.42, §5.43.
 **Depends-on:** none.
 
 ### 6.2 Bundled forked pdf MCP
@@ -322,18 +335,18 @@ Vendor v1.7.2 dist into `src/vendor/pdf-server/`, apply the two-line patch prese
 **Depends-on:** 6.1, 6.2.
 
 ### 6.4 Ingestion adapters and tools
-citation.js / CrossRef / arXiv adapters plus the `scholar.ingest.*` tools.
+citation.js / CrossRef / arXiv adapters plus the `scholar.ingest.*` tools. All remotely-sourced metadata is treated as untrusted: sanitized and length-capped on ingest, and downloaded file paths are constrained under the corpus root (see §12).
 **Touches:** §5.11, §5.14, §5.15, §5.16.
 **Depends-on:** 6.1, 6.3.
 
 ### 6.5 Text extraction + chunk embeddings
-`scholar.pdf.refresh-extraction`, chunker, Ollama client, sqlite-vec wiring.
-**Touches:** §5.4, §5.12, §5.17, §5.18.
+`scholar.pdf.refresh-extraction`, chunker, Ollama client. Creates the `chunk_vec` virtual table via raw DDL (`src/server/db/raw-ddl.ts`); consumes the `sqlite-vec` loader scaffolded by cycle 6.1.
+**Touches:** §5.12, §5.17, §5.18, §5.44.
 **Depends-on:** 6.1, 6.2, 6.3.
 
 ### 6.6 Search + reading queue
-`scholar.papers.search` (hybrid lexical + sqlite-vec), the `reading_queue` view, `scholar.papers.update` for status/priority/depth/role/section.
-**Touches:** §5.7.
+`scholar.papers.search` (hybrid lexical + sqlite-vec), the `reading_queue` view (raw DDL in `src/server/db/raw-ddl.ts`), `scholar.papers.update` for status/priority/depth/role/section.
+**Touches:** §5.7, §5.44.
 **Depends-on:** 6.1, 6.5.
 
 ### 6.7 Annotation round-trip
@@ -362,16 +375,18 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 **Depends-on:** 6.1.
 
 ### 6.12 sqlite3-mcp registration integration
-`register_db` on corpus activation, documentation of the backup-via-sqlite3-mcp recipe.
+`register_db` on corpus activation (wired into `src/server/tools/corpus.ts`). The backup/distribution recipe is specified in §14.2; this cycle produces no separate doc file.
 **Touches:** §5.5.
 **Depends-on:** 6.1.
 
-### 6.13 Plugin build + first-run wizard
-`scripts/build-plugin.ts` and the interactive PDF-root wizard. Produces `scholar.plugin` archive.
-**Touches:** §5.36, §5.37.
+### 6.13 Plugin build
+`scripts/build-plugin.ts` — the build orchestrator that assembles the `scholar.plugin` archive. The first-run PDF-root wizard is owned by cycle 6.3, not here.
+**Touches:** §5.36.
 **Depends-on:** 6.9, 6.10.
 
-## 7. Plugin Manifest
+## 7. Plugin Manifest and MCP Server Design
+
+### 7.1 Plugin manifest
 
 `.claude-plugin/plugin.json`:
 ```json
@@ -405,9 +420,7 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 
 Note: the **bundled pdf server is NOT registered in `.mcp.json`**. It is spawned by the scholar server itself as a child process. Rationale: PDF roots are corpus-scoped and runtime-mutable, so the child must be restartable from inside scholar's control loop. Registering it as a top-level MCP server would freeze the roots at host startup.
 
-## 7. MCP Server Design
-
-### 7.1 The forked pdf MCP
+### 7.2 The forked pdf MCP
 
 **Approach:** vendor the `@modelcontextprotocol/server-pdf@1.7.2` `dist/` tree into `src/vendor/pdf-server/`. The fork applies one minimal patch:
 
@@ -436,19 +449,19 @@ The fork also accepts a new env var `MCP_PDF_CLIENT_ROOTS_PATHS` (comma-separate
 
 The host sees the scholar server's `pdf.*` proxy tools (see §10), not the forked server directly.
 
-### 7.2 Scholar core MCP server
+### 7.3 Scholar core MCP server
 
 Entry: `src/server/index.ts`. Uses `@modelcontextprotocol/sdk` over stdio. On startup:
 
 1. Resolves `SCHOLAR_RUNTIME_ROOT`, ensures `runtime/dbs/` exists.
 2. Reads `runtime/config.json` (corpora list, active corpus, default PDF root, Ollama model overrides).
-3. If first run: invokes `scripts/first-run.ts` which uses `elicitInput` (host-side) to ask for the initial PDF root. Wizard writes the result into `runtime/config.json`.
-4. Opens the active corpus's `scholar-<corpus>.db` via better-sqlite3, runs Drizzle migrations, loads the `sqlite-vec` extension.
-5. Spawns the pdf child with the active corpus's roots.
+3. First-run handling is **not** done at startup. When a corpus tool (`scholar.corpus.list` / `scholar.corpus.activate`) runs and finds no corpus configured, it calls the first-run routine in `scripts/first-run.ts`, which uses the live MCP session's `elicitInput` request to ask the host for the initial PDF root, then writes the result into `runtime/config.json` and the config DB. `first-run.ts` is a module imported by `src/server/tools/corpus.ts` (both `corpus`-plan owned) — not a standalone executable.
+4. Opens the active corpus's `scholar-<corpus>.db` via better-sqlite3, runs Drizzle migrations, loads the `sqlite-vec` extension. (Deferred until a corpus is active.)
+5. Spawns the pdf child with the active corpus's roots. (Deferred until a corpus is active.)
 6. Registers itself with sqlite3-mcp by calling `mcp__sqlite3-mcp__register_db` once per corpus DB (best-effort; ignored if sqlite3-mcp is not running).
 7. Registers MCP tools and the UI resource (see §10 and §11).
 
-### 7.3 sqlite3-mcp integration
+### 7.4 sqlite3-mcp integration
 
 Scholar treats sqlite3-mcp as a **complementary** service:
 
@@ -463,9 +476,9 @@ Scholar treats sqlite3-mcp as a **complementary** service:
 
 When scholar opens a corpus, it calls `register_db` with that corpus's path under name `scholar:<corpus>`. When the user runs `/sqlite3-mcp query_database scholar:daisy "SELECT count(*) FROM papers"` they get the result without scholar mediating.
 
-### 7.4 Nushell module
+### 7.5 Nushell module
 
-`nu/scholar.nu` exports user-facing commands. All commands shell out to the scholar MCP via a small `nu_invoke` helper that wraps the official MCP client CLI (or, if simpler, hits scholar via stdio over a named pipe). One example:
+`nu/scholar.nu` exports user-facing commands. All commands shell out to the scholar MCP via a small `nu_invoke` helper that wraps the official MCP client CLI invoked as a child process. **Transport is decided: the MCP client CLI** — the named-pipe alternative considered earlier is dropped. One example:
 
 ```nu
 export def main [] { scholar status }
@@ -479,6 +492,17 @@ export def status [
 ```
 
 This file is purely user ergonomics. No business logic. The `nu-fluency` skills (`nushell-idioms`, `nushell-records`) inform style; the `nu-audit` hook keeps it idiomatic.
+
+### 7.6 Tool registration contract
+
+To keep the seven plans' blast-radii file-disjoint — and therefore the `worktree="not-required"` decision in the splits file sound rather than aspirational — tool wiring follows a fixed convention:
+
+- Cycle 6.1 (`foundation`) creates `src/server/tools/registry.ts` and a **no-op stub** for every tool module: `corpus.ts`, `roots.ts`, `snapshot.ts`, `ingest.ts`, `pdf.ts`, `papers.ts`, `digest.ts`, `prompts.ts`, `annotations.ts`. Each stub exports `export function registerTools(server: McpServer, ctx: ServerContext): void {}`.
+- `registry.ts` statically imports all stubs and exposes `registerAll(server, ctx)`, which calls each module's `registerTools`. Because the stubs exist from cycle 6.1, `registry.ts` and `src/server/index.ts` compile before any downstream plan runs.
+- Each downstream plan **fills the body** of its own stub(s) only. It never edits `registry.ts`, `index.ts`, or a sibling plan's tool file. Wave ordering guarantees `foundation` (wave 0) completes before any stub is filled; the only concurrent wave (wave 2 — `ingest`, `extraction`, `annotations`) touches file-disjoint stubs.
+- `ServerContext` (DB handles, the pdf child handle, the Ollama client, config accessors) is declared in `registry.ts` and imported type-only by every tool module.
+
+This convention — not mere file-path partitioning — is what makes concurrent execution of wave 2 collision-free.
 
 ## 8. Data Model (Drizzle schema)
 
@@ -528,7 +552,7 @@ export const papers = sqliteTable("papers", {
   status:       text("status").notNull().default("pending"), // pending|reading|reviewed|skip
   priority:     integer("priority").notNull().default(0),
   abstract:     text("abstract"),
-  imported_via: text("imported_via"),          // "bibtex" | "ris" | "crossref" | "arxiv" | "manual"
+  imported_via: text("imported_via"),          // "bibtex" | "ris" | "crossref" | "arxiv" | "manual" (untrusted; sanitized on ingest — see §12)
   imported_at:  text("imported_at").notNull(),
   status_touched_at: text("status_touched_at"),
 });
@@ -539,7 +563,7 @@ export const paper_text = sqliteTable("paper_text", {
   text:     text("text").notNull(),
   pages:    integer("pages"),
   extracted_at: text("extracted_at").notNull(),
-  extractor: text("extractor"),                // "pdfjs" | "unpdf" | "child-pdf-mcp"
+  extractor: text("extractor"),                // "child-pdf-mcp" — the only v1 extractor; column kept for forward-compat
 });
 
 export const paper_chunks = sqliteTable("paper_chunks", {
@@ -551,7 +575,8 @@ export const paper_chunks = sqliteTable("paper_chunks", {
 });
 
 // sqlite-vec virtual table: chunk embeddings.
-// CREATE VIRTUAL TABLE chunk_vec USING vec0(
+// Created by src/server/db/raw-ddl.ts (§5.44) — NOT Drizzle-managed.
+// CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
 //   chunk_id TEXT PRIMARY KEY,
 //   embedding FLOAT[768]  -- nomic-embed-text dim
 // );
@@ -599,7 +624,8 @@ export const snapshots = sqliteTable("snapshots", {
 });
 
 // Reading-queue ordering — derived view; uses priority + staleness + status.
-// CREATE VIEW reading_queue AS
+// Created by src/server/db/raw-ddl.ts (§5.44) — NOT Drizzle-managed.
+// CREATE VIEW IF NOT EXISTS reading_queue AS
 //   SELECT id, key, title, status, priority,
 //          (julianday('now') - julianday(status_touched_at)) AS days_since_touch
 //   FROM papers
@@ -627,9 +653,9 @@ Differences from Daisy: search is **semantic** (sqlite-vec) when Ollama is avail
 
 ### 9.2 Paper detail (`view: "paper", paper_id: ...`)
 
-Two-column layout. Left: the pdf-viewer iframe (the bundled pdf MCP's own MCP App UI, embedded via cross-iframe message passing). Right: paper metadata, annotations list (with CRUD), reading prompts, and a "similar papers" panel populated by `chunk_vec` k-NN search.
+Two-column layout. Left: an in-panel PDF render produced by **bundled pdf.js** (the library, bundled into the single-file UI — *not* a nested MCP App iframe). Right: paper metadata, annotations list (with CRUD), reading prompts, and a "similar papers" panel populated by `chunk_vec` k-NN search. An "open in pdf-viewer" action hands off to the full pdf-viewer plugin for heavyweight viewing.
 
-The annotation list uses the **same schema and IDs as the pdf-viewer's annotation store**. Changes flow bidirectionally: edits in scholar's panel propagate to the pdf-viewer via `app.callServerTool("annotations.upsert", ...)`, and edits in the pdf-viewer trigger an `app.subscribeResource` notification that scholar's panel re-fetches.
+The annotation list uses the **same schema and IDs as the child pdf MCP's annotation store**. Edits in scholar's panel call `app.callServerTool("annotations.upsert", ...)`, which writes scholar's row and forwards the change to the child pdf MCP. Edits made in an external pdf-viewer are reconciled when the paper detail view is (re)opened or explicitly refreshed — see §13 for the reconciliation model.
 
 ### 9.3 Digest panel (`view: "digest", scope_key: ...`)
 
@@ -643,7 +669,7 @@ Per-paper or per-scope. Per-paper: the 3 Haiku-style questions, cached in `readi
 
 ### 9.5 Reader progress (`view: "progress"`)
 
-Chart.js (loaded from CDN; in-CSP) bars by section + ring chart of overall status mix + sparkline of reviewed-per-week over the last 12 weeks (computed from `status_touched_at` history if available, otherwise the current snapshot only).
+Chart.js — **bundled** into the single-file UI build, no runtime CDN dependency — bars by section + ring chart of overall status mix + sparkline of reviewed-per-week over the last 12 weeks (computed from `status_touched_at` history if available, otherwise the current snapshot only).
 
 ### 9.6 Host styling
 
@@ -705,7 +731,18 @@ On scholar startup, scholar `GET`s `http://127.0.0.1:11434/api/tags`. If the cal
 
 ### Fallback to `cowork.askClaude`
 
-The UI surfaces a per-action "use Claude instead" toggle. When the user opts in, scholar's MCP tool calls return a sentinel that tells the UI to issue `window.cowork.askClaude(prompt, data)` directly (the prompt is shaped server-side; the UI just forwards). This keeps Claude API usage off the default path while preserving an escape hatch.
+The UI surfaces a per-action "use Claude instead" toggle. When the user opts in, scholar's MCP tool returns — instead of a generated body — a typed sentinel in `structuredContent`:
+
+```typescript
+// structuredContent.askClaude present ⇒ the UI forwards to Claude.
+askClaude?: {
+  prompt: string;   // fully-shaped, server-side prompt
+  data: unknown;    // structured context payload
+  reason: string;   // "ollama-offline" | "user-opt-in"
+}
+```
+
+On seeing `structuredContent.askClaude`, the UI calls `window.cowork.askClaude(askClaude.prompt, askClaude.data)` (a host-provided global in the MCP App iframe) and renders the result. This sentinel shape is the contract shared between the producers (`src/server/tools/digest.ts`, `prompts.ts`) and the consumer (`src/ui/views/DigestPanel.tsx`). It keeps Claude API usage off the default path while preserving an explicit escape hatch.
 
 ### Embedding pipeline
 
@@ -717,6 +754,8 @@ The UI surfaces a per-action "use Claude instead" toggle. When the user opts in,
 
 ## 12. Citation / Metadata Pipeline
 
+**Input trust.** All fields returned by CrossRef and arXiv, and all parsed BibTeX/RIS fields, are untrusted input. Before persistence: strings are length-capped (title ≤ 1024, abstract ≤ 16384, authors ≤ 4096 chars), control characters are stripped, and the text is treated as untrusted data — delimited, never concatenated as instructions — wherever it later flows into an Ollama or Claude prompt. React views escape all rendered metadata. This applies to every ingest path below.
+
 ### 12.1 BibTeX / RIS (citation.js)
 
 `scholar.ingest.bibtex` accepts a file path or pasted text. Uses `citation.js` to parse to CSL-JSON, then maps to the scholar paper schema. Duplicate detection is by `doi`, then `(title, year, first-author-last-name)`.
@@ -727,7 +766,7 @@ The UI surfaces a per-action "use Claude instead" toggle. When the user opts in,
 
 ### 12.3 arXiv
 
-`scholar.ingest.arxiv` accepts either an arXiv ID or URL. Calls `http://export.arxiv.org/api/query?id_list=<id>`. If PDF download is enabled and the corpus's default PDF root is writable, scholar fetches the PDF into `<default-root>/arxiv/<id>.pdf` and sets `pdf_path`.
+`scholar.ingest.arxiv` accepts either an arXiv ID or URL. The `<id>` is validated against the arXiv identifier grammar (`\d{4}\.\d{4,5}(v\d+)?`, or the legacy `archive/YYMMNNN` form) before use. Calls `http://export.arxiv.org/api/query?id_list=<id>`. If PDF download is enabled and the corpus's default PDF root is writable, scholar fetches the PDF into `<default-root>/arxiv/<id>.pdf`. The destination is resolved to an absolute path and asserted to be a child of the default root before any write — a path that escapes the root aborts the download — then `pdf_path` is set.
 
 ### 12.4 Manual
 
@@ -735,11 +774,14 @@ A no-op metadata path: the form lets the user supply title/authors/year/venue/pd
 
 ## 13. Annotation Round-trip
 
-The bundled pdf MCP already supports `add_annotations` / `update_annotations` / `remove_annotations` with the type catalogue listed in the pdf-viewer plugin's `view-pdf` skill. Scholar's annotation table mirrors that schema (`{id, page, anchor, body, source, created_at, updated_at}`).
+The bundled pdf MCP supports `add_annotations` / `update_annotations` / `remove_annotations` with the type catalogue listed in the pdf-viewer plugin's `view-pdf` skill. Scholar's annotation table mirrors that schema (`{id, page?, anchor?, body, source, created_at, updated_at}`); `id`s are stable across both stores.
 
-Flow:
-1. User edits in scholar's annotation panel (paper detail view) → `scholar.annotations.upsert` → scholar writes the row, then calls the child pdf MCP's `interact: { commands: [{ type: "add_annotations" | "update_annotations", ... }] }` with a derived rectangle (from the anchor if available, else a margin sticky-note).
-2. User edits in the pdf-viewer's own UI → the pdf MCP fires an annotation-changed notification → scholar listens, reconciles, writes a row with `source: "pdf-viewer"`.
+**Propagation model.** v1 does **not** assume the child pdf MCP emits annotation-change notifications — that behaviour is unverified against `server-pdf@1.7.2`. Propagation is therefore poll/reconcile, not event-push:
+
+1. *scholar → viewer (push).* A `scholar.annotations.upsert` / `.delete` writes scholar's row, then immediately forwards the change to the child pdf MCP via `interact: { commands: [{ type: "add_annotations" | "update_annotations" | "remove_annotations", ... }] }` with a derived rectangle (from the anchor if available, else a margin sticky-note).
+2. *viewer → scholar (reconcile-on-read).* Whenever scholar needs the current annotation set — on opening/refreshing the paper detail view, and after any scholar-initiated viewer interaction — it reads the child pdf MCP's annotation list and reconciles against its table. Divergence is resolved **last-write-wins keyed on `updated_at`**; rows new to scholar are written with `source: "pdf-viewer"`.
+
+If a future re-vendor of the pdf MCP is confirmed to emit `resources/updated` for annotations, scholar may additionally `subscribeResource` to make reconciliation eager — a v2 optimization, not a v1 dependency.
 
 ID stability is preserved across both paths.
 
@@ -770,8 +812,8 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 | Ollama unavailable when user expects digests. | Graceful degradation (placeholder + warning toast); explicit "use Claude" opt-in for any single request. |
 | sqlite-vec extension load fails on the user's system. | Detect at startup; if load fails, fall back to lexical-only search and log a remediation hint (the dll has to be co-located with the better-sqlite3 binary on Windows; ship the binary in `build/vendor/sqlite-vec/`). |
 | Forked pdf server diverges from upstream. | Keep the patch surface to **two lines plus one new env var read**. Document the diff in `src/vendor/pdf-server/PATCH.md`. Re-vendoring on upstream bump is a one-screen review. |
-| Annotation reconciliation conflicts (user edits in both panes concurrently). | Last-write-wins keyed by `updated_at`; both UIs subscribe to the resource and re-render on remote change. Test with a deliberate race. |
-| Embedding production blocks tool responses on big papers. | Embedding pipeline is queued in a background worker thread; tools that need embeddings (`scholar.papers.search` with semantic mode) check readiness and degrade to lexical with a "still indexing" pill. |
+| Annotation reconciliation conflicts (user edits in both panes concurrently). | Last-write-wins keyed by `updated_at`; scholar reconciles on paper-detail open/refresh (§13). Test with a deliberate concurrent-edit race. |
+| Embedding production blocks tool responses on big papers. | Embedding pipeline runs on an in-process async queue with a small concurrency limit (a worker thread is deferred to v2 if profiling shows main-thread starvation); tools that need embeddings (`scholar.papers.search` with semantic mode) check readiness and degrade to lexical with a "still indexing" pill. |
 | User installs the plugin without the global `bun.exe`. | `.mcp.json` could optionally use `node` if a `--node` build is also published. v1 documents the requirement; v2 considers compiling scholar with `bun build --compile` to a single exe. |
 | The Cowork outputs folder isn't where the user installs from. | The build script writes a copy to both `%USERPROFILE%\Documents\Cowork\System\` and (best-effort) the user's Cowork plugin-import staging directory; surfaces a chat link. |
 
@@ -788,6 +830,12 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 - Mechanical LLM work → **Ollama by default**; `cowork.askClaude` is opt-in only.
 - pdf MCP → **bundled fork of v1.7.2** (vendored dist, two-line patch, new `MCP_PDF_CLIENT_ROOTS_PATHS` env).
 - sqlite3-mcp integration → **delegate query/backup/pack** surfaces to it via `register_db`.
+- Tool wiring → **registry barrel + foundation-scaffolded stubs** (§7.6) so the seven plans' blast-radii stay file-disjoint.
+- First-run wizard → **server-side `elicitInput`, invoked lazily by the corpus tool**; not a standalone script.
+- nu transport → **MCP client CLI** (named-pipe alternative dropped).
+- Annotation propagation → **scholar→viewer push + viewer→scholar reconcile-on-read**, LWW on `updated_at`; no dependency on pdf-MCP push notifications.
+- Paper-detail PDF render → **bundled pdf.js in scholar's own iframe**; not a nested MCP App iframe.
+- Chart.js and pdf.js → **bundled** into the single-file UI; no runtime CDN dependency.
 
 ---
 

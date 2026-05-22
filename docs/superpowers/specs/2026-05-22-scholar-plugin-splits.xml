@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <splits group-id="2026-05-22-scholar-plugin" modified-at="2026-05-22T00:00:00Z">
+  <!--
+    Tool-wiring convention (spec §7.6): cycle 6.1 (foundation) creates
+    src/server/tools/registry.ts AND a no-op stub for every tool module.
+    Each tool file appears in exactly ONE plan's blast-radius below — its
+    owner, which fills the stub body. foundation's wave-0 stub creation is
+    sequenced strictly before any fill, so the shared paths never see
+    concurrent edits; worktree="not-required" is therefore sound.
+  -->
   <plan suffix="foundation"
         cycles="[6.1, 6.2]"
         depends-on=""
         worktree="not-required"
-        blast-radius="src/server/index.ts src/server/db/ src/server/pdf/ src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts">
-    <synopsis>Project scaffolding (package.json, tsconfig, Drizzle, server skeleton) and vendored forked pdf MCP with MCP_PDF_CLIENT_ROOTS patch preserved and roots-propagation bug fixed.</synopsis>
+        blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json">
+    <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored forked pdf MCP with the MCP_PDF_CLIENT_ROOTS patch preserved and the roots-propagation bug fixed.</synopsis>
   </plan>
 
   <plan suffix="corpus"
@@ -28,8 +36,8 @@
         cycles="[6.5, 6.6, 6.8]"
         depends-on="corpus"
         worktree="not-required"
-        blast-radius="src/server/ollama/ src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts">
-    <synopsis>Text extraction, chunker, Ollama embeddings, sqlite-vec wiring, hybrid search, reading queue, digest and reading-prompts generation.</synopsis>
+        blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts">
+    <synopsis>Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts generation.</synopsis>
   </plan>
 
   <plan suffix="annotations"
