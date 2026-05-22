@@ -19,7 +19,7 @@
           cycles="[6.1, 6.2]"
           depends-on=""
           worktree="not-required">
-      <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored forked pdf MCP with the MCP_PDF_CLIENT_ROOTS patch preserved and the roots-propagation bug fixed.</synopsis>
+      <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored forked pdf MCP with the MCP_PDF_CLIENT_ROOTS patch preserved and the roots-propagation bug fixed. Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts.</synopsis>
     </plan>
 
     <plan index="1.2"

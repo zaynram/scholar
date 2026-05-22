@@ -509,6 +509,8 @@ To keep the seven plans' blast-radii content-disjoint — and therefore the `wor
 
 Each stub compiles immediately, so `registry.ts`, `index.ts`, and `migrations.ts` typecheck at cycle 6.1 before any downstream plan runs. A downstream plan **fills the body** of its own stub(s) only; it never edits `registry.ts`, `index.ts`, `migrations.ts`, or a sibling's file. The splits-file blast-radii denote *content ownership* (who fills a body), not file creation; foundation's wave-0 stub creation is strictly ordered before any fill, so no two plans ever modify the same file's content. The one concurrent wave (wave 2 — `ingest`, `extraction`, `annotations`) is content-disjoint.
 
+**Foundation test-scoping rule.** Foundation's cycle-6.1 corpus-open tests exercise the path *through* the empty `runRawDdl` stub and assert only that the call succeeds and the Drizzle-managed tables exist. `chunk_vec` and `reading_queue` are not created until the `extraction` plan fills `raw-ddl.ts` (cycles 6.5/6.6); foundation tests must **not** assert on those two objects.
+
 **Pinned contracts.** These interfaces are authored verbatim by foundation in `registry.ts` at cycle 6.1, imported type-only by downstream modules, and **frozen for v1**. A downstream plan that needs more threads it through `ServerContext`, never by editing `registry.ts`:
 
 ```typescript
@@ -578,6 +580,8 @@ export const settings = sqliteTable("settings", {
   value: text("value").notNull(),  // JSON-encoded
 });
 ```
+
+`schema.ts` additionally exports the inferred row types — notably `CorpusRow = typeof corpora.$inferSelect` — consumed type-only by `registry.ts`'s pinned `ConfigAccessor` contract (§7.6).
 
 ### 8.2 Per-corpus DB (`scholar-<corpus>.db`)
 
