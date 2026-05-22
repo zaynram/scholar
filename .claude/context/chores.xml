@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<chores>
+  <!--
+    Canonical chore registry for the scholar plugin.
+    Populated as cross-cutting tasks surface during plan execution.
+  -->
+</chores>
