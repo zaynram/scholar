@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <splits group-id="2026-05-22-scholar-plugin" modified-at="2026-05-22T00:00:00Z">
   <!--
-    Tool-wiring convention (spec §7.6): cycle 6.1 (foundation) creates
-    src/server/tools/registry.ts AND a no-op stub for every tool module.
-    Each tool file appears in exactly ONE plan's blast-radius below — its
-    owner, which fills the stub body. foundation's wave-0 stub creation is
-    sequenced strictly before any fill, so the shared paths never see
-    concurrent edits; worktree="not-required" is therefore sound.
+    Module-skeleton convention (spec §7.6). Blast-radius lists below denote
+    CONTENT OWNERSHIP — which plan fills a file's body — not file creation.
+    Cycle 6.1 (foundation) additionally SCAFFOLDS, as no-op stubs, files it
+    does not own the content of:
+      src/server/tools/{corpus,roots,snapshot,ingest,pdf,papers,digest,
+                        prompts,annotations}.ts   (filled by their owners)
+      src/server/db/raw-ddl.ts                    (filled by extraction)
+    foundation's stub creation is a wave-0 act, strictly ordered before any
+    fill, so no two plans ever modify the same file's content. The only
+    concurrent wave (wave 2: ingest, extraction, annotations) is
+    content-disjoint. worktree="not-required" is therefore sound — and the
+    pinned cross-plan contracts in spec §7.6 (ServerContext, PdfChild,
+    ConfigAccessor, registerTools, runRawDdl) guarantee no downstream plan
+    edits a foundation-owned file.
   -->
   <plan suffix="foundation"
         cycles="[6.1, 6.2]"
@@ -61,6 +69,6 @@
         depends-on="frontends"
         worktree="not-required"
         blast-radius="scripts/build-plugin.ts">
-    <synopsis>scripts/build-plugin.ts to assemble the .plugin archive and the interactive first-run PDF-root wizard.</synopsis>
+    <synopsis>scripts/build-plugin.ts to assemble the .plugin archive. (The first-run PDF-root wizard is owned by the corpus plan, not packaging.)</synopsis>
   </plan>
 </splits>

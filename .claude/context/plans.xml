@@ -91,7 +91,7 @@
           cycles="[6.13]"
           depends-on="frontends"
           worktree="not-required">
-      <synopsis>scripts/build-plugin.ts to assemble the .plugin archive and the interactive first-run PDF-root wizard.</synopsis>
+      <synopsis>scripts/build-plugin.ts to assemble the .plugin archive. (The first-run PDF-root wizard is owned by the corpus plan, not packaging.)</synopsis>
     </plan>
 
   </plan-group>

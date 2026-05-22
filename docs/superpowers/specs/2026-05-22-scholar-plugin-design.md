@@ -320,7 +320,7 @@ Idempotent raw-SQL DDL that Drizzle cannot manage: the `chunk_vec` `vec0` virtua
 The following cycles capture TDD-structured work units. Each cycle is independently testable; the dependency relationships are documented per cycle and inform the plan-split (multi-plan) overlap analysis.
 
 ### 6.1 Project scaffolding
-`package.json`, `tsconfig.json`, `drizzle.config.ts`, Bun runner, basic CI. Owns the server skeleton (`src/server/index.ts`), the Drizzle schema (`src/server/db/schema.ts`), the migration bootstrap (`src/server/db/migrations.ts`), the `sqlite-vec` loader (`src/server/db/sqlite-vec.ts`), and the config DB. Scaffolds the tool-registration skeleton — `src/server/tools/registry.ts` plus a no-op stub for every tool module (`corpus`, `roots`, `snapshot`, `ingest`, `pdf`, `papers`, `digest`, `prompts`, `annotations`) — so downstream plans fill an already-wired file (see §7.6). Authors the plugin manifest (`.claude-plugin/plugin.json`) and `.mcp.json`.
+`package.json`, `tsconfig.json`, `drizzle.config.ts`, Bun runner, basic CI. Owns the server skeleton (`src/server/index.ts`), the Drizzle schema (`src/server/db/schema.ts`), the migration bootstrap (`src/server/db/migrations.ts`), the `sqlite-vec` loader (`src/server/db/sqlite-vec.ts`), and the config DB. Scaffolds the full module skeleton — `src/server/tools/registry.ts`, a no-op stub for every tool module (`corpus`, `roots`, `snapshot`, `ingest`, `pdf`, `papers`, `digest`, `prompts`, `annotations`), and a `src/server/db/raw-ddl.ts` stub — and pins the cross-plan contracts (`ServerContext`, `PdfChild`, `ConfigAccessor`, `registerTools`, `runRawDdl`) so downstream plans fill bodies without editing a foundation file (see §7.6). Authors the plugin manifest (`.claude-plugin/plugin.json`) and `.mcp.json`.
 **Touches:** §5.1, §5.2, §5.3, §5.4, §5.38, §5.40, §5.41, §5.42, §5.43.
 **Depends-on:** none.
 
@@ -340,7 +340,7 @@ citation.js / CrossRef / arXiv adapters plus the `scholar.ingest.*` tools. All r
 **Depends-on:** 6.1, 6.3.
 
 ### 6.5 Text extraction + chunk embeddings
-`scholar.pdf.refresh-extraction`, chunker, Ollama client. Creates the `chunk_vec` virtual table via raw DDL (`src/server/db/raw-ddl.ts`); consumes the `sqlite-vec` loader scaffolded by cycle 6.1.
+`scholar.pdf.refresh-extraction`, chunker, Ollama client. Fills the `runRawDdl` hook in `src/server/db/raw-ddl.ts` (stub from cycle 6.1) to create the `chunk_vec` virtual table; consumes the `sqlite-vec` loader from cycle 6.1.
 **Touches:** §5.12, §5.17, §5.18, §5.44.
 **Depends-on:** 6.1, 6.2, 6.3.
 
@@ -447,6 +447,8 @@ The fork also accepts a new env var `MCP_PDF_CLIENT_ROOTS_PATHS` (comma-separate
 3. Respawns.
 4. Drops cached `viewUUID`s (any open viewer becomes stale).
 
+On Windows the child is terminated abruptly — `SIGTERM` is emulated as an unconditional process kill — so any in-flight extraction in the child is discarded and re-driven on the next `refresh-extraction`. Callers treat a root mutation as cancelling pending child work.
+
 The host sees the scholar server's `pdf.*` proxy tools (see §10), not the forked server directly.
 
 ### 7.3 Scholar core MCP server
@@ -456,9 +458,11 @@ Entry: `src/server/index.ts`. Uses `@modelcontextprotocol/sdk` over stdio. On st
 1. Resolves `SCHOLAR_RUNTIME_ROOT`, ensures `runtime/dbs/` exists.
 2. Reads `runtime/config.json` (corpora list, active corpus, default PDF root, Ollama model overrides).
 3. First-run handling is **not** done at startup. When a corpus tool (`scholar.corpus.list` / `scholar.corpus.activate`) runs and finds no corpus configured, it calls the first-run routine in `scripts/first-run.ts`, which uses the live MCP session's `elicitInput` request to ask the host for the initial PDF root, then writes the result into `runtime/config.json` and the config DB. `first-run.ts` is a module imported by `src/server/tools/corpus.ts` (both `corpus`-plan owned) — not a standalone executable.
-4. Opens the active corpus's `scholar-<corpus>.db` via better-sqlite3, runs Drizzle migrations, loads the `sqlite-vec` extension. (Deferred until a corpus is active.)
+4. Opens the active corpus's `scholar-<corpus>.db` via better-sqlite3, loads the `sqlite-vec` extension, runs Drizzle migrations, then calls `runRawDdl(db)` (§7.6) to create the `chunk_vec` virtual table and `reading_queue` view. (Deferred until a corpus is active.)
 5. Spawns the pdf child with the active corpus's roots. (Deferred until a corpus is active.)
 6. Registers itself with sqlite3-mcp by calling `mcp__sqlite3-mcp__register_db` once per corpus DB (best-effort; ignored if sqlite3-mcp is not running).
+
+All server-side initialization — first-run elicitation, corpus-open (steps 4 and 6), and pdf-child spawn (step 5) — is guarded by a single promise-memoized initializer per corpus. Concurrent tool calls on a fresh install (e.g. the UI opening the dashboard while the model calls `corpus.list`) await one initialization rather than racing `runtime/config.json` writes, issuing duplicate `elicitInput` prompts, or double-spawning the pdf child.
 7. Registers MCP tools and the UI resource (see §10 and §11).
 
 ### 7.4 sqlite3-mcp integration
@@ -493,16 +497,59 @@ export def status [
 
 This file is purely user ergonomics. No business logic. The `nu-fluency` skills (`nushell-idioms`, `nushell-records`) inform style; the `nu-audit` hook keeps it idiomatic.
 
-### 7.6 Tool registration contract
+### 7.6 Module skeleton and shared contracts
 
-To keep the seven plans' blast-radii file-disjoint — and therefore the `worktree="not-required"` decision in the splits file sound rather than aspirational — tool wiring follows a fixed convention:
+To keep the seven plans' blast-radii content-disjoint — and therefore the `worktree="not-required"` decision in the splits file sound rather than aspirational — cycle 6.1 (`foundation`) scaffolds the entire compile-able module skeleton, and **every cross-plan contract is pinned in this section** so no later plan needs to edit a foundation-owned file.
 
-- Cycle 6.1 (`foundation`) creates `src/server/tools/registry.ts` and a **no-op stub** for every tool module: `corpus.ts`, `roots.ts`, `snapshot.ts`, `ingest.ts`, `pdf.ts`, `papers.ts`, `digest.ts`, `prompts.ts`, `annotations.ts`. Each stub exports `export function registerTools(server: McpServer, ctx: ServerContext): void {}`.
-- `registry.ts` statically imports all stubs and exposes `registerAll(server, ctx)`, which calls each module's `registerTools`. Because the stubs exist from cycle 6.1, `registry.ts` and `src/server/index.ts` compile before any downstream plan runs.
-- Each downstream plan **fills the body** of its own stub(s) only. It never edits `registry.ts`, `index.ts`, or a sibling plan's tool file. Wave ordering guarantees `foundation` (wave 0) completes before any stub is filled; the only concurrent wave (wave 2 — `ingest`, `extraction`, `annotations`) touches file-disjoint stubs.
-- `ServerContext` (DB handles, the pdf child handle, the Ollama client, config accessors) is declared in `registry.ts` and imported type-only by every tool module.
+**Scaffolding (cycle 6.1).** Foundation creates, as no-op stubs, every file that `src/server/index.ts`, `src/server/tools/registry.ts`, or `src/server/db/migrations.ts` transitively imports but whose *body* it does not own:
 
-This convention — not mere file-path partitioning — is what makes concurrent execution of wave 2 collision-free.
+- `src/server/tools/registry.ts` — the tool-registration barrel (foundation content). Statically imports all nine tool stubs and exposes `registerAll(server, ctx)`.
+- A stub for each of the nine tool modules: `corpus.ts`, `roots.ts`, `snapshot.ts`, `ingest.ts`, `pdf.ts`, `papers.ts`, `digest.ts`, `prompts.ts`, `annotations.ts`. Each exports `registerTools` (signature below) with an empty body.
+- `src/server/db/raw-ddl.ts` — a stub exporting `runRawDdl` (signature below) with an empty body.
+
+Each stub compiles immediately, so `registry.ts`, `index.ts`, and `migrations.ts` typecheck at cycle 6.1 before any downstream plan runs. A downstream plan **fills the body** of its own stub(s) only; it never edits `registry.ts`, `index.ts`, `migrations.ts`, or a sibling's file. The splits-file blast-radii denote *content ownership* (who fills a body), not file creation; foundation's wave-0 stub creation is strictly ordered before any fill, so no two plans ever modify the same file's content. The one concurrent wave (wave 2 — `ingest`, `extraction`, `annotations`) is content-disjoint.
+
+**Pinned contracts.** These interfaces are authored verbatim by foundation in `registry.ts` at cycle 6.1, imported type-only by downstream modules, and **frozen for v1**. A downstream plan that needs more threads it through `ServerContext`, never by editing `registry.ts`:
+
+```typescript
+// The pdf child-process handle. Produced by src/server/pdf/lifecycle.ts
+// (foundation); consumed by pdf.ts (extraction) and annotations.ts (annotations).
+interface PdfChild {
+  interact(commands: unknown[]): Promise<unknown>;  // drives add/update/remove_annotations, get_text, ...
+  getText(viewUUID: string): Promise<string>;
+  currentRoots(): string[];
+  isHealthy(): boolean;
+}
+
+// Read/write access to scholar-config.db. Produced by foundation;
+// consumed by corpus.ts, roots.ts, and others.
+interface ConfigAccessor {
+  get<T>(key: string): T | undefined;
+  set(key: string, value: unknown): void;
+  corpora(): CorpusRow[];
+  activeCorpusId(): string | undefined;
+}
+
+// The context every tool module receives. Fully constructible by
+// foundation at cycle 6.1 — no field depends on a later plan's code.
+interface ServerContext {
+  db: BetterSQLite3Database | undefined;  // active per-corpus Drizzle db; undefined until a corpus is active
+  configDb: BetterSQLite3Database;        // scholar-config.db
+  pdf: PdfChild;
+  config: ConfigAccessor;
+}
+
+// Frozen tool-registration signature. Every tool module exports this.
+function registerTools(server: McpServer, ctx: ServerContext): void;
+
+// Frozen raw-DDL hook. raw-ddl.ts exports this; migrations.ts calls it
+// immediately after Drizzle migrations at corpus-open (§7.3 step 4).
+function runRawDdl(db: BetterSQLite3Database): void;
+```
+
+The Ollama client is **not** part of `ServerContext` — it is constructed and held internally by the extraction-plan tools that need it (`digest.ts`, `prompts.ts`, `pdf.ts`, `papers.ts`), so its surface is never a cross-plan contract and never forces a `registry.ts` edit.
+
+This skeleton-plus-pinned-contracts convention — not mere file-path partitioning — is what makes concurrent execution of wave 2 collision-free.
 
 ## 8. Data Model (Drizzle schema)
 
@@ -576,9 +623,11 @@ export const paper_chunks = sqliteTable("paper_chunks", {
 
 // sqlite-vec virtual table: chunk embeddings.
 // Created by src/server/db/raw-ddl.ts (§5.44) — NOT Drizzle-managed.
+// The embedding width is the active embed model's dimension, probed at
+// corpus creation (768 for the nomic-embed-text default). See §11.
 // CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
 //   chunk_id TEXT PRIMARY KEY,
-//   embedding FLOAT[768]  -- nomic-embed-text dim
+//   embedding FLOAT[<dim>]  -- e.g. 768 for nomic-embed-text
 // );
 
 export const annotations = sqliteTable("annotations", {
@@ -720,8 +769,12 @@ All scholar tools are namespaced `scholar.<verb>`. Visibility annotations are ex
 
 ### Model defaults
 
-- **Embeddings:** `nomic-embed-text` (768-dim, fast, MIT). Documented as user-pluggable via `SCHOLAR_OLLAMA_EMBED_MODEL`.
+- **Embeddings:** `nomic-embed-text` (768-dim, fast, MIT). User-pluggable per corpus via `SCHOLAR_OLLAMA_EMBED_MODEL` — see *Embedding dimension* below.
 - **Chat (digest + reading prompts):** `qwen2.5:7b-instruct`. User-pluggable via `SCHOLAR_OLLAMA_CHAT_MODEL`.
+
+### Embedding dimension
+
+`chunk_vec`'s embedding column width is bound to the active corpus's embed model **at corpus creation**: scholar probes the model with a one-token embedding, reads the vector length, and `raw-ddl.ts` creates `chunk_vec` with that width. The 768-dim `nomic-embed-text` default is therefore not hard-coded. But a corpus's embed model is fixed once `chunk_vec` exists: switching `SCHOLAR_OLLAMA_EMBED_MODEL` to a different-dimension model for an existing corpus requires dropping `chunk_vec` and re-embedding every paper (`scholar.pdf.refresh-extraction`). Scholar detects a dimension mismatch at corpus-open and surfaces this remediation rather than failing at insert time.
 
 ### Discovery
 
@@ -758,7 +811,7 @@ On seeing `structuredContent.askClaude`, the UI calls `window.cowork.askClaude(a
 
 ### 12.1 BibTeX / RIS (citation.js)
 
-`scholar.ingest.bibtex` accepts a file path or pasted text. Uses `citation.js` to parse to CSL-JSON, then maps to the scholar paper schema. Duplicate detection is by `doi`, then `(title, year, first-author-last-name)`.
+`scholar.ingest.bibtex` accepts a file path or pasted text. A supplied file path is resolved to an absolute path and accepted only if it falls under the corpus PDF root, the user profile, or an explicitly allow-listed import directory — a path outside those aborts the call (the same path-confinement discipline as §12.3). Uses `citation.js` to parse to CSL-JSON, then maps to the scholar paper schema. Duplicate detection is by `doi`, then `(title, year, first-author-last-name)`.
 
 ### 12.2 CrossRef DOI
 
@@ -798,7 +851,7 @@ ID stability is preserved across both paths.
 ### 14.2 Distribution
 
 - The `.plugin` archive is installed via Cowork's plugin import UI.
-- First launch invokes `scripts/first-run.ts` which elicits the default PDF root (per the user's "user-pick" choice).
+- On first corpus access the in-server first-run routine (§7.3 step 3) elicits the default PDF root via `elicitInput` (per the user's "user-pick" choice). There is no separate install-time wizard step.
 - The user can later distribute a *corpus* (not the plugin itself) via sqlite3-mcp's `pack_repo` against `scholar-<corpus>.db`, producing a git ref another user can `unpack_from_git_ref` into their scholar installation.
 
 ## 15. Cycle Sequencing
@@ -836,6 +889,8 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 - Annotation propagation → **scholar→viewer push + viewer→scholar reconcile-on-read**, LWW on `updated_at`; no dependency on pdf-MCP push notifications.
 - Paper-detail PDF render → **bundled pdf.js in scholar's own iframe**; not a nested MCP App iframe.
 - Chart.js and pdf.js → **bundled** into the single-file UI; no runtime CDN dependency.
+- Cross-plan contracts (`ServerContext`, `PdfChild`, `ConfigAccessor`, `registerTools`, `runRawDdl`) → **pinned in §7.6 and frozen for v1**; no downstream plan edits `registry.ts`.
+- `chunk_vec` embedding width → **probed from the embed model at corpus creation**, not hard-coded; an embed-model swap requires re-creating `chunk_vec` and re-embedding.
 
 ---
 
