@@ -21,7 +21,7 @@
         depends-on=""
         worktree="not-required"
         blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json">
-    <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored forked pdf MCP with the MCP_PDF_CLIENT_ROOTS patch preserved and the roots-propagation bug fixed. Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts — see the header comment.</synopsis>
+    <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored unmodified pdf MCP plus scholar's client-side MCP roots responder in src/server/pdf/lifecycle.ts (capabilities.roots.listChanged, ListRootsRequestSchema handler, roots/list_changed sender, Windows Job Object orphan reaping). Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts — see the header comment.</synopsis>
   </plan>
 
   <plan suffix="corpus"

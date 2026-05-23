@@ -15,7 +15,7 @@ The Daisy Lit Review live artifact (88-paper, 14-section DAISY corpus dashboard)
 - **Single-corpus by design** because the papers bundle is embedded into the HTML at build time.
 - **No ingestion pipeline** because there is no file watcher and no metadata API integration.
 
-This spec proposes `scholar`, a new Cowork plugin that takes the Daisy artifact as inspiration only: it adopts the proven UX patterns (status / depth / digest / reading prompts / per-paper actions) and discards the constraint workarounds. It builds the system on a real backend (Bun + TypeScript MCP server, SQLite via Drizzle, sqlite-vec for embeddings, local Ollama for mechanical LLM work) and orchestrates the UI through `mcp-apps` views that compose with the bundled (forked) pdf MCP and the existing `sqlite3-mcp` and `nushell-mcp` servers already on the user's machine.
+This spec proposes `scholar`, a new Cowork plugin that takes the Daisy artifact as inspiration only: it adopts the proven UX patterns (status / depth / digest / reading prompts / per-paper actions) and discards the constraint workarounds. It builds the system on a real backend (Bun + TypeScript MCP server, SQLite via Drizzle, sqlite-vec for embeddings, local Ollama for mechanical LLM work) and orchestrates the UI through `mcp-apps` views that compose with the vendored (unmodified) pdf MCP and the existing `sqlite3-mcp` and `nushell-mcp` servers already on the user's machine.
 
 The plugin is explicitly **not** a port of the Daisy artifact. It is a clean reimplementation informed by the artifact's feature catalogue.
 
@@ -24,7 +24,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 ### In scope (v1)
 
 1. **Plugin packaging** — installable `.plugin` archive with `.claude-plugin/plugin.json`, `.mcp.json`, bundled servers, skills, slash commands, and an MCP App UI bundle.
-2. **Bundled forked pdf MCP server** — derived from `@modelcontextprotocol/server-pdf@1.7.2`, preserving the `process.env.MCP_PDF_CLIENT_ROOTS` patch (fixing the latent bug where parsed `roots` is not propagated to `createServer`) and adding runtime multi-root management.
+2. **Vendored pdf MCP server (unmodified)** — `@modelcontextprotocol/server-pdf@1.7.2` shipped as-is under `src/vendor/pdf-server/`. Runtime multi-root management is delivered by scholar's MCP client side responding to `roots/list` and emitting `notifications/roots/list_changed` (§7.2) — no source patch.
 3. **Scholar MCP server** — Bun + TypeScript, exposes corpus management, ingestion, annotation, digest, reading-prompts, and UI-resource tools. Owns the SQLite database.
 4. **Multi-corpus support** — named corpora with isolated SQLite DBs and per-corpus PDF roots. Add/remove/switch corpora at runtime.
 5. **Persistence** — `bun:sqlite` + Drizzle ORM (`drizzle-orm/bun-sqlite`) with the `sqlite-vec` extension loaded for embedding columns. Schema migration is owned by scholar; ad-hoc query/inspect surfaces are delegated to `sqlite3-mcp` via `register_db`.
@@ -61,8 +61,8 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 
 | Constraint | Origin | Implication |
 |---|---|---|
-| **No `@modelcontextprotocol/server-pdf` npm dependency.** | User directive. | Bundle the dist source as a fork inside the plugin; preserve the `MCP_PDF_CLIENT_ROOTS` patch boundary lines verbatim and fix the unpropagated-`roots` bug while doing so. |
-| **PDF roots must be runtime-mutable (add/remove/change default).** | User directive. | The bundled pdf server is spawned as a *child of the scholar server*; scholar restarts it on root-set changes. Roots live in scholar's config table, not in `claude_desktop_config.json`. |
+| **No `@modelcontextprotocol/server-pdf` runtime npm dependency.** | User directive. | Vendor the unmodified upstream `dist/` tree inside the plugin under `src/vendor/pdf-server/`. No source patch — root injection rides the supported MCP protocol path (§7.2). |
+| **PDF roots must be runtime-mutable (add/remove/change default).** | User directive. | The vendored pdf server is spawned as a *child of the scholar server*; scholar updates its in-memory `currentRoots` and sends `notifications/roots/list_changed` on changes (no subprocess respawn). Roots live in scholar's config DB, not in `claude_desktop_config.json`. |
 | **Mechanical LLM work routes through local Ollama, not the Claude API.** | User directive. | All routine syntheses, reading-prompt generation, and embedding production default to Ollama. `cowork.askClaude` is opt-in only for high-stakes synthesis. |
 | **Default PDF root prompt at install.** | User answer ("user-pick" with `%USERPROFILE%/mcp-data/literature/` override). | First-run wizard sets the initial root; written to scholar's config DB. |
 | **Multi-corpus.** | User answer. | All schemas keyed by `corpus_id`; per-corpus DB file (`scholar-<corpus>.db`) under `%USERPROFILE%/mcp-data/scholar/dbs/`. |
@@ -90,10 +90,10 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
                 ┌──────────────────────────────────────────────────┴───────┐
                 │                                                          │
         ┌───────┴─────────┐    ┌───────────────────┐    ┌─────────────────┴────┐
-        │  scholar fork:  │    │  sqlite3-mcp      │    │  Local services      │
+        │  vendored:      │    │  sqlite3-mcp      │    │  Local services      │
         │  mcp-pdf-server │    │  (existing)       │    │  - Ollama (embeds +  │
-        │  (child proc)   │    │  registers        │    │    chat)             │
-        │                 │    │  scholar DB       │    │                      │
+        │  (child proc,   │    │  registers        │    │    chat)             │
+        │   unmodified)   │    │  scholar DB       │    │                      │
         └─────────────────┘    └───────────────────┘    └──────────────────────┘
                 │                       │                          │
                 └───────────────────────┼──────────────────────────┘
@@ -109,8 +109,8 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 
 | Component | Responsibility |
 |---|---|
-| **scholar MCP server (this plugin's core)** | Owns the SQLite schema (Drizzle-managed migrations). Exposes corpus, ingestion, annotation, digest, prompt, search, and UI-resource tools. Spawns and manages the bundled pdf MCP as a child process keyed to the active corpus's roots. |
-| **scholar fork of mcp-pdf-server** | Inherited from `@modelcontextprotocol/server-pdf@1.7.2` with the `MCP_PDF_CLIENT_ROOTS` patch preserved and the `roots` propagation bug fixed. Receives root paths from scholar's config; restarts when roots change. |
+| **scholar MCP server (this plugin's core)** | Owns the SQLite schema (Drizzle-managed migrations). Exposes corpus, ingestion, annotation, digest, prompt, search, and UI-resource tools. Spawns and supervises the vendored pdf MCP as a child process; acts as the MCP client for that session, answering `roots/list` requests with the active corpus's PDF roots. |
+| **vendored mcp-pdf-server (unmodified)** | `@modelcontextprotocol/server-pdf@1.7.2` shipped as-is in `src/vendor/pdf-server/`. Receives root paths through MCP `roots/list` (it asks; scholar answers) and re-asks on `notifications/roots/list_changed` — no subprocess respawn for root changes. |
 | **sqlite3-mcp (already installed)** | Provides `query_database`, `inspect_database`, `table_schema`, `configure_backup`, `backup_to_repo`, `pack_repo`, `unpack_from_git_ref`. Scholar calls `register_db` once per corpus DB at activation. We do **not** reimplement query/backup tools. |
 | **Ollama (local)** | Embedding production (`nomic-embed-text` default), digest/synthesis chat (Qwen-class default), reading-prompts. Scholar discovers running Ollama via `http://127.0.0.1:11434/api/tags` and falls back to a queue if Ollama is offline. |
 | **scholar.nu module** | User-facing thin CLI wrapper. `use scholar.nu *` then `scholar status --corpus daisy` etc. Each command does one MCP call and shapes the response into nu tables. |
@@ -132,7 +132,7 @@ scholar/
 │   └── settings.json
 ├── .claude-plugin/
 │   └── plugin.json
-├── .mcp.json                  (registers scholar + bundled forked pdf as MCP servers)
+├── .mcp.json                  (registers scholar + vendored pdf as MCP servers)
 ├── docs/superpowers/specs/
 │   └── 2026-05-22-scholar-plugin-design.md   (this file)
 ├── docs/superpowers/plans/
@@ -156,7 +156,7 @@ scholar/
 │   │   │   └── ReaderProgress.tsx
 │   │   └── lib/               (app.ts wrapper, host-styles wiring)
 │   └── vendor/
-│       └── pdf-server/        (forked dist + minimal source diff)
+│       └── pdf-server/        (unmodified upstream dist, vendored for offline distribution)
 ├── nu/
 │   └── scholar.nu             (user-facing nu module)
 ├── skills/
@@ -273,10 +273,10 @@ Chart.js progress charts.
 App SDK wrapper, host-styles wiring, callServerTool helper.
 
 ### 5.28 src/vendor/pdf-server/dist/index.js
-Vendored forked dist with the `MCP_PDF_CLIENT_ROOTS` patch and `roots` propagation fix.
+Unmodified `@modelcontextprotocol/server-pdf@1.7.2` dist, vendored for offline distribution. Re-vendoring on upstream bump is a `bun pm pack` → unpack → diff — no source patch to preserve.
 
-### 5.29 src/vendor/pdf-server/PATCH.md
-Documents the upstream diff for future re-vendoring.
+### 5.29 *(retired)*
+Previously held `src/vendor/pdf-server/PATCH.md`. Removed when scholar moved to the protocol-based roots path (§7.2); the upstream is shipped unmodified, so there is no diff to document.
 
 ### 5.30 nu/scholar.nu
 User-facing nu module.
@@ -325,7 +325,7 @@ Idempotent raw-SQL DDL that Drizzle cannot manage: the `chunk_vec` `vec0` virtua
 
 ## 6. Implementation Cycles
 
-**Complexity:** 8 (high — multi-process orchestration, vendored fork, embeddings, UI, and CLI wired together).
+**Complexity:** 8 (high — multi-process orchestration, vendored upstream pdf MCP with client-side MCP roots responder, embeddings, UI, and CLI wired together).
 
 The following cycles capture TDD-structured work units. Each cycle is independently testable; the dependency relationships are documented per cycle and inform the plan-split (multi-plan) overlap analysis.
 
@@ -337,9 +337,9 @@ The following cycles capture TDD-structured work units. Each cycle is independen
 **Touches:** §5.1, §5.2, §5.3, §5.4, §5.38, §5.40, §5.41, §5.42, §5.43, §12.0.
 **Depends-on:** none.
 
-### 6.2 Bundled forked pdf MCP
-Vendor v1.7.2 dist into `src/vendor/pdf-server/`, apply the two-line patch preserving the `MCP_PDF_CLIENT_ROOTS` boundary, add `MCP_PDF_CLIENT_ROOTS_PATHS` env support. Tests: child spawn lifecycle.
-**Touches:** §5.19, §5.28, §5.29.
+### 6.2 Vendored pdf MCP + protocol-based roots responder
+Vendor `@modelcontextprotocol/server-pdf@1.7.2` `dist/` unmodified into `src/vendor/pdf-server/`. Implement scholar's MCP client side for the pdf-child session in `src/server/pdf/lifecycle.ts`: advertise `capabilities.roots.listChanged = true`, register a `ListRootsRequestSchema` handler that returns the active corpus's PDF roots as `file://` URIs, and expose a `setRoots(paths[])` API that updates `currentRoots` and emits `notifications/roots/list_changed`. Add the spawn wrapper that passes `--use-client-roots --stdio` and (on Windows) attaches the child to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object. Tests: spawn lifecycle, roots/list responder fixture, list_changed round-trip, viewUUID survival across a root mutation.
+**Touches:** §5.19, §5.28.
 **Depends-on:** 6.1.
 
 ### 6.3 Corpus + roots tools
@@ -406,7 +406,7 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 {
   "name": "scholar",
   "version": "0.1.0",
-  "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a forked pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
+  "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a vendored pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
   "author": { "name": "zayn" },
   "keywords": ["literature-review", "research", "mcp-apps", "annotations", "ollama", "sqlite-vec"],
   "license": "MIT"
@@ -433,36 +433,44 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 
 Note: the **bundled pdf server is NOT registered in `.mcp.json`**. It is spawned by the scholar server itself as a child process. Rationale: PDF roots are corpus-scoped and runtime-mutable, so the child must be restartable from inside scholar's control loop. Registering it as a top-level MCP server would freeze the roots at host startup.
 
-### 7.2 The forked pdf MCP
+### 7.2 The vendored pdf MCP (unmodified upstream + protocol-based roots)
 
-**Approach:** vendor the `@modelcontextprotocol/server-pdf@1.7.2` `dist/` tree into `src/vendor/pdf-server/`. The fork applies one minimal patch:
+**Approach.** Vendor `@modelcontextprotocol/server-pdf@1.7.2` **unmodified** under `src/vendor/pdf-server/` for offline distribution. No source patch, no `PATCH.md`. Scholar drives the child through the *intended* MCP roots protocol — the supported mechanism the upstream already implements. Earlier ad-hoc env-var workarounds (`MCP_PDF_CLIENT_ROOTS` boolean, a proposed `MCP_PDF_CLIENT_ROOTS_PATHS` plural form) were attempting to populate `allowedLocalDirs` outside the protocol because scholar wasn't holding up its client-side end of the contract; closing that contract eliminates the need to patch.
 
-```diff
-  if (stdio) {
-    let roots = useClientRoots
-    if (!roots) {
-      const setting = Number.parseInt(process.env.MCP_PDF_CLIENT_ROOTS)
-      roots = Number.isNaN(setting) ? true : Boolean(setting)
-      if (!roots) console.error("[pdf-server] Client roots are ignored. Unset MCP_PDF_CLIENT_ROOTS (or assign to '1') to enable.")
-    }
--   await startStdioServer(() => createServer({ enableInteract: true, useClientRoots, debug }));
-+   await startStdioServer(() => createServer({ enableInteract: true, useClientRoots: roots, debug }));
-  }
+**Why no patch.** The upstream stdio entrypoint at `dist/index.js:34385` registers an `oninitialized` handler (via `createServer` with `useClientRoots: true`) that calls `server.listRoots()`. The helper `refreshRoots` (`dist/server.js:29901`) then *clears* `allowedLocalDirs` and refills it from the MCP client's reply. Two preconditions must hold on the client side for the directories to land:
+
+1. The client advertises `capabilities.roots.listChanged = true` in its `initialize` response — without this, `refreshRoots` early-returns at `dist/server.js:29902` and the `clear()` leaves the set empty.
+2. The client registers a `ListRootsRequestSchema` handler that returns the active corpus's PDF roots as `file://` URIs.
+
+Scholar implements both in `src/server/pdf/lifecycle.ts` (foundation-owned, cycle 6.1). Spawn command:
+
+```
+bun.exe run src/vendor/pdf-server/dist/index.js --use-client-roots --stdio
 ```
 
-That fixes the latent bug where the env-var-derived `roots` was computed but discarded. The patched lines surrounding the env-var introduction are preserved verbatim.
+Passing `--use-client-roots` explicitly avoids reliance on the upstream's latent env-var-propagation bug (see §16) and is the supported protocol path.
 
-The fork also accepts a new env var `MCP_PDF_CLIENT_ROOTS_PATHS` (comma-separated absolute paths). When set, the server uses these as the explicit allowed roots instead of (or in addition to) the positional CLI args. This is what scholar sets when spawning the child.
+**MCP roots responder contract.** Scholar's MCP client side maintains `currentRoots: string[]` as the source of truth, read from the active corpus's `pdf_roots` rows (config DB). The `ListRootsRequestSchema` handler returns `{ roots: currentRoots.map(p => ({ uri: pathToFileUrl(p) })) }`. Each path is OS-aware absolute (`/^[A-Za-z]:[\\/]|^\\\\/` on Windows, `/^\//` on POSIX), `existsSync`-checked at responder time (missing roots are logged through `ctx.log.warn` and dropped from the reply, never silently included), and de-duplicated preserving insertion order.
 
-**Lifecycle:** scholar's `pdf` module manages a single child `bun.exe run src/vendor/pdf-server/dist/index.js --stdio` process. On corpus switch or root mutation, scholar:
-1. Sends `SIGTERM` to the child.
-2. Updates `MCP_PDF_CLIENT_ROOTS_PATHS`.
-3. Respawns.
-4. Drops cached `viewUUID`s (any open viewer becomes stale).
+**Root-mutation flow (no respawn).** On corpus switch or `pdf_roots` edit, scholar:
 
-On Windows the child is terminated abruptly — `SIGTERM` is emulated as an unconditional process kill — so any in-flight extraction in the child is discarded and re-driven on the next `refresh-extraction`. Callers treat a root mutation as cancelling pending child work.
+1. Acquires the lifecycle mutex — a single-slot `p-limit(1)` over `read-config → update-currentRoots → send-list_changed`. The mutex is necessary because two concurrent root mutations could otherwise interleave the read and the notify, leaving the child synced to a state neither caller observed.
+2. Reads the new roots from `pdf_roots` (or the config DB on corpus switch).
+3. Atomically replaces `currentRoots`.
+4. Sends `notifications/roots/list_changed` to the child over the MCP client session.
+5. Releases the mutex.
 
-The host sees the scholar server's `pdf.*` proxy tools (see §10), not the forked server directly.
+The child's `RootsListChangedNotificationSchema` handler (`dist/server.js:30064`) re-invokes `refreshRoots`, which calls `listRoots()` on scholar and repopulates `allowedLocalDirs`. The child process stays alive across root changes; `viewUUID`s remain valid; in-flight extractions are not interrupted.
+
+**Single-session policy (Open Q1, v1).** Scholar is constrained to a single active session per user. At startup, the lifecycle module attempts an exclusive `flock` on `runtime/scholar.lock`; if held, scholar refuses to start with a structured `SCHOLAR_LOCKED` error naming the holding PID. v2 revisits a session-scoped pdf-child supervisor that would let multiple Cowork windows share one scholar host.
+
+**Windows orphan-child mitigation (Open Q3).** On Windows the lifecycle module creates a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and assigns the spawned pdf-child to it. When scholar exits — clean or crashed — the kernel kills every process in the job. This is the only mitigation that survives a `SIGKILL` of scholar itself. The POSIX equivalent (`prctl(PR_SET_PDEATHSIG, SIGKILL)`) is set on Linux for parity. The Job Object handle is created via a single FFI surface (`koffi` or `win32-api`); the native-dep cost is recorded in §16.
+
+**Stale-viewUUID handling (child crash only).** Because routine root mutations no longer respawn the child, `viewUUID` invalidation is narrowly scoped to *unscheduled* child restarts (crash → supervised respawn). When scholar's `pdf.*` proxy detects an `"unknown viewUUID"` error from the child, it transparently reopens the viewer for the affected paper and retries the original call once. A second failure surfaces as the typed error `PDF_VIEWER_RESPAWNED` to the caller, who decides whether to retry from scratch.
+
+**Startup sweep for partial extractions (Arch F2).** Each paper's full extraction-and-embed pipeline runs inside a single SQLite transaction (the `paper_chunks` rows, the `chunk_vec` rows, and the `papers.status_touched_at` update all commit together) so a SIGTERM mid-write rolls back cleanly. On corpus open, before serving requests, scholar runs a one-shot sweep: any paper with `anchor_cache.generated_at` set but a `paper_chunks` count inconsistent with `anchor_cache.pages` (heuristic: fewer than `pages × 0.5` chunks) is re-queued for extraction. This catches the residual case where a child step never landed even though the parent transaction succeeded.
+
+**The host sees the scholar server's `pdf.*` proxy tools (see §10), not the vendored server directly.**
 
 ### 7.3 Scholar core MCP server
 
@@ -478,6 +486,15 @@ Entry: `src/server/index.ts`. Uses `@modelcontextprotocol/sdk` over stdio. On st
 All server-side initialization — first-run elicitation, corpus-open (steps 4 and 6), and pdf-child spawn (step 5) — is guarded by a single promise-memoized initializer per corpus, via `initOnce` from §12.0 keyed on the corpus id. Concurrent tool calls on a fresh install (e.g. the UI opening the dashboard while the model calls `corpus.list`) await one initialization rather than racing `runtime/config.json` writes, issuing duplicate `elicitInput` prompts, or double-spawning the pdf child. **Retry-on-reject semantics:** `initOnce` clears the slot when the factory rejects, so a transient failure (Ollama not yet up, vec0 binary momentarily inaccessible, user dismissed the first-run `elicitInput`) does not permanently break the corpus. Only errors the factory explicitly classifies as fatal (e.g., a permanent schema mismatch) are retained as stuck. **Manual escape hatch:** `scholar.corpus.reset-init` is exposed as a `["model"]`-only tool that clears the init slot for a named corpus, used when an operator wants to force a re-init after fixing an environment issue without restarting the server.
 7. Registers MCP tools and the UI resource (see §10 and §11).
 
+**Per-step failure-recovery posture (Arch F13).** Each step has a documented degradation behaviour rather than a uniform "abort startup" stance — steps 4–6 can fail transiently and scholar must keep the operator's options open:
+
+| Step | Failure mode | Recovery posture |
+|---|---|---|
+| 4 — migrations + raw-ddl | A Drizzle migration that already ran in part, a vec0 load failure, a partial `chunk_vec` materialization. | Idempotent. `IF NOT EXISTS` covers raw DDL; Drizzle migrations are content-addressed and self-heal on retry. The `initOnce` retry-on-reject semantics above re-drive the factory; an operator who fixed the underlying issue (e.g., pulled the embed model) re-triggers via any corpus tool call. |
+| 5 — pdf-child spawn | Spawn `EACCES`, missing `bun.exe`, the Job Object FFI binding (Windows) failing to load, or the child crashing during the initial handshake. | Degrade — do not abort the corpus open. Scholar publishes a typed `PDF_CHILD_UNAVAILABLE` error from every `pdf.*` proxy call; `corpus.*`, `papers.search` (lexical), `digest.*`, and `prompts.*` continue to work. The lifecycle module supervises with exponential backoff (1s, 2s, 4s, 8s, capped at 30s) and clears the error once a spawn succeeds. |
+| 6 — sqlite3-mcp `register_db` | sqlite3-mcp not running, MCP connection refused, the tool rejecting the call. | Log through `ctx.log.warn` and continue. Re-attempted on every `scholar.corpus.activate` and `scholar.corpus.status` (Arch F4 + Integration F5) — both are idempotent against sqlite3-mcp, so retrying is safe. Loss of registration only degrades the model's ad-hoc-SQL surface, not any scholar tool. |
+| 7 — tool registration | A `server.registerTool` rejection (duplicate name, schema validation), the resource registration failing. | Abort startup with a structured error to the host. This is a programmer error (a downstream plan introduced a duplicate or malformed schema) that no operator can fix at runtime; failing fast surfaces the bug instead of silently shipping a half-registered toolset. |
+
 ### 7.4 sqlite3-mcp integration
 
 Scholar treats sqlite3-mcp as a **complementary** service:
@@ -492,6 +509,29 @@ Scholar treats sqlite3-mcp as a **complementary** service:
 | Cross-corpus copy | — | `copy_database` |
 
 When scholar opens a corpus, it calls `register_db` with that corpus's path under name `scholar:<corpus>`. When the user runs `/sqlite3-mcp query_database scholar:daisy "SELECT count(*) FROM papers"` they get the result without scholar mediating.
+
+**Lifecycle hooks against sqlite3-mcp (Integration F4).** The `register_db` call is one event in a larger lifecycle that scholar maintains symmetrically:
+
+| Scholar event | sqlite3-mcp action | Notes |
+|---|---|---|
+| `scholar.corpus.create` | `register_db` under `scholar:<id>` | Wrapped in the same `initOnce` slot as the corpus-open path so a first-run failure doesn't permanently break the corpus. |
+| `scholar.corpus.activate` | `register_db` (idempotent retry) | Re-attempted on every activate so a sqlite3-mcp restart re-establishes the binding without a scholar restart. Also re-attempted as a side effect of `scholar.corpus.status` so the operator can force-heal by polling status (Arch F4 + Integration F5). |
+| `scholar.corpus.archive` (sets `corpora.archived_at`) | `unregister_db scholar:<id>` if the API exposes it; otherwise log + skip and surface the stale entry through `scholar.corpus.status` | Verified at cycle 6.12 against the live sqlite3-mcp version; the table-row above records the contract scholar depends on. |
+| Corpus delete (physical removal — no v1 caller; documented for v2) | `unregister_db scholar:<id>` then `bun.unlink` the .db file | Order matters: unregister first so sqlite3-mcp doesn't try to hand out a soon-deleted DB. |
+| Corpus rename | `register_db scholar:<new-name>` then `unregister_db scholar:<old-name>` | New first, old second, so an interrupted rename leaves both names pointing at the live file rather than neither. |
+
+**Joint-ownership write discipline (Open Q2 / Integration F6).** Scholar's per-corpus DB is jointly owned: scholar holds the schema, caches, and reconciler state, but sqlite3-mcp's `query_database` exposes raw SQL to the model. Two access surfaces operate against the same file with different semantics:
+
+- **`bun:sqlite` (scholar code)** — the only path that maintains scholar's invariants. All writes from inside scholar's own tool handlers go through Drizzle on `bun:sqlite`. The transaction boundaries from §11 and §13 hold here.
+- **`sqlite3-mcp.query_database` (model ad-hoc)** — bypasses every scholar invariant. A `DELETE FROM paper_chunks` issued through this path silently desyncs `chunk_vec` (no FK cascade), drops the §13 reconciler's view of paper history, and invalidates any digest whose `scope_signature` covered the removed rows. The model has no awareness of which writes are safe.
+
+This is **not** an opportunity to swap to a `bun:sqlite`-native alternative — the two paths serve different roles. `bun:sqlite` is a Bun runtime API only scholar's TypeScript can call; `sqlite3-mcp` exposes MCP tools the model invokes from chat. Dropping `sqlite3-mcp` would remove the model's ad-hoc query surface, which is plan 1.2's deliverable.
+
+v1 discipline:
+
+1. Scholar documents the joint-ownership semantics in the `scholar.corpus.status` output and in any operator-facing message that references sqlite3-mcp by name — including a one-line warning that destructive SQL via `query_database` can desync caches.
+2. The skill `skills/scholar-workflow/SKILL.md` (cycle 6.10) carries the model-facing version of the same warning: **SELECT-only against `scholar:*` DBs unless you've read the schema and understand which caches your write disturbs.**
+3. v2 candidates recorded in §16: investigate whether sqlite3-mcp exposes a read-only registration mode that scholar could prefer when the operator hasn't opted into write access, and whether scholar can subscribe to sqlite3-mcp write events to invalidate caches reactively.
 
 ### 7.5 Nushell module
 
@@ -974,6 +1014,13 @@ askClaude?: {
 
 On seeing `structuredContent.askClaude`, the UI calls `window.cowork.askClaude(askClaude.prompt, askClaude.data)` (a host-provided global in the MCP App iframe) and renders the result. This sentinel shape is the contract shared between the producers (`src/server/tools/digest.ts`, `prompts.ts`) and the consumer (`src/ui/views/DigestPanel.tsx`). It keeps Claude API usage off the default path while preserving an explicit escape hatch.
 
+**Host-capability detection (Integration F8).** `window.cowork.askClaude` is a Cowork-host-provided global; raw Claude Code, MCP Inspector, and other hosts do not expose it. The UI feature-detects with `typeof window.cowork?.askClaude === "function"` on mount:
+
+- **Detected.** The per-action "use Claude instead" toggle renders and is wired to the sentinel-handling path above.
+- **Absent.** The toggle is hidden entirely; in its place the UI renders a single static note: *"Claude fallback unavailable in this host."* Servers still receive `askClaude: undefined` in tool calls (the toggle was never offered), so the Ollama-only path is exercised end-to-end.
+
+v1 supports Cowork as the only host that delivers the full feature surface. Other hosts get a functional scholar — corpus management, search, digests, prompts, annotations — but lose the per-request Claude opt-in. The reduced surface is documented in `skills/scholar-workflow/SKILL.md` so the model doesn't suggest the toggle when it isn't available.
+
 ### Embedding pipeline
 
 1. On `scholar.pdf.refresh-extraction`, scholar extracts the paper text via the bundled pdf MCP's `get_text` interaction.
@@ -1105,14 +1152,146 @@ A no-op metadata path: the form lets the user supply title/authors/year/venue/pd
 
 ## 13. Annotation Round-trip
 
-The bundled pdf MCP supports `add_annotations` / `update_annotations` / `remove_annotations` with the type catalogue listed in the pdf-viewer plugin's `view-pdf` skill. Scholar's annotation table mirrors that schema (`{id, page?, anchor?, body, source, created_at, updated_at, deleted_at}`); `id`s are stable across both stores. The schema additions in §8.2 — `annotations.deleted_at` (soft-delete tombstones) and the `reconcile_state` table (per-paper bookkeeping) — are pinned in this session; the **reconciler algorithm body** that consumes them is filled in Session 3.
+The vendored pdf MCP supports `add_annotations` / `update_annotations` / `remove_annotations` with the type catalogue listed in the pdf-viewer plugin's `view-pdf` skill. Scholar's annotation table mirrors that schema (`{id, page?, anchor?, body, source, created_at, updated_at, deleted_at}`); `id`s are stable across both stores. The schema additions in §8.2 — `annotations.deleted_at` (soft-delete tombstones), `annotations.rect` (persisted geometry), and the `reconcile_state` table (per-paper bookkeeping) — are pinned. This section pins the reconciler algorithm body that consumes them.
 
 **Propagation model.** v1 does **not** assume the child pdf MCP emits annotation-change notifications — that behaviour is unverified against `server-pdf@1.7.2`. Propagation is therefore poll/reconcile, not event-push:
 
-1. *scholar → viewer (push).* A `scholar.annotations.upsert` / `.delete` writes scholar's row (a `.delete` writes a tombstone with `deleted_at` set, not a row removal), then immediately forwards the change to the child pdf MCP via `interact: { commands: [{ type: "add_annotations" | "update_annotations" | "remove_annotations", ... }] }` with a derived rectangle (from the anchor if available, else a margin sticky-note).
-2. *viewer → scholar (reconcile-on-read).* Whenever scholar needs the current annotation set — on opening/refreshing the paper detail view, and after any scholar-initiated viewer interaction — it reads the child pdf MCP's annotation list and reconciles against its table. Divergence is resolved **last-write-wins with tombstone semantics**: keyed on `updated_at`, but a row carrying `deleted_at` propagates as a delete on the other side instead of a row write, so one-sided absence is never ambiguous (an unseen-on-the-other-side row may be either "added here" or "deleted there", and `reconcile_state` distinguishes the two by recording which (paper, side) pairs have ever been reconciled). Rows new to scholar without a tombstone are written with `source: "pdf-viewer"`.
+1. *scholar → viewer (push).* A `scholar.annotations.upsert` / `.delete` writes scholar's row (a `.delete` writes a tombstone with `deleted_at` set, not a row removal), then immediately forwards the change to the child pdf MCP via `ctx.pdf.interact([{ type: "add_annotations" | "update_annotations" | "remove_annotations", ... }])` with a derived rectangle (the persisted `annotations.rect` if present, else the anchor-derived rect, else a margin sticky-note).
+2. *viewer → scholar (reconcile-before-read).* Per Open Q4, every call to `scholar.annotations.list(paper_id)` synchronously invokes the reconciler below before returning rows. Latency cost (one viewer round-trip per list) is accepted in exchange for eliminating the model-facing stale window — the model never observes an annotation set that disagrees with what the user sees in the viewer.
 
-This session pins only the **schema shape** and the **LWW-with-tombstone semantic**. The exact algorithm — three-way diff order, conflict resolution when both sides have the same `updated_at` to the second, batching, and the `reconcile_state.last_reconciled_at` advancement rule — is specified in Session 3.
+**Reconciler algorithm (cycle 6.7, `annotations` plan).** `reconcile(corpus_id, paper_id, db)` is structured to keep every MCP round-trip *outside* the SQLite write transaction — under Open Q4 this function runs on every `annotations.list` call, so a transaction that held the write lock across network I/O would serialize all readers behind in-flight pdf-child traffic. Reads and pushes happen first against `db` (no transaction); only the final write-back wraps the local SQL in `db.transaction(...)`. The §7.6 cross-plan helper convention still applies to the write-back closure (`tx`-as-first-arg), but the outer signature takes `db` rather than `tx`.
+
+```typescript
+async function reconcile(
+  corpus_id: string,
+  paper_id: string,
+  db: BunSQLiteDatabase,
+): Promise<void> {
+  // --- Phase 1: read-only state capture (no tx; no SQLite write lock held). ---
+
+  const cursor = db.select({ at: reconcile_state.last_reconciled_at })
+    .from(reconcile_state)
+    .where(and(eq(reconcile_state.corpus_id, corpus_id),
+               eq(reconcile_state.paper_id, paper_id)))
+    .get()?.at ?? "1970-01-01T00:00:00.000Z";  // epoch sentinel for never-reconciled
+
+  const scholar_dirty = db.select().from(annotations)
+    .where(and(
+      eq(annotations.paper_id, paper_id),
+      or(gt(annotations.updated_at, cursor), gt(annotations.deleted_at, cursor)),
+    ))
+    .all();
+
+  const scholar_all_live = db.select().from(annotations)
+    .where(and(
+      eq(annotations.paper_id, paper_id),
+      isNull(annotations.deleted_at),
+    ))
+    .all();
+  const scholar_by_id = new Map(scholar_all_live.map(r => [r.id, r]));
+
+  // --- Phase 2: MCP round-trips (await on network; no SQLite tx open). ---
+
+  const viewer_rows = await ctx.pdf.interact([{ type: "list_annotations", paper_id }]);
+  const viewer_by_id = new Map(viewer_rows.map(r => [r.id, r]));
+
+  // 1. Tombstones — push deletes to viewer for scholar rows that were soft-deleted.
+  const tombstones = scholar_dirty.filter(r => r.deleted_at !== null);
+  if (tombstones.length > 0) {
+    await ctx.pdf.interact([{
+      type: "remove_annotations",
+      ids: tombstones.map(r => r.id),
+    }]);
+  }
+
+  // 2. Live scholar-side changes — push add/update to viewer. Concurrent push is safe
+  //    against the child: each interact() call serializes on the child's stdio pipe.
+  const live_changes = scholar_dirty.filter(r => r.deleted_at === null);
+  for (const row of live_changes) {
+    const op = viewer_by_id.has(row.id) ? "update_annotations" : "add_annotations";
+    await ctx.pdf.interact([{ type: op, annotations: [serializeForViewer(row)] }]);
+  }
+
+  // --- Phase 3: local write-back inside a single Drizzle transaction. No awaits. ---
+
+  const now = nowIso();
+  db.transaction((tx) => {
+    // 3. Viewer-only rows (new on the viewer side OR newer than scholar's copy) — pull.
+    for (const vrow of viewer_rows) {
+      const srow = scholar_by_id.get(vrow.id);
+      if (!srow) {
+        tx.insert(annotations).values({
+          id: vrow.id,
+          paper_id,
+          page: vrow.page,
+          anchor: vrow.anchor,
+          rect: JSON.stringify(vrow.rect),
+          body: vrow.body,
+          source: "pdf-viewer",
+          created_at: vrow.created_at ?? now,
+          updated_at: vrow.updated_at ?? now,
+          deleted_at: null,
+        }).run();
+      } else if (vrow.updated_at && vrow.updated_at > srow.updated_at) {
+        tx.update(annotations).set({
+          body: vrow.body,
+          rect: JSON.stringify(vrow.rect),
+          source: "pdf-viewer",
+          updated_at: vrow.updated_at,
+        }).where(eq(annotations.id, vrow.id)).run();
+      }
+      // Else: scholar's copy is at least as new — keep it.
+    }
+
+    // 4. Scholar-only rows OLDER than the cursor and missing from the viewer:
+    //    treat as viewer-side deletions and tombstone in scholar.
+    for (const srow of scholar_all_live) {
+      if (srow.updated_at <= cursor && !viewer_by_id.has(srow.id)) {
+        tx.update(annotations).set({ deleted_at: now })
+          .where(eq(annotations.id, srow.id)).run();
+      }
+    }
+
+    // 5. Advance the cursor. UPSERT — first reconcile inserts, later ones update.
+    tx.insert(reconcile_state).values({
+      corpus_id, paper_id, last_reconciled_at: now,
+    }).onConflictDoUpdate({
+      target: [reconcile_state.corpus_id, reconcile_state.paper_id],
+      set: { last_reconciled_at: now },
+    }).run();
+  });
+}
+```
+
+**Transaction discipline (advisor-flagged).** No `await` appears inside `db.transaction(...)`. The phase-3 closure runs synchronously over data captured in phase 1 and the viewer rows fetched in phase 2 — the SQLite write lock is held only for the duration of the local SQL, never across network I/O. This keeps `annotations.list` parallelizable in v1 even though every call reconciles; without this split, two concurrent list calls on different papers would serialize behind each other's pdf-child traffic.
+
+**Phase-2 race window (documented, accepted).** Between phase 1's `scholar_all_live` snapshot and phase 3's tombstone scan, a separate `annotations.upsert` may insert a new scholar row. That row's `updated_at` is necessarily after `cursor` (it was just written), so the phase-3 tombstone rule (`srow.updated_at <= cursor`) skips it correctly — the new row is not misclassified as a viewer-side deletion. The reverse case (a separate `annotations.upsert` modifies a row that phase 1 read) is resolved by SQLite's transaction semantics: phase 3's UPDATE on that row reflects the concurrent writer's commit, since `db.transaction` reads the latest committed state when it opens.
+
+**`serializeForViewer(row)` helper.** Owned by the `annotations` plan; lives in `src/server/tools/annotations.ts`. Pinned shape:
+
+```typescript
+function serializeForViewer(row: AnnotationRow): ViewerAnnotation {
+  return {
+    id: row.id,                                          // ULID; viewer-side prefix wrap deferred to cycle 6.7 round-trip test
+    page: row.page,
+    rect: row.rect ? JSON.parse(row.rect) : deriveRectFromAnchor(row.anchor),
+    body: row.body,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+```
+If the cycle-6.7 ID round-trip test reveals the viewer mutates ULID-shaped IDs, `serializeForViewer` switches to the `scholar-<ulid>` wrap-and-strip pattern and the consumer-side `viewer_rows` parser inverts it. The branch is taken on test evidence, not pre-committed.
+
+**Tie-breaking on identical `updated_at`.** When `vrow.updated_at === srow.updated_at` to the millisecond, scholar's row is preserved — the algorithm only overwrites on strict `>`. This matters when a single user action triggers near-simultaneous writes on both sides (the millisecond-precision `nowIso()` from §8 plus serial transaction commits make exact equality rare but possible). The asymmetry is documented and intentional: scholar's row carries the source-of-truth metadata (`paper_id`, `source`) which the viewer's reply may have lost or transformed.
+
+**Batching.** The algorithm issues at most three MCP round-trips per call: one `list_annotations`, one batched `remove_annotations`, and one `add_annotations` / `update_annotations` per non-tombstoned dirty row. The per-row loop in step 2 is unbatched because the viewer's batch semantics for mixed add+update calls are unverified against 1.7.2 — cycle 6.7 verifies and, if the viewer accepts a single mixed batch, the loop collapses to one call. Step 3's writes are local SQL inside `tx`; no MCP traffic.
+
+**Cycle 6.7 verification requirements (Integration F1 / F9).**
+
+- **`list_annotations` `updated_at` availability.** Verify upstream returns a comparable `updated_at` field. If it does not, the algorithm degenerates gracefully to *scholar-authoritative* — step 3's `vrow.updated_at > srow.updated_at` branch becomes unreachable, but step 3's "never-seen-by-scholar" branch still catches viewer-only adds and step 4 still detects viewer-side deletes through membership. The reconciler test in cycle 6.7 includes both branches and a parameterized fixture for each return shape.
+- **Annotation ID round-trip.** Test that an annotation written by scholar (ULID id) survives a `list_annotations` reply unchanged. If the viewer mutates the id (prefix, length cap, character class), scholar's `serializeForViewer` wraps the ULID as `scholar-<ulid>` on push and strips on pull; the test pins the chosen format.
+- **Mixed-batch acceptance.** Test whether `interact([{type:"add_annotations",...}, {type:"update_annotations",...}])` is accepted as one call; if yes, simplify step 2 accordingly.
 
 If a future re-vendor of the pdf MCP is confirmed to emit `resources/updated` for annotations, scholar may additionally `subscribeResource` to make reconciliation eager — a v2 optimization, not a v1 dependency.
 
@@ -1124,7 +1303,7 @@ ID stability is preserved across both paths.
 
 1. `bun run build:server` — `tsc` typecheck + `bun build src/server/index.ts --target=bun --outdir=build/server`.
 2. `bun run build:ui` — vite + `vite-plugin-singlefile` → `build/ui/app.html` (≤ 5 MB, well within the iframe-resource budget).
-3. `bun run build:pdf` — copies the vendored forked pdf dist to `build/vendor/pdf-server/`. No transpilation required; the patch is applied at vendor time.
+3. `bun run build:pdf` — copies the unmodified vendored upstream pdf dist from `src/vendor/pdf-server/` to `build/vendor/pdf-server/`. No transpilation and no patch step — re-vendoring on upstream bump is a `bun pm pack @modelcontextprotocol/server-pdf@<new>` → unpack → swap.
 4. `bun run build:nu` — copies `nu/scholar.nu` into the bundle.
 5. `bun run build:plugin` — assembles a tree at `build/plugin/` matching the installable layout, then zips it as `scholar.plugin` in `%USERPROFILE%\Documents\Cowork\System\` for the user to install via Cowork's plugin import.
 
@@ -1144,7 +1323,10 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 |---|---|
 | Ollama unavailable when user expects digests. | Graceful degradation (placeholder + warning toast); explicit "use Claude" opt-in for any single request. |
 | sqlite-vec extension load fails on the user's system. | Detect at startup via `loadVecAndProbeDim` (§12.0); if load fails, fall back to lexical-only search and log a remediation hint. The `vec0` shared library is bundled at `build/vendor/sqlite-vec/` and resolved by absolute path at load — bun:sqlite's extension loader does not require co-location with the SQLite engine binary. |
-| Forked pdf server diverges from upstream. | Keep the patch surface to **two lines plus one new env var read**. Document the diff in `src/vendor/pdf-server/PATCH.md`. Re-vendoring on upstream bump is a one-screen review. |
+| Upstream pdf server changes its MCP protocol shape (e.g., drops `useClientRoots`, changes `roots/list` reply schema, renames `interact` types). | Vendor is **unmodified** — there is no patch to re-apply, so divergence surfaces as protocol-shape changes scholar's MCP client side must adapt to. Re-vendoring on a minor bump is `bun pm pack` + unpack + run the cycle-6.2 fixture suite (roots/list responder, list_changed round-trip, viewUUID survival across a root mutation); any failure pins the affected behaviour to a versioned shim in `src/server/pdf/lifecycle.ts`. Major bumps are gated on the same fixture suite plus an annotations-round-trip retest. |
+| Latent upstream `useClientRoots` propagation bug (the env-var-derived `roots` value computed at `dist/index.js:34386–34391` is not threaded through to `createServer` on line 34392 — the call uses the original CLI flag instead). | Scholar passes `--use-client-roots` on the command line, so `useClientRoots` is already `true` at the createServer call and the bug never bites. No source patch needed; the workaround is purely in the spawn invocation. A future upstream fix would be a no-op for scholar. |
+| Drop vendored copy entirely (v2 simplification candidate). | Spawn via `bunx @modelcontextprotocol/server-pdf` when a sufficient network and bun runtime are present, removing `src/vendor/pdf-server/` from the bundle. Trade-off: removes the offline-distribution guarantee. Not pursued in v1 because the plugin must remain installable in air-gapped Cowork hosts. (Distinct from the v1-adopted protocol-based roots approach in §7.2.) |
+| Native FFI for the Windows Job Object orphan-reaping path. | Single FFI surface in `src/server/pdf/lifecycle.ts` via `koffi` (preferred) or `win32-api`. Falls back to a startup-sweep + `prctl(PR_SET_PDEATHSIG)` posture on non-Windows. The dependency is pinned and the failure mode is "no orphan reaping on Windows" — supervised respawn still works inside a live scholar session. |
 | Annotation reconciliation conflicts (user edits in both panes concurrently). | Last-write-wins keyed by `updated_at`; scholar reconciles on paper-detail open/refresh (§13). Test with a deliberate concurrent-edit race. |
 | Embedding production blocks tool responses on big papers. | Embedding pipeline runs on an in-process async queue with a small concurrency limit (a worker thread is deferred to v2 if profiling shows main-thread starvation); tools that need embeddings (`scholar.papers.search` with semantic mode) check readiness and degrade to lexical with a "still indexing" pill. |
 | User installs the plugin without the global `bun.exe`. | v1 ships scholar as a single self-contained executable produced by `bun build --compile` (promoted from earlier "v2 considers"); `.mcp.json`'s `command` points at the compiled binary, so the runtime host does not need `bun` on PATH. The compiled artifact is part of the §14.1 build pipeline; the `.mcp.json` command swap to the compiled exe is finalized in Session 4. |
@@ -1162,7 +1344,7 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 - Nushell wiring → **user-facing CLI only**.
 - PDF root default → **prompt at install** with `%USERPROFILE%/mcp-data/literature/` as the suggested override path.
 - Mechanical LLM work → **Ollama by default**; `cowork.askClaude` is opt-in only.
-- pdf MCP → **bundled fork of v1.7.2** (vendored dist, two-line patch, new `MCP_PDF_CLIENT_ROOTS_PATHS` env).
+- pdf MCP → **bundled unmodified vendor of v1.7.2** (`@modelcontextprotocol/server-pdf@1.7.2` `dist/` shipped as-is under `src/vendor/pdf-server/`). Root injection rides the MCP `roots/list` protocol — scholar's MCP client advertises `capabilities.roots.listChanged` and serves `ListRootsRequestSchema` from the active corpus's `pdf_roots` rows; `notifications/roots/list_changed` fires on root mutation, no subprocess respawn. The earlier "two-line patch + `MCP_PDF_CLIENT_ROOTS_PATHS` env var" plan is retired (Session 3 / Integration F2/F3) — the patch existed only because scholar wasn't holding up its client-side end of the protocol.
 - sqlite3-mcp integration → **delegate query/backup/pack** surfaces to it via `register_db`.
 - Tool wiring → **registry barrel + foundation-scaffolded stubs** (§7.6) so the seven plans' blast-radii stay file-disjoint.
 - First-run wizard → **server-side `elicitInput`, invoked lazily by the corpus tool**; not a standalone script.
