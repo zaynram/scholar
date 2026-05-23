@@ -188,13 +188,23 @@ Stdio entry. Wires the McpServer, registers tools and the UI resource, opens the
 Drizzle schema for both the config DB and per-corpus DB. Listed in §8.
 
 ### 5.3 src/server/db/migrations.ts
-Drizzle migration runner invoked at corpus open.
+Drizzle migration runner invoked at corpus open. Three behaviors are pinned for v1:
+
+1. **`PRAGMA foreign_keys = ON` on every connection.** Both the config-DB and per-corpus-DB handles execute this pragma immediately after `open()` and before any other SQL — without it, the `onDelete: "cascade"` clauses in §8 are inert. The pragma is per-connection in SQLite, not per-database, so a foundation helper (`openWithPragmas(path) → BunSQLiteDatabase`) is the sole entry point for opening either DB.
+2. **Migrations source-of-truth.** Drizzle-generated migrations live at `src/server/db/migrations/` and are bundled into the build. On open, the runner replays any unapplied migrations from the journal in order; each migration runs inside an implicit transaction (the bun:sqlite + drizzle-orm/bun-sqlite combination wraps each migration with `BEGIN`/`COMMIT`), so a failed migration leaves the DB untouched and surfaces the SQL error verbatim along with a remediation hint (typically "restore the previous DB from `data/<corpus>.tar.gz`").
+3. **Plugin-upgrade compatibility guard.** Before replaying migrations the runner reads `__drizzle_migrations` (Drizzle's own bookkeeping table). If `MAX(id)` recorded in the DB exceeds the number of migrations in the bundled journal, the DB was written by a newer plugin version; the runner aborts the open with `DbFromNewerPluginError`, surfacing the remediation "downgrade the plugin or run `scholar.corpus.export` to extract the data via `pack_repo`". A `scholar.corpus.export` model-only tool (registered in §10) is the schema-version-agnostic escape hatch — it produces a `pack_repo`-style tarball without going through Drizzle, so a newer-schema DB can always be evacuated regardless of which migrations the host plugin knows about.
 
 ### 5.4 src/server/db/sqlite-vec.ts
 Loader for the `sqlite-vec` extension; handles platform-specific dll/dylib resolution.
 
 ### 5.5 src/server/tools/corpus.ts
-`scholar.corpus.list / create / activate / status` tools.
+`scholar.corpus.list / create / activate / status / export / reset-init` tools.
+
+**Cross-DB atomicity for `scholar.corpus.create`** (Session 2 / Data F7). Corpus creation touches two DBs — the config DB (`corpora` + `pdf_roots` rows) and a brand-new per-corpus DB file. SQLite has no cross-database transaction primitive, so atomicity is enforced by ordering and rollback-on-failure:
+
+1. Provision the per-corpus DB fully, in this order: (a) create the file via `openWithPragmas` (§5.3); (b) load `sqlite-vec`; (c) replay Drizzle migrations; (d) probe the embed dimension via `loadVecAndProbeDim` from §12.0 if Ollama is reachable, otherwise mark `chunk_vec.created = false` in the per-corpus `settings` table and defer `chunk_vec` creation; (e) write `settings.embed.model` and (when probed) `settings.embed.dim`; (f) call `runRawDdl(db)` to create `reading_queue` (and `chunk_vec` when the dim is known).
+2. **Only after** step 1 returns successfully, INSERT into `corpora` and the initial `pdf_roots` row (with `is_default = true`) in the config DB, in a single config-DB transaction.
+3. Wrap step 1 in `try { … } catch (e) { await unlink(perCorpusDbPath).catch(() => {}); throw e; }` so a partial DB file is removed on failure — the config DB never sees a row pointing at a nonexistent or half-initialized per-corpus DB.
 
 ### 5.6 src/server/tools/roots.ts
 `scholar.roots.list / add / remove / set-default` tools; triggers pdf child restart on mutation.
@@ -460,8 +470,8 @@ Entry: `src/server/index.ts`. Uses `@modelcontextprotocol/sdk` over stdio. On st
 
 1. Resolves `SCHOLAR_RUNTIME_ROOT`, ensures `runtime/dbs/` exists.
 2. Reads `runtime/config.json` (corpora list, active corpus, default PDF root, Ollama model overrides).
-3. First-run handling is **not** done at startup. When a corpus tool (`scholar.corpus.list` / `scholar.corpus.activate`) runs and finds no corpus configured, it calls the first-run routine in `scripts/first-run.ts`, which uses the live MCP session's `elicitInput` request to ask the host for the initial PDF root, then writes the result into `runtime/config.json` and the config DB. `first-run.ts` is a module imported by `src/server/tools/corpus.ts` (both `corpus`-plan owned) — not a standalone executable.
-4. Opens the active corpus's `scholar-<corpus>.db` via `bun:sqlite` wrapped by `drizzle-orm/bun-sqlite`, loads the `sqlite-vec` extension (via `loadVecAndProbeDim` from §12.0, which also probes the embed-model dimension), runs Drizzle migrations, then calls `runRawDdl(db)` (§7.6) to create the `chunk_vec` virtual table and `reading_queue` view. (Deferred until a corpus is active.)
+3. First-run handling is **not** done at startup. When a corpus tool (`scholar.corpus.list` / `scholar.corpus.activate`) runs and finds no corpus configured, it calls the first-run routine in `scripts/first-run.ts`, which uses the live MCP session's `elicitInput` request to ask the host for the initial PDF root, then drives `scholar.corpus.create` with the elicited path as `initial_pdf_root`. The wizard writes (a) `runtime/config.json` for the active-corpus pointer and (b) the cross-DB `corpora` row plus a `pdf_roots` row with `is_default = true` (the latter is the canonical location of the default root — `corpora` no longer carries a `pdf_root` column, per §8.1 / Data F18). `first-run.ts` is a module imported by `src/server/tools/corpus.ts` (both `corpus`-plan owned) — not a standalone executable.
+4. Opens the active corpus's `scholar-<corpus>.db` via `bun:sqlite` wrapped by `drizzle-orm/bun-sqlite` (through `openWithPragmas` from §5.3, so `PRAGMA foreign_keys = ON` is set before any other SQL), loads the `sqlite-vec` extension, runs Drizzle migrations, then re-probes the embed dimension via `loadVecAndProbeDim` from §12.0 and compares against the persisted `settings.embed.{model,dim}` row written at corpus creation (§5.5) — a mismatch surfaces the "drop `chunk_vec` and re-embed" remediation rather than failing at insert time. Finally calls `runRawDdl(db)` (§7.6) to create the `reading_queue` view unconditionally, and the `chunk_vec` virtual table only when the embed dimension is known (either persisted from create-time or freshly probed at open). When `chunk_vec` does not yet exist (Ollama was offline at corpus creation and is still offline now), semantic-search code paths gate on its presence and degrade to lexical-only with a "still indexing" pill, exactly as for partially-embedded chunks. After the open succeeds, the corpus-open initializer also writes `corpora.last_opened_at = nowIso()` to the config DB — consumed by `scholar.corpus.status` (§10). (Deferred until a corpus is active.)
 5. Spawns the pdf child with the active corpus's roots. (Deferred until a corpus is active.)
 6. Registers itself with sqlite3-mcp by calling `mcp__sqlite3-mcp__register_db` once per corpus DB (best-effort; ignored if sqlite3-mcp is not running).
 
@@ -600,23 +610,37 @@ This skeleton-plus-pinned-contracts convention — not mere file-path partitioni
 
 One SQLite file per corpus: `runtime/dbs/scholar-<corpus>.db`. All tables scoped to that file; no cross-corpus joins. The plugin's *config* (the corpora registry, default roots, model overrides) lives in `runtime/dbs/scholar-config.db`.
 
+**Timestamp format.** Every timestamp column in this schema (both DBs) is ISO-8601 UTC with millisecond precision: `YYYY-MM-DDTHH:MM:SS.sssZ`. A `nowIso()` helper lives in `src/server/db/` (foundation-owned at cycle 6.1) and is the sole producer of these strings; every `created_at` / `updated_at` / `imported_at` / `extracted_at` / etc. value is written through it so lexical ordering matches chronological ordering and string comparison is timezone-free.
+
+**Foreign-key enforcement.** `migrations.ts` executes `PRAGMA foreign_keys = ON` on every connection open — documented in §5.3. This is what makes the `onDelete: "cascade"` clauses below load-bearing rather than declarative. The one exception is `chunk_vec` (a `vec0` virtual table): SQLite FK CASCADE does not propagate to virtual tables, so chunk-vec rows must be deleted explicitly before the parent `paper_chunks` row — see the post-§8.2 note.
+
 ### 8.1 Config DB (`scholar-config.db`)
 
 ```typescript
+import { sql } from "drizzle-orm";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+
 export const corpora = sqliteTable("corpora", {
-  id:           text("id").primaryKey(),            // slug, e.g. "daisy"
-  display_name: text("display_name").notNull(),
-  pdf_root:     text("pdf_root").notNull(),         // absolute path
-  created_at:   text("created_at").notNull(),
-  archived_at:  text("archived_at"),                // null = active
+  id:              text("id").primaryKey(),            // slug, e.g. "daisy"
+  display_name:    text("display_name").notNull(),
+  // pdf_root removed (Session 2 / Data F18): the default root is derived from
+  // pdf_roots WHERE is_default=true, eliminating the cache-vs-source drift.
+  created_at:      text("created_at").notNull(),
+  last_opened_at:  text("last_opened_at"),             // ISO-8601 UTC; updated by initOnce on corpus-open (§7.3 step 4). Consumed by scholar.corpus.status (§10).
+  archived_at:     text("archived_at"),                // null = active
 });
 
 export const pdf_roots = sqliteTable("pdf_roots", {
   id:         integer("id").primaryKey({ autoIncrement: true }),
-  corpus_id:  text("corpus_id").references(() => corpora.id),
+  corpus_id:  text("corpus_id").notNull().references(() => corpora.id, { onDelete: "cascade" }),
   path:       text("path").notNull(),
-  is_default: integer("is_default", { mode: "boolean" }).default(false),
-});
+  is_default: integer("is_default", { mode: "boolean" }).notNull().default(false),
+}, (t) => ({
+  corpus_idx:  index("pdf_roots_corpus_idx").on(t.corpus_id),
+  // Exactly one default root per corpus. Partial unique index — only rows with
+  // is_default=true are uniqueness-checked, so corpora may carry many is_default=false rows.
+  one_default: uniqueIndex("pdf_roots_one_default_idx").on(t.corpus_id).where(sql`is_default = 1`),
+}));
 
 export const settings = sqliteTable("settings", {
   key:   text("key").primaryKey(),
@@ -624,11 +648,16 @@ export const settings = sqliteTable("settings", {
 });
 ```
 
+**Default-root lookup.** Wherever the spec previously referenced `corpora.pdf_root`, the equivalent read is now `SELECT path FROM pdf_roots WHERE corpus_id = ? AND is_default = true`; a `defaultPdfRoot(corpusId)` helper in `src/server/db/` wraps this and asserts that exactly one row matches (the `one_default` partial unique index makes "more than one" impossible; "zero" surfaces as a configuration-incomplete error). `scholar.corpus.create` accepts an `initial_pdf_root` argument that becomes the corpus's first `pdf_roots` row with `is_default = true` — see §10 and §5.5.
+
 `schema.ts` additionally exports the inferred row types — notably `CorpusRow = typeof corpora.$inferSelect` — consumed type-only by `registry.ts`'s pinned `ConfigAccessor` contract (§7.6).
 
 ### 8.2 Per-corpus DB (`scholar-<corpus>.db`)
 
 ```typescript
+import { sql } from "drizzle-orm";
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey, check } from "drizzle-orm/sqlite-core";
+
 // Papers — the canonical entity.
 export const papers = sqliteTable("papers", {
   id:           text("id").primaryKey(),       // ULID
@@ -643,51 +672,89 @@ export const papers = sqliteTable("papers", {
   role:         text("role"),                  // free-form: paper's role in the corpus
   section:      text("section"),               // free-form: organizational section
   depth:        text("depth"),                 // "cited" | "background" | "deep"
-  status:       text("status").notNull().default("pending"), // pending|reading|reviewed|skip
+  status:       text("status").notNull().default("pending"),
   priority:     integer("priority").notNull().default(0),
   abstract:     text("abstract"),
   imported_via: text("imported_via"),          // "bibtex" | "ris" | "crossref" | "arxiv" | "manual" (untrusted; sanitized on ingest — see §12)
   imported_at:  text("imported_at").notNull(),
   status_touched_at: text("status_touched_at"),
-});
+}, (t) => ({
+  // Filtering / scope-picker indexes.
+  status_idx:    index("papers_status_idx").on(t.status),
+  section_idx:   index("papers_section_idx").on(t.section),
+  // §12.1 DOI-first dedupe (and arXiv-id dedupe) require uniqueness, but the columns
+  // are nullable (not every paper has a DOI). Partial unique indexes give us "at most
+  // one non-null row" without rejecting the legitimate null-DOI case.
+  doi_uniq:      uniqueIndex("papers_doi_idx").on(t.doi).where(sql`doi IS NOT NULL`),
+  arxiv_uniq:    uniqueIndex("papers_arxiv_idx").on(t.arxiv_id).where(sql`arxiv_id IS NOT NULL`),
+  // Enum CHECK constraints — closed sets are enforced at write time so a buggy
+  // tool handler cannot persist an out-of-vocabulary status / depth / source.
+  status_ck:     check("papers_status_ck",       sql`status IN ('pending','reading','reviewed','skip')`),
+  depth_ck:      check("papers_depth_ck",        sql`depth IS NULL OR depth IN ('cited','background','deep')`),
+  imp_via_ck:    check("papers_imported_via_ck", sql`imported_via IS NULL OR imported_via IN ('bibtex','ris','crossref','arxiv','manual')`),
+}));
 
-// Full extracted text + chunked embeddings for search.
-export const paper_text = sqliteTable("paper_text", {
-  paper_id: text("paper_id").primaryKey().references(() => papers.id),
-  text:     text("text").notNull(),
-  pages:    integer("pages"),
-  extracted_at: text("extracted_at").notNull(),
-  extractor: text("extractor"),                // "child-pdf-mcp" — the only v1 extractor; column kept for forward-compat
-});
+// paper_text REMOVED (Session 2 / Data F15). The previously-spec'd full-text mirror
+// duplicated paper_chunks content with no consumer in §10 or §11. Full text is
+// recomposable on demand:
+//   SELECT group_concat(text, '') AS full_text
+//   FROM paper_chunks
+//   WHERE paper_id = ?
+//   ORDER BY ordinal;
+// If a future use case needs unchunked storage (e.g., full-context Claude calls that
+// must bypass chunking), reintroduce the table in v2; v1 has no such consumer.
 
 export const paper_chunks = sqliteTable("paper_chunks", {
-  id:        text("id").primaryKey(),
-  paper_id:  text("paper_id").references(() => papers.id),
-  ordinal:   integer("ordinal").notNull(),
-  page:      integer("page"),
-  text:      text("text").notNull(),
-});
+  id:           text("id").primaryKey(),
+  paper_id:     text("paper_id").notNull().references(() => papers.id, { onDelete: "cascade" }),
+  ordinal:      integer("ordinal").notNull(),
+  page:         integer("page"),
+  text:         text("text").notNull(),
+  // null until the chunk has been embedded into chunk_vec; non-null records when
+  // the embedding landed. Lets §11's catch-up query find pending chunks after an
+  // Ollama outage without re-embedding already-embedded ones.
+  embedded_at:  text("embedded_at"),
+}, (t) => ({
+  // §11.5 idempotency claim ("chunk IDs deterministic from paper_id + ordinal")
+  // requires this uniqueness to hold at the storage layer, not just by convention.
+  paper_ord_uniq: uniqueIndex("paper_chunks_paper_ord_idx").on(t.paper_id, t.ordinal),
+  // Partial index for the catch-up scan after an outage.
+  pending_idx:    index("paper_chunks_pending_idx").on(t.id).where(sql`embedded_at IS NULL`),
+}));
 
 // sqlite-vec virtual table: chunk embeddings.
 // Created by src/server/db/raw-ddl.ts (§5.44) — NOT Drizzle-managed.
 // The embedding width is the active embed model's dimension, probed at
-// corpus creation (768 for the nomic-embed-text default). See §11.
+// corpus creation (768 for the nomic-embed-text default — see §11).
+// If Ollama is offline at corpus creation, chunk_vec creation is deferred until
+// the first successful embed; semantic search is gated on chunk_vec existence.
 // CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
 //   chunk_id TEXT PRIMARY KEY,
 //   embedding FLOAT[<dim>]  -- e.g. 768 for nomic-embed-text
 // );
 
 export const annotations = sqliteTable("annotations", {
-  id:         text("id").primaryKey(),         // matches Daisy schema for compat
-  paper_id:   text("paper_id").references(() => papers.id),
+  id:         text("id").primaryKey(),         // matches the child pdf MCP's annotation IDs for compat
+  paper_id:   text("paper_id").notNull().references(() => papers.id, { onDelete: "cascade" }),
   page:       integer("page"),
   anchor:     text("anchor"),
+  // JSON-encoded [x1, y1, x2, y2] page-coordinate rectangle. Persisted on inbound
+  // reconcile from the pdf MCP so geometry survives the round-trip; on outbound push
+  // (scholar → viewer) the §13 reconciler prefers this over the anchor-derived rect.
+  // Null when the annotation has no associated rectangle (e.g., a paper-level note).
+  rect:       text("rect"),
   body:       text("body").notNull(),
   source:     text("source").notNull(),        // "scholar" | "pdf-viewer"
   created_at: text("created_at").notNull(),
   updated_at: text("updated_at").notNull(),
   deleted_at: text("deleted_at"),              // null = live; non-null = soft-deleted tombstone. Reconciler in §13 propagates tombstones rather than rows when one side is absent.
-});
+}, (t) => ({
+  paper_idx:       index("annotations_paper_idx").on(t.paper_id),
+  // Composite covers the §13 reconciler's "what changed since last reconcile for this paper"
+  // scan, which orders by updated_at within paper_id.
+  paper_dirty_idx: index("annotations_paper_dirty_idx").on(t.paper_id, t.updated_at),
+  source_ck:       check("annotations_source_ck", sql`source IN ('scholar','pdf-viewer')`),
+}));
 
 // Per-paper reconciler bookkeeping. One row per (corpus_id, paper_id) that scholar
 // has ever reconciled with the child pdf MCP. Lets the algorithm detect "this side
@@ -697,11 +764,12 @@ export const reconcile_state = sqliteTable("reconcile_state", {
   corpus_id:           text("corpus_id").notNull(),
   paper_id:            text("paper_id").notNull(),
   last_reconciled_at:  text("last_reconciled_at").notNull(),
-  // composite PK ON (corpus_id, paper_id)
-});
+}, (t) => ({
+  pk: primaryKey({ columns: [t.corpus_id, t.paper_id] }),
+}));
 
 export const anchor_cache = sqliteTable("anchor_cache", {
-  paper_id:     text("paper_id").primaryKey().references(() => papers.id),
+  paper_id:     text("paper_id").primaryKey().references(() => papers.id, { onDelete: "cascade" }),
   anchors_json: text("anchors_json").notNull(), // array of {text, page}
   pages:        integer("pages"),
   generated_at: text("generated_at").notNull(),
@@ -709,27 +777,48 @@ export const anchor_cache = sqliteTable("anchor_cache", {
 });
 
 export const reading_prompts = sqliteTable("reading_prompts", {
-  paper_id:     text("paper_id").primaryKey().references(() => papers.id),
+  paper_id:     text("paper_id").primaryKey().references(() => papers.id, { onDelete: "cascade" }),
   prompts_json: text("prompts_json").notNull(),
   generated_at: text("generated_at").notNull(),
   model:        text("model"),                 // which Ollama model produced these
 });
 
 export const digests = sqliteTable("digests", {
-  id:           text("id").primaryKey(),
-  scope_key:    text("scope_key").notNull(),   // "all" | "section:foo" | "stale" | "selection:<hash>"
-  body_md:      text("body_md").notNull(),
-  generated_at: text("generated_at").notNull(),
-  model:        text("model"),
-  paper_count:  integer("paper_count"),
-});
+  id:               text("id").primaryKey(),
+  scope_key:        text("scope_key").notNull(),       // "all" | "section:foo" | "stale" | "selection:<hash>"
+  // SHA-256 of the canonical paper slice (sorted paper_ids + per-id status) the digest was
+  // generated against. §9.3 invalidates a cached digest when the live slice's signature
+  // no longer matches this — a cheap way to detect "papers added/removed/status-flipped
+  // since the digest was generated" without storing a snapshot per digest. (UI I3.)
+  scope_signature:  text("scope_signature").notNull(),
+  body_md:          text("body_md").notNull(),
+  generated_at:     text("generated_at").notNull(),
+  model:            text("model"),
+  paper_count:      integer("paper_count"),
+}, (t) => ({
+  scope_idx: index("digests_scope_idx").on(t.scope_key),
+}));
+
+// Snapshot payload — typed shape pinned (Session 2 / Data F10).
+// Stored as JSON in snapshots.payload; read-time validation via this type guard.
+// Delta computation between two snapshots is a TypeScript function over two parsed
+// payloads, NOT a SQL expression — see §13.
+export type SnapshotPayload = {
+  paper_ids: string[];
+  statuses: Record<string, "pending" | "reading" | "reviewed" | "skip">;
+  priorities: Record<string, number>;
+  selection?: string[];
+  counts: { total: number; pending: number; reading: number; reviewed: number; skip: number };
+};
 
 export const snapshots = sqliteTable("snapshots", {
   id:         text("id").primaryKey(),
   taken_at:   text("taken_at").notNull(),
-  payload:    text("payload").notNull(),       // JSON summary of status_overrides + selection
+  payload:    text("payload").notNull(),       // JSON-encoded SnapshotPayload (see above)
   trigger:    text("trigger"),                 // "open" | "manual"
-});
+}, (t) => ({
+  trigger_ck: check("snapshots_trigger_ck", sql`trigger IS NULL OR trigger IN ('open','manual')`),
+}));
 
 // Reading-queue ordering — derived view; uses priority + staleness + status.
 // Created by src/server/db/raw-ddl.ts (§5.44) — NOT Drizzle-managed.
@@ -744,13 +833,33 @@ export const snapshots = sqliteTable("snapshots", {
 //   ORDER BY status='reading' DESC, priority DESC, days_since_touch DESC;
 
 export const citations = sqliteTable("citations", {
-  citing_id:  text("citing_id").references(() => papers.id),
-  cited_id:   text("cited_id").references(() => papers.id),
-  // composite PK ON (citing_id, cited_id)
+  citing_id:  text("citing_id").notNull().references(() => papers.id, { onDelete: "cascade" }),
+  cited_id:   text("cited_id").notNull().references(() => papers.id, { onDelete: "cascade" }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.citing_id, t.cited_id] }),
+}));
+
+// Per-corpus settings — sibling of the config-DB settings table in §8.1, but scoped
+// to a single corpus so values travel with the corpus when it is packed for distribution.
+// v1 keys (Session 2 / Data F6):
+//   embed.model       — the embed-model tag at corpus creation, e.g. "nomic-embed-text"
+//   embed.dim         — the resolved embedding dimension, e.g. 768
+//   chunk_vec.created — boolean; true once raw-ddl.ts has materialized chunk_vec
+//                        (false when Ollama was offline at corpus creation and
+//                         chunk_vec creation was deferred to first successful embed).
+export const settings = sqliteTable("settings", {
+  key:   text("key").primaryKey(),
+  value: text("value").notNull(),  // JSON-encoded
 });
 ```
 
-**Note on the citation table:** populated opportunistically from CrossRef `references` data when available; never blocked on. The v1 UI does not visualize the citation graph, but the data is captured so v2 can.
+**Notes on this section's invariants:**
+
+- **`chunk_vec` orphan-row discipline (F16 / F5d).** `chunk_vec` is a `vec0` virtual table and does NOT participate in SQLite FK CASCADE. Any future paper-delete code path (no v1 consumer; called out here so the rule is in place when one lands) MUST execute `DELETE FROM chunk_vec WHERE chunk_id IN (SELECT id FROM paper_chunks WHERE paper_id = ?)` **before** deleting the `papers` row — otherwise the cascade through `paper_chunks` removes the chunk row but leaves the chunk-vec row as an orphan with a now-dangling `chunk_id`.
+
+- **Citation table behavior (unchanged from earlier revisions).** Populated opportunistically from CrossRef `references` data when available; never blocked on. The v1 UI does not visualize the citation graph, but the data is captured so v2 can.
+
+- **Per-corpus settings vs config-DB settings.** Both DBs ship a `settings(key, value)` table. The config-DB one (§8.1) holds machine-global preferences (Ollama overrides, host pairing). The per-corpus one (above) holds corpus-bound state that must move with the corpus — currently embed-model identity and `chunk_vec` materialization state, both load-bearing for the §11 dim-mismatch check.
 
 ## 9. MCP App Views
 
@@ -801,9 +910,11 @@ All scholar tools are namespaced `scholar.<verb>`. Visibility annotations are ex
 | `scholar.prompts.show` | both | Open reading prompts pane. | `ui://scholar/app.html` |
 | `scholar.progress.show` | both | Open reader progress. | `ui://scholar/app.html` |
 | `scholar.corpus.list` | model | List corpora. | — |
-| `scholar.corpus.create` | model | Create a corpus (slug, display_name, initial pdf_root). | — |
+| `scholar.corpus.create` | model | Create a corpus. Args: `slug`, `display_name`, `initial_pdf_root` (becomes the first `pdf_roots` row with `is_default=true`; `corpora` carries no `pdf_root` column — see §8.1). Cross-DB atomicity per §5.5. | — |
 | `scholar.corpus.activate` | model | Switch active corpus. | — |
-| `scholar.corpus.status` | both | Counts + last_opened + stale list for the active corpus. | — |
+| `scholar.corpus.status` | both | Counts + `corpora.last_opened_at` + stale list for the active corpus. | — |
+| `scholar.corpus.export` | model | Pack the active corpus's per-corpus DB into a `pack_repo`-style tarball without going through Drizzle, so a newer-schema DB can be evacuated regardless of which migrations the host plugin knows about (F11(d) escape hatch — see §5.3). | — |
+| `scholar.corpus.reset-init` | model | Clear the per-corpus `initOnce` slot (§7.3) so the next corpus tool call re-runs the initializer. Used after fixing a transient environment issue without restarting the server. | — |
 | `scholar.roots.list` | both | List PDF roots for the active corpus. | — |
 | `scholar.roots.add` | both | Add a PDF root (restarts child pdf MCP). | — |
 | `scholar.roots.remove` | both | Remove a PDF root. | — |
@@ -836,7 +947,11 @@ All scholar tools are namespaced `scholar.<verb>`. Visibility annotations are ex
 
 ### Embedding dimension
 
-`chunk_vec`'s embedding column width is bound to the active corpus's embed model **at corpus creation**: scholar probes the model with a one-token embedding, reads the vector length, and `raw-ddl.ts` creates `chunk_vec` with that width. The 768-dim `nomic-embed-text` default is therefore not hard-coded. But a corpus's embed model is fixed once `chunk_vec` exists: switching `SCHOLAR_OLLAMA_EMBED_MODEL` to a different-dimension model for an existing corpus requires dropping `chunk_vec` and re-embedding every paper (`scholar.pdf.refresh-extraction`). Scholar detects a dimension mismatch at corpus-open and surfaces this remediation rather than failing at insert time.
+`chunk_vec`'s embedding column width is bound to the active corpus's embed model **at corpus creation**: scholar probes the model with a one-token embedding via `loadVecAndProbeDim` (§12.0), reads the vector length, persists `embed.model` and `embed.dim` as JSON rows in the **per-corpus** `settings` table (§8.2), and `raw-ddl.ts` creates `chunk_vec` with that width. The 768-dim `nomic-embed-text` default is therefore not hard-coded. A corpus's embed model is fixed once `chunk_vec` exists: switching `SCHOLAR_OLLAMA_EMBED_MODEL` to a different-dimension model for an existing corpus requires dropping `chunk_vec` and re-embedding every paper (`scholar.pdf.refresh-extraction`).
+
+**Dimension-mismatch detection.** `vec0` virtual tables do not expose column width via standard pragmas, so scholar cannot read the live `chunk_vec` width back at open time and compare it to the configured model directly. Instead the check is settings-based: at corpus open (§7.3 step 4) scholar re-runs `loadVecAndProbeDim` against the currently-configured embed model, then reads `settings.embed.model` and `settings.embed.dim` from the per-corpus DB. A mismatch on **either** field — model tag changed (e.g., user swapped `SCHOLAR_OLLAMA_EMBED_MODEL` to `mxbai-embed-large`) or probed dimension diverges from the persisted value (would indicate the same model now returns a different vector length, e.g., after a remote model update) — surfaces the "drop `chunk_vec` and re-embed" remediation through an error sentinel rather than failing at insert time.
+
+**Ollama offline at corpus creation.** If the embed model cannot be probed because Ollama is unreachable when `scholar.corpus.create` runs, scholar writes `settings.chunk_vec.created = false` (and skips writing `embed.dim`), defers `chunk_vec` materialization, and still completes corpus creation — the user can ingest papers and read PDFs without semantic search. The first successful embed (at `scholar.pdf.refresh-extraction` time) re-runs the probe, writes `embed.dim`, materializes `chunk_vec` via `runRawDdl`, sets `settings.chunk_vec.created = true`, and only then inserts the embedding row. Semantic-search code paths (`scholar.papers.search` with semantic mode) check `settings.chunk_vec.created` and degrade to lexical with a "still indexing" pill when false — the same affordance used for partially-embedded chunks.
 
 ### Discovery
 
