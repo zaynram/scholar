@@ -3,5 +3,32 @@
   <!--
     Canonical chore registry for the scholar plugin.
     Populated as cross-cutting tasks surface during plan execution.
+
+    Seeded 2026-05-22 by spec-revision Session 4. The three entries below
+    capture cross-cutting work that does not belong to any single §6 cycle
+    but must complete before the plugin can ship. Additional chores are
+    added through the standard scope-maintenance protocol as plan execution
+    surfaces them; entries here exist because they were known at spec-close.
   -->
+
+  <chore id="license-audit-vendored-pdf-server"
+         status="open"
+         blast-radius="src/vendor/pdf-server/ docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="foundation packaging">
+    <synopsis>Confirm @modelcontextprotocol/server-pdf@1.7.2's upstream license permits vendoring + redistribution under the scholar plugin's MIT license. Record the finding in src/vendor/pdf-server/PATCH.md (or a successor NOTICE file once §7.2 is finalized — the vendor is unmodified so no PATCH.md exists yet) and reflect the result in spec §7.2 and §17. Blocks foundation because cycle 6.2 vendors the dist; blocks packaging because cycle 6.13 archives it into the .plugin redistributable.</synopsis>
+  </chore>
+
+  <chore id="ci-setup-scholar-plugin"
+         status="open"
+         blast-radius=".github/ scripts/"
+         blocks-plans="">
+    <synopsis>CI for the scholar plugin: bun install, bun typecheck (tsc --noEmit), bun test, scripts/build-plugin.ts smoke run. Spec §6.1 cites "basic CI" without enumerating jobs; this chore turns that into a concrete workflow file. Does not block any single plan (each plan's local tests pass under bun test) but should land before merging the foundation branch so downstream plans benefit from CI signal.</synopsis>
+  </chore>
+
+  <chore id="upstream-pdf-server-revendor-process"
+         status="open"
+         blast-radius="src/vendor/pdf-server/ docs/"
+         blocks-plans="">
+    <synopsis>Document the re-vendor procedure for upstream @modelcontextprotocol/server-pdf bumps. Cycle 6.2 verification of the vendored copy (the roots/list responder fixture suite, list_changed round-trip, viewUUID survival across root mutation per spec §16) should produce the anchor quotes that mechanically detect drift on a new upstream release. Output is a short doc (likely docs/vendor/pdf-server-revendor.md) referenced from §7.2 and §16.</synopsis>
+  </chore>
 </chores>
