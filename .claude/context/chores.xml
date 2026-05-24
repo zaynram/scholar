@@ -55,5 +55,80 @@
          blocks-plans="">
     <synopsis>The XSDs in .claude/context/schema/ (untracked at filing time) reject both the existing registry data and the attributes the spec-pipeline workflow itself writes. Concrete drift: (1) plans.xsd requires &lt;reference&gt; with name/path/created-at/modified-at/context attributes — the wrap commit added the element but none of those attrs; (2) plan-group requires synopsis as an attribute (currently a child element) and disallows modified-at, which workflow step 8 writes; (3) chore.id must match `\d{4}-\d{2}-\d{2}-...` — the three existing chore ids do not; (4) chore requires type/origin/baseline/index/expendable/synopsis and forbids blast-radius/blocks-plans (both used by every existing entry); (5) splits.xsd expects root &lt;plan-splits&gt; with spec/generated-at attrs and per-plan synopsis attribute — splits.xml has none of that. Decide between: (a) relax/replace the schemas to match the active pipeline + existing data, (b) retrofit data + workflow code to schemas, (c) drop the schemas entirely and document the implicit contract elsewhere. Until decided, xmllint validation in spec-pipeline workflow step 2 (spec-to-multi-plan) and any future ingest-spec re-runs cannot be honored as written.</synopsis>
   </chore>
+
+  <!--
+    Atomic-commit chore queue from the 2026-05-24 spec-to-multi-plan
+    orchestration. All seven entries below were surfaced during plan-md
+    authoring + plan-review and routed via the orchestrator (lead-owned per
+    invariant #5). They land together with the 7 approved plan-mds + plans.xml
+    plan-md attribute updates in the workflow-closing atomic commit; each is
+    dispatched to its appropriate chore-executor (Claude subagent for
+    analytical-tier; copilot-cli for mechanical/interpretive tier) AFTER the
+    atomic commit, with status-flips committed by the dispatcher per
+    invariant #5.
+  -->
+
+  <chore id="amend-spec-drop-sqlite3-mcp"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="">
+    <synopsis>Amend spec §7.4, §7.6, §10, §6.12 to reflect posture-B (sqlite3-mcp dropped as a delegated dependency; scholar reimplements query/backup/inspect natively in cycle 6.14). Driver: user ruling on 2026-05-24 after primary-source inspection of /home/ramda/code/claude-lib/mcpb/mcp-sqlite3 revealed it is a Python/uv FastMCP server (unvendorable for bun --compile single-file distribution). Specific edits: (1) §7.4 — remove sqlite3-mcp from the delegated-tools list; (2) §7.6 — remove `sqlite3: Sqlite3McpChild` field from ServerContext frozen-contract type; (3) §10 — replace "delegated to sqlite3-mcp via register_db" prose with "natively implemented in src/server/tools/{query,backup,inspect}.ts per cycle 6.14"; (4) §6.12 — remove the cycle entirely (sqlite3-mcp integration cycle is OBSOLETE post-pivot). Analytical-tier chore (Claude subagent, opus); requires judgment on which sub-clauses to preserve vs. delete vs. rewrite. Foundation-009 + extraction-003 + corpus-005 plan-mds all reference this amendment; the chore execution must produce a spec consistent with what those plan-mds describe.</synopsis>
+  </chore>
+
+  <chore id="amend-spec-dep-enumeration"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="">
+    <synopsis>Amend spec §6.1's "Pre-declaration of dependencies" paragraph to enumerate the five deps that were added during plan-md authoring but not reflected in the spec: zod (input validation at boundaries), typescript (toolchain dep already pre-declared but not enumerated in the v1 list), pdfjs-dist (PDF text extraction used by cycle 6.5), ulidx (chunk-ID determinism per §11.5 Ruling B), fflate (zip-creation for cycle 6.13 .plugin archive). Mechanical-tier chore (copilot-cli, gpt-5-mini); edit is line-by-line insertion into the existing pre-declaration list. Foundation-009 plan-md's deps section enumerates these correctly; the chore must produce a spec §6.1 dep list that matches verbatim.</synopsis>
+  </chore>
+
+  <chore id="amend-spec-add-cycle-6.14"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="">
+    <synopsis>Amend spec §6 to add cycle 6.14 (§10 first-party SQL/backup/inspect surface — scholar.query, scholar.backup, scholar.inspect). Cycle 6.14 owns the bodies of src/server/tools/{query,backup,inspect}.ts (foundation-009 scaffolds the stubs; extraction-003 fills the bodies). Mechanical-tier chore (copilot-cli, gpt-5-mini); edit is new-cycle insertion after existing §6.13. Cycle text should mirror extraction-003 plan-md's cycle 6.14 narrative (VACUUM INTO sole impl for backup; BEGIN/ROLLBACK engine-gate for query write-intent; no-args inspect surface; sqlite_master escape hatch via query for power users).</synopsis>
+  </chore>
+
+  <chore id="amend-spec-determinism-pivot-to-upsert"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="">
+    <synopsis>Amend spec §11.5 to reflect chunk-ID determinism pivot from SHA-256-based content-addressed IDs to ULID + UPSERT on (paper_id, ordinal) per user Ruling B on 2026-05-24. Driver: advisor flagged that SHA-256 chunk-IDs require an embedding-status state machine to handle re-extraction idempotency, which adds complexity vs. UPSERT-on-natural-key (paper_id, ordinal). Mechanical-tier chore (copilot-cli, gpt-5-mini); §11.5 paragraph is replaced with the ULID+UPSERT narrative + the embedded_at column semantics + the unique-index on (paper_id, ordinal). Extraction-003 plan-md's cycle 6.5 task 5 has the canonical wording.</synopsis>
+  </chore>
+
+  <chore id="amend-spec-tombstone-resurrection-fix"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="annotations">
+    <synopsis>Amend spec §13 to specify the tombstone-resurrection edge case in annotation reconciliation: when an annotation is deleted in scholar but resurfaces from a subsequent pdf-child round-trip (the pdf-child has no knowledge of scholar's deletion), the reconciliation logic must distinguish "new annotation never seen" from "tombstoned annotation, do not resurrect". Mechanism: scholar persists deletion-tombstones (annotation_id + deleted_at) in the corpus DB; the §13 phase-1 reads include the tombstone table; phase-3 reconciliation skips re-insertion of tombstoned IDs. Analytical-tier chore (Claude subagent, opus); requires judgment on tombstone-table schema + TTL semantics + reconciliation pseudocode. Annotations-002 plan-md should reference this chore in its execution-order prerequisites; if annotations-002's plan-review surfaces this gap not addressed, the chore must complete BEFORE cycle 6.7 execution begins.</synopsis>
+  </chore>
+
+  <chore id="align-spec-vec0-fallback-with-implementation"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="packaging">
+    <synopsis>Verify spec §14.1 step 5 + §16 (sqlite-vec risks row) prose match what packaging cycle 6.13 actually implements after packaging-004 lands the I2 ruling (user ruled (a) on 2026-05-24: reinstate compile-from-source vec0 fallback). Spec already pins the compile-from-source posture but uses generic prose; chore verifies that the post-revision spec text accurately reflects: (1) ABI-mismatch detection via try/catch on prebuilt-vec0 load with SQLite-version-mismatch error classification, (2) `cc` invocation against vendored sqlite-vec source with Bun-runtime SQLite headers, (3) compiled-artifact cache at runtime/vendor/sqlite-vec/vec0.&lt;ext&gt;, (4) C toolchain as build-environment requirement (NOT runtime user dep) documented in README "Building from source". Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini); edit is prose tightening + cross-reference to packaging-004's cycle 6.13 narrative.</synopsis>
+  </chore>
+
+  <chore id="add-config-keys-from-cross-plan-coordination"
+         status="open"
+         blast-radius="src/server/tools/registry.ts"
+         blocks-plans="">
+    <synopsis>Batch-add canonical ConfigAccessor key documentation to foundation-009's JSDoc canonical-keys list in src/server/tools/registry.ts. Surfaced during plan absorption in the 2026-05-24 spec-to-multi-plan workflow when sibling plans need keys not yet documented. Current additions: (1) `crossref.mailto` (string) — ingest cycle 6.4 CrossRef adapter polite-tier `?mailto=` parameter; foundation-009 lines 166-183 enumerate importDirs/backupRoot/ollama.*/scholar.askClaudeEnabled/ui.* but omit crossref.mailto. Functionally already works (ConfigAccessor.get&lt;T&gt;(key:string) accepts any string key per foundation-006 item-8 advisor pattern); chore canonicalizes the key in JSDoc only. Additional keys may be appended pre-execution if ingest-003 or frontends-005 absorption surface other gaps (currently none known). Mechanical-tier chore (copilot-cli, gpt-5-mini); pure JSDoc additions to the canonical-keys list. Foundation-009 plan-md status unchanged; this chore is the lead-owned, post-atomic-commit documentation pass that records the canonicalization without bumping foundation to foundation-010. Per scope-whitelist, the orchestrator does NOT directly edit src/server/tools/registry.ts; the chore-executor (which has src/ in its blast-radius per chore-executor scope) performs the edit + commit; dispatcher commits the status flip.</synopsis>
+  </chore>
+
+  <chore id="vendor-sqlite-vec-source"
+         status="open"
+         blast-radius="src/vendor/sqlite-vec/ docs/ docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
+         blocks-plans="packaging">
+    <synopsis>Vendor the upstream sqlite-vec source (vec0.c + sqlite3.h + license file + README) into src/vendor/sqlite-vec/ so packaging cycle 6.13's compile-from-source fallback (per I2 ruling on 2026-05-24, user picked option (a)) has the source tree to compile against. Pinned version: sqlite-vec must match the prebuilt-binary version foundation-009 pulls in via npm/cargo (verify before vendoring; mismatch defeats the fallback's "same ABI" property). Also: (1) confirm upstream license (likely Apache-2.0 or MIT) permits vendoring + redistribution under the scholar plugin's MIT license, (2) record license confirmation in src/vendor/sqlite-vec/LICENSE or NOTICE, (3) update spec §7.2 to enumerate sqlite-vec as a second vendored component alongside @modelcontextprotocol/server-pdf, (4) update spec §16 to reflect that the C-toolchain risk-row's "vendored sqlite-vec source" reference is now concretely located at src/vendor/sqlite-vec/. Interpretive-tier chore (Claude subagent, sonnet); requires judgment on license compatibility + version pinning + how to document the revendor process. Sibling chore for the revendor process (mirror of upstream-pdf-server-revendor-process) should be filed if v1 needs documented refresh procedure — defer that to v1.1 unless packaging or foundation requests it earlier. BLOCKS packaging cycle 6.13 execution because the compile-fallback's SCHOLAR_BUILD_VEC_SOURCE_MISSING error path would fire at every fallback attempt without the vendoring.</synopsis>
+  </chore>
+
+  <chore id="propagate-proxy-regression-guard-across-plans"
+         status="open"
+         blast-radius="docs/superpowers/plans/2026-05-22-scholar-plugin-extraction.md docs/superpowers/plans/2026-05-22-scholar-plugin-annotations.md docs/superpowers/plans/2026-05-22-scholar-plugin-ingest.md docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md docs/superpowers/plans/2026-05-22-scholar-plugin-packaging.md"
+         blocks-plans="">
+    <synopsis>Propagate corpus-005's M6 posture-B regression-guard pattern (Proxy-based detection of any `ctx.sqlite3` property access + assertion that `callToolMock` is not called for `sqlite3-mcp.*` namespace) to the test surfaces of the other 5 plans (extraction, annotations, ingest, frontends, packaging). Driver: prevent future refactor from accidentally reintroducing sqlite3-mcp dependency that posture-B dropped. Per-plan adaptation: each plan adds 1 Red test at its MCP-touchpoint asserting the Proxy + callToolMock invariants. Interpretive-tier chore (Claude subagent, sonnet); requires per-plan judgment on the appropriate MCP-touchpoint (each plan has different ctx-access patterns). Packaging may skip if cycle 6.13 has no ctx-access whatsoever (pure file-system + bun-build operations); chore should verify this before adding a skip-rationale note.</synopsis>
+  </chore>
 </chores>
 </reference>

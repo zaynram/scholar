@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <reference>
-<plans modified-at="2026-05-22T00:00:00Z">
+<plans modified-at="2026-05-24T20:40:00Z">
   <plan-group index="1"
               id="2026-05-22-scholar-plugin"
               status="open"
@@ -8,14 +8,14 @@
               spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
               splits-md="docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
               sequence-md=""
-              modified-at="2026-05-22T00:00:00Z">
+              modified-at="2026-05-24T20:40:00Z">
     <synopsis>Scholar literature-review plugin: vendored unmodified pdf MCP with protocol-based root injection, multi-corpus persistence on bun:sqlite+Drizzle, sqlite-vec embeddings via local Ollama, five mcp-apps UI surfaces, nu CLI module, sqlite3-mcp integration.</synopsis>
 
     <plan index="1.1"
           id="2026-05-22-scholar-plugin-foundation"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-foundation.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.1, 6.2]"
           depends-on=""
@@ -27,7 +27,7 @@
           id="2026-05-22-scholar-plugin-corpus"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-corpus.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.3, 6.11, 6.12]"
           depends-on="foundation"
@@ -39,7 +39,7 @@
           id="2026-05-22-scholar-plugin-ingest"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-ingest.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.4]"
           depends-on="corpus"
@@ -51,7 +51,7 @@
           id="2026-05-22-scholar-plugin-extraction"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-extraction.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.5, 6.6, 6.8]"
           depends-on="corpus"
@@ -63,7 +63,7 @@
           id="2026-05-22-scholar-plugin-annotations"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-annotations.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.7]"
           depends-on="corpus"
@@ -75,7 +75,7 @@
           id="2026-05-22-scholar-plugin-frontends"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.9, 6.10]"
           depends-on="ingest extraction annotations"
@@ -87,7 +87,7 @@
           id="2026-05-22-scholar-plugin-packaging"
           status="open"
           expendable="false"
-          plan-md=""
+          plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-packaging.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.13]"
           depends-on="frontends"
