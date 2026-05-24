@@ -34,17 +34,19 @@
   </chore>
 
   <chore id="amend-spec-6.1-vitest-to-buntest"
-         status="open"
+         status="closed"
+         fulfillment="65844aa"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="">
-    <synopsis>Spec §6.1's pre-declared dependency list cites `vitest` as the test runner; CLAUDE.md (recently-modified, project policy) requires `bun:test` (built-in, no dep) and explicitly forbids vitest. The foundation plan-md mirrors the §6.1 dep list verbatim BUT substitutes `bun:test` for `vitest`, with an inline deviation note pointing at this chore. Closing this chore means editing §6.1's "Pre-declaration of dependencies" paragraph to remove `vitest` from the dev-dep enumeration and replace it with a one-line "bun:test (built-in, zero deps)" line; downstream wording referencing vitest test files should also be normalized. Filed by spec-to-multi-plan lead 2026-05-24 in response to a foundation-teammate drift report.</synopsis>
+    <synopsis>Spec §6.1's pre-declared dependency list cited `vitest` as the test runner; CLAUDE.md (recently-modified, project policy) requires `bun:test` (built-in, no dep) and explicitly forbids vitest. The foundation plan-md mirrors the §6.1 dep list verbatim BUT substitutes `bun:test` for `vitest`, with an inline deviation note pointing at this chore. Closed by copilot-cli (gpt-5-mini, mechanical tier) at commit 65844aa: §6.1's "Pre-declaration of dependencies" line now reads bun:test; downstream wording normalized. Filed by spec-to-multi-plan lead 2026-05-24 in response to a foundation-teammate drift report.</synopsis>
   </chore>
 
   <chore id="clarify-claude-md-initonce-vs-memoizeonce"
-         status="open"
+         status="closed"
+         fulfillment="c97de4f"
          blast-radius="CLAUDE.md"
          blocks-plans="">
-    <synopsis>Spec §12.0 defines the primitive as `initOnce&lt;T&gt;(key, factory, classify?)`; project CLAUDE.md refers to it as `memoizeOnce`. Spec is the source of truth — CLAUDE.md text-fix: rename the bullet that mentions `memoizeOnce` to `initOnce`, preserving the rest of the description. Filed by spec-to-multi-plan lead 2026-05-24 after foundation teammate reported the drift; foundation plan-md uses the §12.0 spec name verbatim, so this chore does not block any plan, only normalizes the CLAUDE.md wording.</synopsis>
+    <synopsis>Spec §12.0 defines the primitive as `initOnce&lt;T&gt;(key, factory, classify?)`; project CLAUDE.md referred to it as `memoizeOnce`. Spec is the source of truth. Closed by copilot-cli (gpt-5-mini, mechanical tier) at commit c97de4f: §12.0 primitives bullet now reads `initOnce` (all occurrences swept). Filed by spec-to-multi-plan lead 2026-05-24 after foundation teammate reported the drift; foundation plan-md uses the §12.0 spec name verbatim, so this chore did not block any plan, only normalized the CLAUDE.md wording.</synopsis>
   </chore>
 
   <chore id="reconcile-registry-schemas-and-data"
