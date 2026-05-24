@@ -32,5 +32,12 @@
          blocks-plans="">
     <synopsis>Document the re-vendor procedure for upstream @modelcontextprotocol/server-pdf bumps. Cycle 6.2 verification of the vendored copy (the roots/list responder fixture suite, list_changed round-trip, viewUUID survival across root mutation per spec §16) should produce the anchor quotes that mechanically detect drift on a new upstream release. Output is a short doc (likely docs/vendor/pdf-server-revendor.md) referenced from §7.2 and §16.</synopsis>
   </chore>
+
+  <chore id="reconcile-registry-schemas-and-data"
+         status="open"
+         blast-radius=".claude/context/schema/ .claude/context/plans.xml .claude/context/chores.xml docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
+         blocks-plans="">
+    <synopsis>The XSDs in .claude/context/schema/ (untracked at filing time) reject both the existing registry data and the attributes the spec-pipeline workflow itself writes. Concrete drift: (1) plans.xsd requires &lt;reference&gt; with name/path/created-at/modified-at/context attributes — the wrap commit added the element but none of those attrs; (2) plan-group requires synopsis as an attribute (currently a child element) and disallows modified-at, which workflow step 8 writes; (3) chore.id must match `\d{4}-\d{2}-\d{2}-...` — the three existing chore ids do not; (4) chore requires type/origin/baseline/index/expendable/synopsis and forbids blast-radius/blocks-plans (both used by every existing entry); (5) splits.xsd expects root &lt;plan-splits&gt; with spec/generated-at attrs and per-plan synopsis attribute — splits.xml has none of that. Decide between: (a) relax/replace the schemas to match the active pipeline + existing data, (b) retrofit data + workflow code to schemas, (c) drop the schemas entirely and document the implicit contract elsewhere. Until decided, xmllint validation in spec-pipeline workflow step 2 (spec-to-multi-plan) and any future ingest-spec re-runs cannot be honored as written.</synopsis>
+  </chore>
 </chores>
 </reference>
