@@ -735,56 +735,69 @@ Expected: `CorpusDashboard renders without error` passes; others still fail.
 //    when false — the same affordance used for partially-embedded chunks."
 //
 // Contract:
-//   - pill with data-badge="still-indexing" is present when callServerTool resolves
+//   - pill with data-badge="still-indexing" IS present when callServerTool resolves
 //     { hits: [], still_indexing: true }
-//   - pill is absent when callServerTool resolves { hits: [], still_indexing: false }
+//   - pill is ABSENT when callServerTool resolves { hits: [], still_indexing: false }
 //
-// Test uses renderToString (no DOM) — pill presence is checked by HTML string.
-// Expected initially: FAIL — component renders but pill conditional may not match
-// until the CorpusDashboard implementation correctly surfaces stillIndexing.
+// Tests use DOM rendering + act() (--dom flag) to exercise the async useEffect
+// that fires the search call and updates stillIndexing state.
+// Run with: bun test src/ui/views/CorpusDashboard.test.tsx --dom
+//
+// Expected initially: FAIL — Cannot find module './CorpusDashboard' (Red phase).
 
-import { test, expect } from "bun:test";
-import { renderToString } from "react-dom/server";
-import { createElement } from "react";
+import { test, expect, beforeEach, afterEach } from "bun:test";
+import { createRoot } from "react-dom/client";
+import { createElement, act } from "react";
 import { CorpusDashboard } from "./CorpusDashboard";
 
-// Mock callServerTool at the module level so renderToString (synchronous) captures
-// the initial state. The real async effect fires after mount, so we seed the component
-// via props + a controlled mock that the useEffect can resolve against.
-// For the SSR string-check, we assert on the initial HTML with a pre-seeded `papers`
-// prop that has a known shape AND mock the search effect by injecting the result
-// directly via the component's internal state trigger (not possible in SSR).
-//
-// Alternate approach: DOM test with @testing-library/react + act. If the SSR
-// approach is insufficient, switch to DOM test with --dom flag at cycle 6.9 execution.
-// The executor chooses the cleanest DOM approach when writing the actual test.
-
-// Simpler SA1 contract test: assert data-badge attribute renders in expected HTML
-// when component receives a mock that yields still_indexing.
-// This test is intentionally declared as Red (will FAIL before implementation):
-// the CorpusDashboard does not yet exist.
-
-test("SA1: CorpusDashboard renders 'still indexing' pill when still_indexing=true (initial render — see executor note)", () => {
-  // Note to executor: this test MAY need DOM + act() to properly exercise the async
-  // useEffect that sets stillIndexing state. If renderToString returns an empty
-  // initial state (before the effect fires), convert to --dom test.
-  // The assertion target is data-badge="still-indexing" in the rendered output.
-  const html = renderToString(
-    createElement(CorpusDashboard, { papers: [], onAction: () => {} })
-  );
-  expect(html).toContain('data-view="dashboard"');
-  // Pill assertion: executor fills this assertion after confirming the DOM test approach.
-  // For now, the Red test is the file import itself (file does not yet exist).
+let container: HTMLDivElement;
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  delete (globalThis as Record<string, unknown>).mcp;
+});
+afterEach(() => {
+  document.body.removeChild(container);
+  delete (globalThis as Record<string, unknown>).mcp;
 });
 
-test("SA1: CorpusDashboard omits 'still indexing' pill when still_indexing=false", () => {
-  const html = renderToString(
-    createElement(CorpusDashboard, { papers: [], onAction: () => {} })
-  );
-  expect(html).not.toContain('data-badge="still-indexing"');
-  // Note: initial render has stillIndexing=false (default), so this passes on initial render.
-  // The executor must add a companion DOM test that mocks the search response to
-  // still_indexing=true and asserts the pill appears.
+test("SA1 pill-present: data-badge='still-indexing' rendered when still_indexing=true", async () => {
+  // Mock mcp.callTool to return still_indexing: true from scholar.papers.search
+  (globalThis as Record<string, unknown>).mcp = {
+    callTool: async (_name: string, _args: unknown) => ({
+      hits: [],
+      still_indexing: true,
+    }),
+  };
+
+  await act(async () => {
+    createRoot(container).render(
+      createElement(CorpusDashboard, { papers: [], onAction: () => {} })
+    );
+  });
+  // Let the useEffect-triggered search complete.
+  await act(async () => {});
+
+  expect(container.innerHTML).toContain('data-badge="still-indexing"');
+});
+
+test("SA1 pill-absent: data-badge='still-indexing' not rendered when still_indexing=false", async () => {
+  // Mock mcp.callTool to return still_indexing: false from scholar.papers.search
+  (globalThis as Record<string, unknown>).mcp = {
+    callTool: async (_name: string, _args: unknown) => ({
+      hits: [],
+      still_indexing: false,
+    }),
+  };
+
+  await act(async () => {
+    createRoot(container).render(
+      createElement(CorpusDashboard, { papers: [], onAction: () => {} })
+    );
+  });
+  await act(async () => {});
+
+  expect(container.innerHTML).not.toContain('data-badge="still-indexing"');
 });
 ```
 
@@ -1395,6 +1408,10 @@ test("SA2 sentinel-forwarding: host-present + structuredContent.askClaude → wi
   const generateBtn = container.querySelector("button");
   expect(generateBtn).not.toBeNull();
   await act(async () => { generateBtn!.click(); });
+  // Note: generateDigest chains callServerTool → askClaude asynchronously.
+  // If the assertion races (askClaude not yet called), add a second tick:
+  // await act(async () => {});
+  // The cycle 6.9 executor resolves this if the test flakes on the mock call count.
 
   // window.cowork.askClaude must have been called with the sentinel's prompt and data.
   expect(askClaudeMock).toHaveBeenCalledWith(sentinelPayload.prompt, sentinelPayload.data);
