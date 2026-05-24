@@ -1186,6 +1186,147 @@ bun build src/server/ui/resource.ts --target=bun --outfile /tmp/scholar-check-re
 
 ---
 
+### Task 8b (6.9 Green): Pin `ui://scholar/pdf/<paper_id>` URI scheme + `resources/read` handler
+
+**Files:**
+- Modify (extend body): `src/server/ui/resource.ts`
+- Modify (extend tests): `src/server/ui/resource.test.ts`
+
+> **Fills foundation-009 Task 1.10b scaffold.** Foundation scaffolds `registerUiResource(server: McpServer)` as a no-op stub at cycle 6.1 (foundation-009 lines 2081-2129). Task 8 (above) fills the `ui://scholar/app.html` registration. This task extends the same function body to additionally register the per-paper PDF resource at `ui://scholar/pdf/<paper_id>`.
+>
+> **Why a separate `resources/read` channel is required (not `scholar.pdf.open`).** Extraction-003 defines `scholar.pdf.open` as a thin proxy into the pdf-MCP child that returns `{success: boolean, viewUUID: string}` — NOT a URL (extraction-003 lines 39, 889-891). The view-opener pattern at extraction-003 lines 1289-1297 routes through `structuredContent.openView` without any URL component. Because `pdfjs-dist` (Task 6 above) requires a fetchable URL to load a PDF document, the iframe-PDF URL must ride a separate channel: MCP `resources/read` with a pinned custom URI scheme. The handler that serves the PDF bytes lives in `src/server/ui/resource.ts`, which the frontends plan already owns for the `app.html` resource.
+>
+> **Signature seam note.** The foundation stub is `registerUiResource(_server: McpServer): void`. Registering the pdf-resource handler requires access to `ctx: ServerContext` so the handler can open the PDF file via `ctx.pdf` (the foundation-provided `PdfChild` on `ServerContext`). At fill-time (cycle 6.9 execution) the function signature MUST be widened to `registerUiResource(server: McpServer, ctx: ServerContext): void`. This is a body-fill-time signature extension within frontends' blast-radius; it is not a new file or a sibling-plan edit. The executor MUST verify that all call-sites of `registerUiResource` (currently only `src/server/index.ts` — foundation-owned, already passing `ctx` is TBD) are updated to pass `ctx` as the second argument. If `src/server/index.ts` does not already pass `ctx`, stop and report to lead before proceeding.
+
+**Handler signature (document in plan-md; implement at cycle 6.9 execution):**
+
+```typescript
+// Extend registerUiResource to register the per-paper PDF resource.
+// URI scheme: ui://scholar/pdf/<paper_id>
+// Pattern: server.registerResource(..., new ResourceTemplate("ui://scholar/pdf/{paper_id}", ...), ...)
+//
+// Read callback signature (MCP SDK):
+//   async (uri: URL, variables: { paper_id: string }) => ReadResourceResult
+//
+// Steps inside the callback:
+//   1. Resolve paper_id from URI via the ResourceTemplate variables (sdk provides the capture group).
+//   2. Open the PDF file via ctx.pdf (PdfChild) — ctx captured in closure from widened signature.
+//      Call: ctx.pdf.openPdf(paper_id)  or equivalent foundation-pinned PdfChild method.
+//      (Verify the exact PdfChild API against foundation-009's PdfChild interface in registry.ts
+//       at cycle 6.9 execution — extraction-003 uses ctx.pdf.getText(viewUUID) for text, not bytes.)
+//   3. Read PDF bytes via Bun.file(resolvedPdfPath).arrayBuffer() or equivalent.
+//   4. Base64-encode: Buffer.from(pdfBytes).toString("base64")
+//   5. Return:
+//        { contents: [{ uri: uri.href, mimeType: "application/pdf", blob: base64Pdf }] }
+//      This is the MCP ReadResourceResult shape for binary resources (blob field, not text field).
+```
+
+**Rationale for `blob` over `text`:** MCP `resources/read` uses `text` for UTF-8 text content and `blob` for binary content (base64-encoded). PDF files are binary; `blob: base64Pdf` is the correct field per the MCP spec `ReadResourceContents` type.
+
+- [ ] **Step 1: Red test — add to `src/server/ui/resource.test.ts`**
+
+> This step specifies the test case. The executor writes the actual test code when executing cycle 6.9.
+
+Add the following Red test to `src/server/ui/resource.test.ts` (append after the existing two tests from Task 8 Step 3):
+
+```typescript
+// Red test: ui://scholar/pdf/<paper_id> resolves to a base64-encoded PDF blob.
+//
+// Contract: the resource handler registered for "ui://scholar/pdf/{paper_id}"
+//   (1) returns contents[0].mimeType === "application/pdf"
+//   (2) returns a non-empty base64 string in contents[0].blob
+//   (3) the blob decodes back to the original fixture bytes
+//
+// Mocking strategy: the test constructs a minimal ServerContext mock whose
+// ctx.pdf stub returns fixture PDF bytes when asked to open paper "p1".
+// The resource handler base64-encodes those bytes before returning.
+// This test does NOT require the real pdf-child process to run.
+
+import type { ServerContext } from "../../tools/registry.js";
+
+const FIXTURE_PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF" magic bytes
+
+test("ui://scholar/pdf/p1 URI resolves to base64-encoded PDF blob (mocked pdf-child)", async () => {
+  // Build a ServerContext mock whose pdf.openPdf returns fixture bytes.
+  // (Verify the exact PdfChild method name against foundation-009's PdfChild interface
+  //  at cycle 6.9 execution; adjust mock method name if it differs.)
+  const mockCtx = {
+    pdf: {
+      openPdf: async (_paperId: string) => FIXTURE_PDF_BYTES,
+    },
+  } as unknown as ServerContext;
+
+  const server = new McpServer({ name: "test", version: "0.0.0" });
+  registerUiResource(server, mockCtx);  // widened signature
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+
+  const client = new Client({ name: "test-client", version: "0.0.0" });
+  await client.connect(clientTransport);
+
+  const result = await client.readResource({ uri: "ui://scholar/pdf/p1" });
+
+  expect(result.contents).toHaveLength(1);
+  expect(result.contents[0].mimeType).toBe("application/pdf");
+
+  // blob must be a non-empty base64 string
+  const blob = (result.contents[0] as { blob?: string }).blob;
+  expect(typeof blob).toBe("string");
+  expect(blob!.length).toBeGreaterThan(0);
+
+  // blob must round-trip back to the fixture bytes
+  const decoded = Buffer.from(blob!, "base64");
+  expect(Array.from(decoded)).toEqual(Array.from(FIXTURE_PDF_BYTES));
+
+  await client.close();
+  await server.close();
+});
+```
+
+- [ ] **Step 2: Run to verify it fails (Red)**
+
+```bash
+bun test src/server/ui/resource.test.ts
+```
+
+Expected: the new test fails because (a) `registerUiResource` has not been widened to accept `ctx` and (b) the `ui://scholar/pdf/{paper_id}` resource is not yet registered.
+
+- [ ] **Step 3: Implement the handler (Green)**
+
+Extend the `registerUiResource` body in `src/server/ui/resource.ts`:
+
+1. Widen the signature to `registerUiResource(server: McpServer, ctx: ServerContext): void`.
+2. Import `ResourceTemplate` from `@modelcontextprotocol/sdk/server/mcp.js` (verify exact export path via Context7 at execution time).
+3. Add a second `server.registerResource(...)` call inside the function body using a `ResourceTemplate` for `"ui://scholar/pdf/{paper_id}"`.
+4. In the read callback: open the PDF via `ctx.pdf`, read bytes, base64-encode, return `{ contents: [{ uri: uri.href, mimeType: "application/pdf", blob: base64Pdf }] }`.
+
+> **F3 (lazy-load) discipline applies here too.** If the pdf-child is not active, the handler should return a structured error content rather than throwing unhandled — consistent with the PLACEHOLDER_HTML fallback pattern in the app.html handler above.
+
+- [ ] **Step 4: Run resource tests — all three pass**
+
+```bash
+bun test src/server/ui/resource.test.ts
+```
+
+Expected: all 3 tests pass (existing `registerUiResource no-op` test, existing `app.html` enumeration test, new `ui://scholar/pdf/p1` blob test).
+
+- [ ] **Step 5: Update call-sites of `registerUiResource` in `src/server/index.ts`**
+
+```bash
+grep -n "registerUiResource" src/server/index.ts
+```
+
+Pass `ctx` as the second argument at every call-site. If `ctx` is not available at that call-site, stop and report to lead — the server wiring must thread `ctx` to the resource registration.
+
+- [ ] **Step 6: Verify TypeScript compiles**
+
+```bash
+bun build src/server/ui/resource.ts --target=bun --outfile /tmp/scholar-check-resource-pdf.js && rm -f /tmp/scholar-check-resource-pdf.js
+```
+
+---
+
 ### Task 9 (6.9 Green): Bundle the UI and run budget tests
 
 **Files:**
