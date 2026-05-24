@@ -151,7 +151,8 @@
   </chore>
 
   <chore id="frontends-adapt-extraction-contract"
-         status="open"
+         status="closed"
+         fulfillment="1c9e0d3"
          blast-radius="docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md"
          blocks-plans="frontends">
     <synopsis>Amend frontends-005 plan-md to absorb extraction-003's post-commit cross-plan pin response (DM'd 2026-05-24, ~3 minutes after atomic commit f92ae94). Multi-part amendment across three contract domains plus four load-bearing semantic anchors quoted verbatim from spec §11, §9.3, and CLAUDE.md.
