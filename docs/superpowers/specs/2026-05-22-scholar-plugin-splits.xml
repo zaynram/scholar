@@ -47,12 +47,33 @@
     docs/superpowers/plans/<plan-id>.md) when it authors the per-plan
     plan-md. plan-exec dispatch will refuse to run a plan with an empty
     plan-md attribute; ingest-spec is responsible for the fill-in.
+
+    Foundation file carve-outs inside sibling directory grants
+    (added 2026-05-24 by spec-to-multi-plan lead in response to a
+    foundation teammate drift report). Two files live INSIDE directories
+    nominally granted to sibling plans but are SPEC-OWNED BY FOUNDATION:
+
+      src/server/ingest/primitives.ts   (foundation owns; ingest imports)
+                                        spec §6.1 + §12.0
+      src/server/ollama/client.ts       (foundation owns; extraction imports)
+                                        spec §7.6 (singleton, not on ctx)
+
+    Both paths appear EXPLICITLY in foundation's blast-radius below. The
+    ingest plan's `src/server/ingest/` grant and the extraction plan's
+    `src/server/ollama/` grant are read as "everything in that directory
+    EXCEPT the files explicitly listed in another plan's blast-radius."
+    blast-radius="..." is an explicit path list (no glob, no minus
+    operator), so the carve-out is by convention, not by syntax — this
+    comment is the canonical statement. Foundation scaffolds both files
+    as content stubs at cycle 6.1 (joining the wave-0 stub set), and
+    cycle 6.5+ extraction / cycle 6.4 ingest fill in their consumers
+    without touching the stub files.
   -->
   <plan suffix="foundation"
         cycles="[6.1, 6.2]"
         depends-on=""
         worktree="not-required"
-        blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json">
+        blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/server/ingest/primitives.ts src/server/ollama/client.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json">
     <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored unmodified pdf MCP plus scholar's client-side MCP roots responder in src/server/pdf/lifecycle.ts (capabilities.roots.listChanged, ListRootsRequestSchema handler, roots/list_changed sender, Windows Job Object orphan reaping). Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts — see the header comment. Pre-declares every v1 npm dep per spec §6.1 (no downstream plan ever edits package.json or bun.lock).</synopsis>
   </plan>
 
