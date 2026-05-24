@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<reference>
 <plans modified-at="2026-05-22T00:00:00Z">
   <plan-group index="1"
               id="2026-05-22-scholar-plugin"
@@ -96,3 +97,4 @@
 
   </plan-group>
 </plans>
+</reference>
