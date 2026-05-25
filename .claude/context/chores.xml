@@ -93,7 +93,8 @@
   </chore>
 
   <chore id="amend-spec-determinism-pivot-to-upsert"
-         status="open"
+         status="closed"
+         fulfillment="8fa598c"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="">
     <synopsis>Amend spec §11.5 to reflect chunk-ID determinism pivot from SHA-256-based content-addressed IDs to ULID + UPSERT on (paper_id, ordinal) per user Ruling B on 2026-05-24. Driver: advisor flagged that SHA-256 chunk-IDs require an embedding-status state machine to handle re-extraction idempotency, which adds complexity vs. UPSERT-on-natural-key (paper_id, ordinal). Mechanical-tier chore (copilot-cli, gpt-5-mini); §11.5 paragraph is replaced with the ULID+UPSERT narrative + the embedded_at column semantics + the unique-index on (paper_id, ordinal). Extraction-003 plan-md's cycle 6.5 task 5 has the canonical wording.</synopsis>
