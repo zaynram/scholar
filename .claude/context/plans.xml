@@ -29,7 +29,7 @@
           expendable="false"
           plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-corpus.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
-          cycles="[6.3, 6.11, 6.12]"
+          cycles="[6.3, 6.11]"
           depends-on="foundation"
           worktree="not-required">
       <synopsis>Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open, sqlite3-mcp register integration.</synopsis>
@@ -53,7 +53,7 @@
           expendable="false"
           plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-extraction.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
-          cycles="[6.5, 6.6, 6.8]"
+          cycles="[6.5, 6.6, 6.8, 6.14]"
           depends-on="corpus"
           worktree="not-required">
       <synopsis>Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts generation.</synopsis>

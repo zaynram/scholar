@@ -77,7 +77,7 @@
         synopsis="Project scaffolding, Drizzle schema, sqlite-vec loader, server skeleton, frozen §7.6 contracts, vendored unmodified pdf MCP with roots responder, no-op stubs for nine tool modules + raw-ddl.ts. Pre-declares every v1 npm dep per §6.1."/>
 
   <plan suffix="corpus"
-        cycles="[§6.3,§6.11,§6.12]"
+        cycles="[§6.3,§6.11]"
         depends-on="foundation"
         worktree="not-required"
         blast-radius="src/server/tools/corpus.ts src/server/tools/roots.ts src/server/tools/snapshot.ts scripts/first-run.ts"
@@ -91,10 +91,10 @@
         synopsis="Ingestion adapters and tools: @retorquere/bibtex-parser (BibTeX) + in-house RIS adapter in src/server/ingest/bibtex.ts (§5.14), CrossRef DOI, arXiv, manual entry."/>
 
   <plan suffix="extraction"
-        cycles="[§6.5,§6.6,§6.8]"
+        cycles="[§6.5,§6.6,§6.8,§6.14]"
         depends-on="corpus"
         worktree="not-required"
-        blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts"
+        blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts src/server/tools/query.ts src/server/tools/backup.ts src/server/tools/inspect.ts"
         synopsis="Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts. Cycle order load-bearing: 6.5 fills chunk_vec, 6.6 adds reading_queue view. Owns scholar.paper.* view-openers."/>
 
   <plan suffix="annotations"

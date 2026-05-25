@@ -64,9 +64,9 @@
 
   <invariants>
     <invariant id="foundation-stub-set-present">
-      <constraint>All nine tool-module stubs (corpus, roots, snapshot, ingest, pdf, papers, digest, prompts, annotations) plus raw-ddl.ts, primitives.ts, and ollama/client.ts exist as foundation-scaffolded files before any wave-2+ teammate dispatches.</constraint>
+      <constraint>All twelve tool-module stubs (corpus, roots, snapshot, ingest, pdf, papers, digest, prompts, annotations, query, backup, inspect) plus raw-ddl.ts, primitives.ts, and ollama/client.ts exist as foundation-scaffolded files before any wave-2+ teammate dispatches. The query/backup/inspect trio was added by foundation-008 to scaffold the cycle 6.14 first-party SQL/backup/inspect surface (extraction wave-3 owner).</constraint>
       <enforcement>
-        <gate kind="peer-symbol-check">test -f src/server/tools/corpus.ts &amp;&amp; test -f src/server/tools/roots.ts &amp;&amp; test -f src/server/tools/snapshot.ts &amp;&amp; test -f src/server/tools/ingest.ts &amp;&amp; test -f src/server/tools/pdf.ts &amp;&amp; test -f src/server/tools/papers.ts &amp;&amp; test -f src/server/tools/digest.ts &amp;&amp; test -f src/server/tools/prompts.ts &amp;&amp; test -f src/server/tools/annotations.ts &amp;&amp; test -f src/server/db/raw-ddl.ts &amp;&amp; test -f src/server/ingest/primitives.ts &amp;&amp; test -f src/server/ollama/client.ts</gate>
+        <gate kind="peer-symbol-check">test -f src/server/tools/corpus.ts &amp;&amp; test -f src/server/tools/roots.ts &amp;&amp; test -f src/server/tools/snapshot.ts &amp;&amp; test -f src/server/tools/ingest.ts &amp;&amp; test -f src/server/tools/pdf.ts &amp;&amp; test -f src/server/tools/papers.ts &amp;&amp; test -f src/server/tools/digest.ts &amp;&amp; test -f src/server/tools/prompts.ts &amp;&amp; test -f src/server/tools/annotations.ts &amp;&amp; test -f src/server/tools/query.ts &amp;&amp; test -f src/server/tools/backup.ts &amp;&amp; test -f src/server/tools/inspect.ts &amp;&amp; test -f src/server/db/raw-ddl.ts &amp;&amp; test -f src/server/ingest/primitives.ts &amp;&amp; test -f src/server/ollama/client.ts</gate>
       </enforcement>
     </invariant>
     <invariant id="package-json-foundation-only">
