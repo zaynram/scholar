@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <reference>
-<plans modified-at="2026-05-25T09:05:57Z">
+<plans modified-at="2026-05-25T10:00:00Z">
   <plan-group index="1"
               id="2026-05-22-scholar-plugin"
               status="in-progress"
@@ -8,7 +8,7 @@
               spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
               splits-md="docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
               sequence-md="docs/superpowers/multi/2026-05-22-scholar-plugin-sequence.xml"
-              modified-at="2026-05-25T09:05:57Z">
+              modified-at="2026-05-25T10:00:00Z">
     <synopsis>Scholar literature-review plugin: vendored unmodified pdf MCP with protocol-based root injection, multi-corpus persistence on bun:sqlite+Drizzle, sqlite-vec embeddings via local Ollama, five mcp-apps UI surfaces, nu CLI module, sqlite3-mcp integration.</synopsis>
 
     <plan index="1.1"
@@ -27,13 +27,15 @@
 
     <plan index="1.2"
           id="2026-05-22-scholar-plugin-corpus"
-          status="open"
+          status="closed"
+          fulfillment="848b728"
           expendable="false"
           plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-corpus.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.3, 6.11]"
           depends-on="foundation"
-          worktree="not-required">
+          worktree="not-required"
+          modified-at="2026-05-25T10:00:00Z">
       <synopsis>Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open, sqlite3-mcp register integration.</synopsis>
     </plan>
 
