@@ -1,14 +1,15 @@
 // scripts/measure-bundle.ts
 // Builds the UI as a single-file HTML bundle and emits build/ui/bundle-budget.json.
 //
-// Why this script does the build (not `bun run build:ui`):
-// The foundation-owned `build:ui` script uses `--outfile build/ui/app.html`,
-// but Bun's HTML bundler emits multiple files (HTML + per-chunk JS) and rejects
-// `--outfile` with "cannot write multiple output files without an output
-// directory". This script builds into a tmp chunk dir then inlines the chunks
-// into a single `build/ui/app.html` so the cycle 6.9 plan-md / resource.ts
-// expectation of a single-file artifact at `build/ui/app.html` holds.
-// (Filing a scope-maintenance chore to fix the foundation `build:ui` script.)
+// The build step now delegates to scripts/build-ui.ts (the canonical production
+// build helper, introduced by chore foundation-fix-build-ui-script-for-multi-file-output).
+// build-ui.ts uses `outdir` (not `--outfile`), which is what Bun's HTML bundler
+// requires for multi-file output (HTML + per-chunk JS + assets).
+//
+// This script still inlines JS chunks into a single `build/ui/app.html` so that
+// the cycle 6.9 / resource.ts expectation of a single-file artifact at
+// `build/ui/app.html` holds, and packaging cycle 6.13 gets a single-file
+// plugin-bundleable artifact.
 //
 // bundle-budget.json is consumed by packaging cycle 6.13 to decide §14.1
 // remediations. Per-dep figures are INDICATIVE — isolated builds, no
@@ -17,6 +18,7 @@
 
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { buildUI } from "./build-ui.ts";
 
 const THRESHOLD_KB = 4608;
 const BUNDLE_PATH = "build/ui/app.html";
@@ -29,15 +31,10 @@ await mkdir(CHUNK_DIR, { recursive: true });
 
 // ── Step 1: Bun HTML bundler emits HTML + JS chunk(s) into CHUNK_DIR ─────────
 console.log("Building UI bundle…");
-const buildResult = await Bun.build({
-  entrypoints: ["src/ui/index.html"],
-  target: "browser",
-  outdir: CHUNK_DIR,
-  minify: true,
-});
-if (!buildResult.success) {
-  console.error("Build failed:");
-  for (const log of buildResult.logs) console.error(log);
+try {
+  await buildUI({ outdir: CHUNK_DIR, minify: true });
+} catch (err) {
+  console.error(String(err));
   process.exit(1);
 }
 

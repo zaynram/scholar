@@ -86,6 +86,11 @@ test("foundation pre-declares every npm script downstream plans invoke", () => {
   // build:ui is the production (minified) target — bundle-budget gate measures
   // this output. build:ui:dev is the unminified variant for development. Both
   // emit to the same path so downstream consumers don't branch on env.
-  expect(scripts["build:ui"]).toContain("--minify");
-  expect(scripts["build:ui:dev"]).not.toContain("--minify");
+  // Since chore foundation-fix-build-ui-script-for-multi-file-output, both
+  // scripts delegate to scripts/build-ui.ts (which uses `outdir`, not
+  // `--outfile`). Minification is governed by env var (UI_MINIFY=false for
+  // dev); the production script does NOT set UI_MINIFY=false.
+  expect(scripts["build:ui"]).toContain("build-ui.ts");
+  expect(scripts["build:ui"]).not.toContain("UI_MINIFY=false");
+  expect(scripts["build:ui:dev"]).toContain("UI_MINIFY=false");
 });
