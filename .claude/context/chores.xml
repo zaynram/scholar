@@ -242,7 +242,8 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
   -->
 
   <chore id="foundation-fill-corpus-prereqs"
-         status="open"
+         status="closed"
+         fulfillment="5c34d70"
          blast-radius="src/server/db/default-pdf-root.ts src/server/util/runtime-config.ts src/server/tools/registry.ts src/server/index.ts"
          blocks-plans="corpus ingest extraction annotations">
     <synopsis>Fill the three foundation-owned gaps that corpus plan-md references but foundation-007 did not ship, plus the §7.6 PdfChild contract extension for setRoots. Tier: interpretive (sonnet). Vehicle: spec-pipeline:chore-executor. Blocks all corpus cycles (6.3 + 6.11) and consequently every downstream wave; high-priority dispatch.
