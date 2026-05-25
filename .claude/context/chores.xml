@@ -102,7 +102,8 @@
   </chore>
 
   <chore id="amend-spec-tombstone-resurrection-fix"
-         status="open"
+         status="closed"
+         fulfillment="34871f2"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="annotations">
     <synopsis>Amend spec §13 to specify the tombstone-resurrection edge case in annotation reconciliation: when an annotation is deleted in scholar but resurfaces from a subsequent pdf-child round-trip (the pdf-child has no knowledge of scholar's deletion), the reconciliation logic must distinguish "new annotation never seen" from "tombstoned annotation, do not resurrect". Mechanism: scholar persists deletion-tombstones (annotation_id + deleted_at) in the corpus DB; the §13 phase-1 reads include the tombstone table; phase-3 reconciliation skips re-insertion of tombstoned IDs. Analytical-tier chore (Claude subagent, opus); requires judgment on tombstone-table schema + TTL semantics + reconciliation pseudocode. Annotations-002 plan-md should reference this chore in its execution-order prerequisites; if annotations-002's plan-review surfaces this gap not addressed, the chore must complete BEFORE cycle 6.7 execution begins.</synopsis>
@@ -282,6 +283,26 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
          blast-radius="src/server/ingest/primitives.ts src/server/extraction/vec-load.ts src/server/db/raw-ddl.ts src/server/tools/papers.ts"
          blocks-plans="">
     <synopsis>Fill foundation's src/server/ingest/primitives.ts:loadVecAndProbeDim (currently throw-on-call stub) with the real impl that calls foundation's resolveVec0Path + one embed-probe round-trip to determine the embedding dim, then migrate extraction's call sites to import the primitive instead of using src/server/extraction/vec-load.ts:probeEmbedDimAndLoadVec. Extraction shipped vec-load.ts during cycle 6.5 to unblock §11 deferred-chunk_vec path because primitives.ts was outside extraction's BR. Tier: interpretive (sonnet) — same migration-boundary judgment as the companion ollama-client chore. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) primitives.ts loadVecAndProbeDim replaces stub with real impl; (2) extraction/vec-load.ts is deleted (or trivially re-exports primitive); (3) extraction call sites (raw-ddl.ts probably calls probeEmbedDimAndLoadVec; papers.search may also) import the primitive directly; (4) `bun test` still passes 209+; (5) the existing _testProbeDim test hook in extraction tests continues working (or is updated to mock the foundation primitive); (6) tsc clean. Companion chore to foundation-fill-ollama-client-and-migrate-extraction — they should ideally land in the same chore-executor session for atomicity.</synopsis>
+  </chore>
+
+  <!--
+    Wave-3 annotations-prereq foundation-fill chore (filed 2026-05-25 by
+    exec-multi-plan orchestrator after closing amend-spec-tombstone-
+    resurrection-fix at 34871f2). The spec amendment added the
+    annotation_tombstones Drizzle table to §8.2; foundation's schema.ts
+    pre-dates the amendment so the table is missing from src/server/db/.
+    Annotations cycle 6.7 cannot execute without the table existing —
+    annotations' blast-radius is strictly src/server/tools/annotations.ts
+    per splits.xml, so the schema add must land via foundation-fill chore
+    BEFORE annotations dispatch. Same shape as foundation-fill-corpus-
+    prereqs precedent (closed at 5c34d70 during wave 2).
+  -->
+
+  <chore id="foundation-fill-annotation-tombstones-schema"
+         status="open"
+         blast-radius="src/server/db/schema.ts src/server/db/migrations.ts"
+         blocks-plans="annotations">
+    <synopsis>Add the annotation_tombstones Drizzle table to src/server/db/schema.ts per spec amendment 34871f2 (§8.2 + §13 tombstone-resurrection edge case). Table shape per spec verbatim: annotation_id (text PK; matches the deleted annotations.id ULID), paper_id (text NOT NULL; denormalized for fast per-paper SELECT in §13 phase 1), deleted_at (text NOT NULL ISO timestamp; mirrors annotations.deleted_at), deleted_by (text NULL; optional audit), deletion_reason (text NULL; optional free-form audit). Per-paper index: annotation_tombstones_paper_idx on (paper_id). NO foreign key to annotations(id) — tombstone is canonical and outlives the annotations row (spec rationale: must survive a hypothetical hard-delete migration). Add the table import to src/server/db/migrations.ts if migrations.ts maintains an explicit table list; otherwise Drizzle picks it up automatically from the schema barrel. Verify by generating a fresh Drizzle migration (`bunx drizzle-kit generate` or whatever the project's migration-gen script is) and ensuring the migration ships in src/server/db/migrations/. CRITICAL: do NOT touch src/server/tools/annotations.ts (that's the annotations teammate's BR); do NOT touch raw-ddl.ts (this is a Drizzle-modeled table, not raw DDL). Tier: interpretive (sonnet) — judgment on Drizzle import-list update + migration file ownership. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) schema.ts exports annotation_tombstones with correct column shapes + paper_idx; (2) running migrations against a fresh DB creates the table successfully (verify via a test fixture or inline buildInMemoryCorpusDb extension); (3) `bun test` 209+ pass / 0 fail; (4) `bunx tsc --noEmit` clean. Foundation-007 deliberately deferred this table because it didn't exist in the spec at scaffold time — adding it now is foundation's responsibility per §7.6 schema ownership.</synopsis>
   </chore>
 
   <chore id="foundation-fill-corpus-prereqs"
