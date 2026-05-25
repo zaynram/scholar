@@ -298,6 +298,61 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
     prereqs precedent (closed at 5c34d70 during wave 2).
   -->
 
+  <!--
+    Wave-4 frontends-prereq foundation-fill chore (filed 2026-05-25 by
+    exec-multi-plan orchestrator after frontends teammate's pre-cycle
+    STOP report). Two distinct foundation gaps surfaced before any Red
+    commit: (a) bun test has no --dom flag (plan-md assumption) AND no
+    DOM library is in deps; SA1-SA4 verbatim Red tests per chore 1c9e0d3
+    require button-click + useEffect + async behavior that react-dom/server
+    cannot drive; (b) src/server/index.ts:160 calls registerUiResource(server)
+    without ctx — plan-md Task 8b explicitly says "stop and report" if this
+    isn't already threaded. Both gaps unblock cycle 6.9 start. Same shape as
+    foundation-fill-corpus-prereqs (5c34d70) and foundation-fill-annotation-
+    tombstones-schema (a8576eb). Lead bundled into ONE chore for atomicity.
+  -->
+
+  <chore id="foundation-fill-frontends-prereqs-dom-and-ctx"
+         status="open"
+         blast-radius="package.json bun.lock bunfig.toml test-preload.ts src/server/index.ts src/server/ui/resource.ts"
+         blocks-plans="frontends">
+    <synopsis>Foundation-fill chore covering two distinct frontends-blocking gaps surfaced by the frontends teammate's pre-cycle STOP report. Bundle into ONE work commit for atomicity.
+
+GAP 1 — Add happy-dom + Bun test preload for DOM-based SA1-SA4 verbatim Red tests.
+  - Add `@happy-dom/global-registrator` as a devDependency in package.json. Pin to the latest stable (verify via `bun add --dev @happy-dom/global-registrator` then commit the resulting package.json + bun.lock).
+  - Create `bunfig.toml` at repo root (if not already present) with `[test]` section containing `preload = ["./test-preload.ts"]`. If bunfig.toml exists, MERGE rather than overwrite — preserve any existing config.
+  - Create `test-preload.ts` at repo root with the minimal preload script:
+    ```typescript
+    import { GlobalRegistrator } from "@happy-dom/global-registrator";
+    GlobalRegistrator.register();
+    ```
+  - Verify by running `bun test src/server/extraction/chunker.test.ts` (a known-passing pre-existing test) — should still pass. Then verify `typeof document !== "undefined"` inside a throwaway test — should now be true (where it was undefined before).
+  - Pin rationale (record in commit message): Bun 1.3.11 does NOT support a `--dom` test flag; the plan-md assumption (Tasks 1.5, 5.5, 7.5, 8b) is incorrect. happy-dom is the canonical Bun-compatible DOM library, ~150KB devDep, no runtime cost. Preserves chore 1c9e0d3's SA1-SA4 verbatim Red-test contracts without weakening them.
+
+GAP 2 — Thread ctx through registerUiResource at src/server/index.ts.
+  - Inspect src/server/index.ts around line 160 to find `registerUiResource(server)`. The `ctx` variable is in scope at lines 145-155 (per frontends teammate's empirical check); the change is `registerUiResource(server)` → `registerUiResource(server, ctx)`.
+  - Inspect src/server/ui/resource.ts (foundation-scaffolded stub per Task 1.10b — referenced by chore 9d78da3's verbatim anchors). Widen its signature to accept `ctx` as the second arg if it doesn't already. The stub should compile cleanly with the new arg even though it doesn't yet use it — frontends teammate fills the body at cycle 6.9.
+  - Verify by running `bunx tsc --noEmit` — must compile clean. Run `bun test` — must still pass (231 currently, +0 expected since this is a signature widen with no behavior change).
+
+ACCEPTANCE CRITERIA
+- Single work commit landing both gaps.
+- Commit message format: `feat(foundation-fill): happy-dom DOM-test preload + ctx thread to registerUiResource`.
+- Final commit message body lists both gap-fixes explicitly (so the audit trail names what landed).
+- `bun test` passes 231+ (no regressions).
+- `bunx tsc --noEmit` clean.
+- Final stdout: `WORK_COMMIT_SHA=&lt;the new commit&apos;s SHA&gt;` (PLEASE include this; the prior two chore-executors omitted it and forced the orchestrator into git-log inspection).
+
+WHAT IS OUT OF SCOPE
+- Do NOT fill the body of src/server/ui/resource.ts beyond the signature widen — that's frontends teammate at cycle 6.9.
+- Do NOT add any other React/test deps (react-test-renderer, @testing-library/react, etc.) — happy-dom alone is sufficient for the SA1-SA4 tests as authored in chore 1c9e0d3.
+- Do NOT edit src/server/tools/*.ts, src/server/extraction/*, src/server/ingest/* (all closed wave-1/2/3 plans).
+- Do NOT touch .claude/context/chores.xml — orchestrator owns the status flip.
+- Do NOT touch plans.xml, splits.xml, sequence.xml.
+- Do NOT modify any spec file.
+
+Tier: interpretive (sonnet). Vehicle: spec-pipeline:chore-executor. Atomic-prerequisite precedent: same shape as foundation-fill-corpus-prereqs (5c34d70) and foundation-fill-annotation-tombstones-schema (a8576eb). Estimated 5-10 min based on prior chore-executor velocities.</synopsis>
+  </chore>
+
   <chore id="foundation-fill-annotation-tombstones-schema"
          status="closed"
          fulfillment="a8576eb"
