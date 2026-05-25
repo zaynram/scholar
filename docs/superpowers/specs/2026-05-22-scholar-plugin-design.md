@@ -15,7 +15,7 @@ The Daisy Lit Review live artifact (88-paper, 14-section DAISY corpus dashboard)
 - **Single-corpus by design** because the papers bundle is embedded into the HTML at build time.
 - **No ingestion pipeline** because there is no file watcher and no metadata API integration.
 
-This spec proposes `scholar`, a new Cowork plugin that takes the Daisy artifact as inspiration only: it adopts the proven UX patterns (status / depth / digest / reading prompts / per-paper actions) and discards the constraint workarounds. It builds the system on a real backend (Bun + TypeScript MCP server, SQLite via Drizzle, sqlite-vec for embeddings, local Ollama for mechanical LLM work) and orchestrates the UI through `mcp-apps` views that compose with the vendored (unmodified) pdf MCP and the existing `sqlite3-mcp` and `nushell-mcp` servers already on the user's machine.
+This spec proposes `scholar`, a new Cowork plugin that takes the Daisy artifact as inspiration only: it adopts the proven UX patterns (status / depth / digest / reading prompts / per-paper actions) and discards the constraint workarounds. It builds the system on a real backend (Bun + TypeScript MCP server, SQLite via Drizzle, sqlite-vec for embeddings, local Ollama for mechanical LLM work) and orchestrates the UI through `mcp-apps` views that compose with the vendored (unmodified) pdf MCP and the existing `nushell-mcp` server already on the user's machine.
 
 The plugin is explicitly **not** a port of the Daisy artifact. It is a clean reimplementation informed by the artifact's feature catalogue.
 
@@ -27,7 +27,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 2. **Vendored pdf MCP server (unmodified)** — `@modelcontextprotocol/server-pdf@1.7.2` shipped as-is under `src/vendor/pdf-server/`. Runtime multi-root management is delivered by scholar's MCP client side responding to `roots/list` and emitting `notifications/roots/list_changed` (§7.2) — no source patch.
 3. **Scholar MCP server** — Bun + TypeScript, exposes corpus management, ingestion, annotation, digest, reading-prompts, and UI-resource tools. Owns the SQLite database.
 4. **Multi-corpus support** — named corpora with isolated SQLite DBs and per-corpus PDF roots. Add/remove/switch corpora at runtime.
-5. **Persistence** — `bun:sqlite` + Drizzle ORM (`drizzle-orm/bun-sqlite`) with the `sqlite-vec` extension loaded for embedding columns. Schema migration is owned by scholar; ad-hoc query/inspect surfaces are delegated to `sqlite3-mcp` via `register_db`.
+5. **Persistence** — `bun:sqlite` + Drizzle ORM (`drizzle-orm/bun-sqlite`) with the `sqlite-vec` extension loaded for embedding columns. Schema migration is owned by scholar; ad-hoc query/inspect surfaces are natively implemented as `scholar.query` and `scholar.inspect` (cycle 6.14 — added by a separate chore).
 6. **Ingestion** — three paths:
     - BibTeX / RIS file import (BibTeX via `@retorquere/bibtex-parser`; RIS via the in-house adapter in `src/server/ingest/bibtex.ts`).
     - CrossRef DOI lookup (no auth, free).
@@ -39,7 +39,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 10. **Reading queue** — simple priority queue (manual `priority` integer + computed staleness signals); no FSRS in v1.
 11. **MCP App view surfaces (5)** — corpus dashboard, paper detail, digest panel, reading prompts pane, reader progress (charts).
 12. **Nushell user CLI** — `scholar` nu module (`use scholar.nu *`) with `scholar list`, `scholar status`, `scholar ingest`, `scholar query`, `scholar digest`. Pure UX surface — delegates to scholar MCP via `mcp__nushell__nu_run` style invocations of the MCP CLI client. **No internal logic in nu.**
-13. **Backup / distribution** — delegated to `sqlite3-mcp` (`configure_backup` → `backup_to_repo`, `pack_repo` / `unpack_from_git_ref`).
+13. **Backup / distribution** — natively implemented as `scholar.backup` (VACUUM INTO; cycle 6.14 — added by a separate chore). Cross-host corpus distribution is a manual filesystem copy of `scholar-<corpus>.db` (see §14.2).
 
 ### Out of scope (v1, candidates for v2+)
 
@@ -89,15 +89,15 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
                                                                    │
                 ┌──────────────────────────────────────────────────┴───────┐
                 │                                                          │
-        ┌───────┴─────────┐    ┌───────────────────┐    ┌─────────────────┴────┐
-        │  vendored:      │    │  sqlite3-mcp      │    │  Local services      │
-        │  mcp-pdf-server │    │  (existing)       │    │  - Ollama (embeds +  │
-        │  (child proc,   │    │  registers        │    │    chat)             │
-        │   unmodified)   │    │  scholar DB       │    │                      │
-        └─────────────────┘    └───────────────────┘    └──────────────────────┘
-                │                       │                          │
-                └───────────────────────┼──────────────────────────┘
-                                        │
+        ┌───────┴─────────┐                            ┌─────────────────┴────┐
+        │  vendored:      │                            │  Local services      │
+        │  mcp-pdf-server │                            │  - Ollama (embeds +  │
+        │  (child proc,   │                            │    chat)             │
+        │   unmodified)   │                            │                      │
+        └─────────────────┘                            └──────────────────────┘
+                │                                                  │
+                └──────────────────────┬───────────────────────────┘
+                                       │
                                 ┌───────┴────────┐
                                 │  SQLite DB     │
                                 │  + sqlite-vec  │
@@ -111,7 +111,6 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
 |---|---|
 | **scholar MCP server (this plugin's core)** | Owns the SQLite schema (Drizzle-managed migrations). Exposes corpus, ingestion, annotation, digest, prompt, search, and UI-resource tools. Spawns and supervises the vendored pdf MCP as a child process; acts as the MCP client for that session, answering `roots/list` requests with the active corpus's PDF roots. |
 | **vendored mcp-pdf-server (unmodified)** | `@modelcontextprotocol/server-pdf@1.7.2` shipped as-is in `src/vendor/pdf-server/`. Receives root paths through MCP `roots/list` (it asks; scholar answers) and re-asks on `notifications/roots/list_changed` — no subprocess respawn for root changes. |
-| **sqlite3-mcp (already installed)** | Provides `query_database`, `inspect_database`, `table_schema`, `configure_backup`, `backup_to_repo`, `pack_repo`, `unpack_from_git_ref`. Scholar calls `register_db` once per corpus DB at activation. We do **not** reimplement query/backup tools. |
 | **Ollama (local)** | Embedding production (`nomic-embed-text:v1.5` default tag), digest/synthesis chat (`qwen3:8b` default tag), reading-prompts. Scholar discovers running Ollama via `http://127.0.0.1:11434/api/tags` and falls back to a queue if Ollama is offline. |
 | **scholar.nu module** | User-facing thin CLI wrapper. `use scholar.nu *` then `scholar status --corpus daisy` etc. Each command does one MCP call and shapes the response into nu tables. |
 | **scholar UI bundle** | Single-file HTML produced by **Bun's HTML bundler** (`bun build ./src/ui/index.html --target=browser`, which inlines JS, CSS, and assets without a separate `vite-plugin-singlefile` step); React. Five views routed by tool input. Reads from scholar MCP via `app.callServerTool`. Composes with the pdf MCP for paper-detail rendering. |
@@ -398,11 +397,6 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 **Touches:** §5.13.
 **Depends-on:** 6.1.
 
-### 6.12 sqlite3-mcp registration integration
-`register_db` on corpus activation (wired into `src/server/tools/corpus.ts`). The backup/distribution recipe is specified in §14.2; this cycle produces no separate doc file.
-**Touches:** §5.5.
-**Depends-on:** 6.1.
-
 ### 6.13 Plugin build
 `scripts/build-plugin.ts` — the build orchestrator that assembles the `scholar.plugin` archive. The first-run PDF-root wizard is owned by cycle 6.3, not here.
 **Touches:** §5.36.
@@ -494,10 +488,8 @@ Entry: `src/server/index.ts`. Uses `@modelcontextprotocol/sdk` over stdio. On st
 3. First-run handling is **not** done at startup. When a corpus tool (`scholar.corpus.list` / `scholar.corpus.activate`) runs and finds no corpus configured, it calls the first-run routine in `scripts/first-run.ts`, which uses the live MCP session's `elicitInput` request to ask the host for the initial PDF root, then drives `scholar.corpus.create` with the elicited path as `initial_pdf_root`. The wizard writes (a) `runtime/config.json` for the active-corpus pointer and (b) the cross-DB `corpora` row plus a `pdf_roots` row with `is_default = true` (the latter is the canonical location of the default root — `corpora` no longer carries a `pdf_root` column, per §8.1 / Data F18). `first-run.ts` is a module imported by `src/server/tools/corpus.ts` (both `corpus`-plan owned) — not a standalone executable.
 4. Opens the active corpus's `scholar-<corpus>.db` via `bun:sqlite` wrapped by `drizzle-orm/bun-sqlite` (through `openWithPragmas` from §5.3, so `PRAGMA foreign_keys = ON` is set before any other SQL), loads the `sqlite-vec` extension, runs Drizzle migrations, then re-probes the embed dimension via `loadVecAndProbeDim` from §12.0 and compares against the persisted `settings.embed.{model,dim}` row written at corpus creation (§5.5) — a mismatch surfaces the "drop `chunk_vec` and re-embed" remediation rather than failing at insert time. Finally calls `runRawDdl(db)` (§7.6) to create the `reading_queue` view unconditionally, and the `chunk_vec` virtual table only when the embed dimension is known (either persisted from create-time or freshly probed at open). When `chunk_vec` does not yet exist (Ollama was offline at corpus creation and is still offline now), semantic-search code paths gate on its presence and degrade to lexical-only with a "still indexing" pill, exactly as for partially-embedded chunks. After the open succeeds, the corpus-open initializer also writes `corpora.last_opened_at = nowIso()` to the config DB — consumed by `scholar.corpus.status` (§10). (Deferred until a corpus is active.)
 5. Spawns the pdf child with the active corpus's roots. (Deferred until a corpus is active.)
-6. Registers itself with sqlite3-mcp by calling `mcp__sqlite3-mcp__register_db` once per corpus DB (best-effort; ignored if sqlite3-mcp is not running).
-
-All server-side initialization — first-run elicitation, corpus-open (steps 4 and 6), and pdf-child spawn (step 5) — is guarded by a single promise-memoized initializer per corpus, via `initOnce` from §12.0 keyed on the corpus id. Concurrent tool calls on a fresh install (e.g. the UI opening the dashboard while the model calls `corpus.list`) await one initialization rather than racing `runtime/config.json` writes, issuing duplicate `elicitInput` prompts, or double-spawning the pdf child. **Retry-on-reject semantics:** `initOnce` clears the slot when the factory rejects, so a transient failure (Ollama not yet up, vec0 binary momentarily inaccessible, user dismissed the first-run `elicitInput`) does not permanently break the corpus. Only errors the factory explicitly classifies as fatal (e.g., a permanent schema mismatch) are retained as stuck. **Manual escape hatch:** `scholar.corpus.reset-init` is exposed as a `["model"]`-only tool that clears the init slot for a named corpus, used when an operator wants to force a re-init after fixing an environment issue without restarting the server.
-7. Registers MCP tools and the UI resource (see §10 and §11).
+All server-side initialization — first-run elicitation, corpus-open (step 4), and pdf-child spawn (step 5) — is guarded by a single promise-memoized initializer per corpus, via `initOnce` from §12.0 keyed on the corpus id. Concurrent tool calls on a fresh install (e.g. the UI opening the dashboard while the model calls `corpus.list`) await one initialization rather than racing `runtime/config.json` writes, issuing duplicate `elicitInput` prompts, or double-spawning the pdf child. **Retry-on-reject semantics:** `initOnce` clears the slot when the factory rejects, so a transient failure (Ollama not yet up, vec0 binary momentarily inaccessible, user dismissed the first-run `elicitInput`) does not permanently break the corpus. Only errors the factory explicitly classifies as fatal (e.g., a permanent schema mismatch) are retained as stuck. **Manual escape hatch:** `scholar.corpus.reset-init` is exposed as a `["model"]`-only tool that clears the init slot for a named corpus, used when an operator wants to force a re-init after fixing an environment issue without restarting the server.
+6. Registers MCP tools and the UI resource (see §10 and §11).
 
 **Per-step failure-recovery posture (Arch F13).** Each step has a documented degradation behaviour rather than a uniform "abort startup" stance — steps 4–6 can fail transiently and scholar must keep the operator's options open:
 
@@ -505,46 +497,22 @@ All server-side initialization — first-run elicitation, corpus-open (steps 4 a
 |---|---|---|
 | 4 — migrations + raw-ddl | A Drizzle migration that already ran in part, a vec0 load failure, a partial `chunk_vec` materialization. | Idempotent. `IF NOT EXISTS` covers raw DDL; Drizzle migrations are content-addressed and self-heal on retry. The `initOnce` retry-on-reject semantics above re-drive the factory; an operator who fixed the underlying issue (e.g., pulled the embed model) re-triggers via any corpus tool call. |
 | 5 — pdf-child spawn | Spawn `EACCES`, missing `build/runtime/bun` (pipeline regression), the Job Object FFI binding (Windows) failing to load, or the child crashing during the initial handshake. | Degrade — do not abort the corpus open. Scholar publishes a typed `PDF_CHILD_UNAVAILABLE` error from every `pdf.*` proxy call; `corpus.*`, `papers.search` (lexical), `digest.*`, and `prompts.*` continue to work. The lifecycle module supervises with exponential backoff (1s, 2s, 4s, 8s, capped at 30s) and clears the error once a spawn succeeds. |
-| 6 — sqlite3-mcp `register_db` | sqlite3-mcp not running, MCP connection refused, the tool rejecting the call. | Log through `ctx.log.warn` and continue. Re-attempted on every `scholar.corpus.activate` and `scholar.corpus.status` (Arch F4 + Integration F5) — both are idempotent against sqlite3-mcp, so retrying is safe. Loss of registration only degrades the model's ad-hoc-SQL surface, not any scholar tool. |
-| 7 — tool registration | A `server.registerTool` rejection (duplicate name, schema validation), the resource registration failing. | Abort startup with a structured error to the host. This is a programmer error (a downstream plan introduced a duplicate or malformed schema) that no operator can fix at runtime; failing fast surfaces the bug instead of silently shipping a half-registered toolset. |
+| 6 — tool registration | A `server.registerTool` rejection (duplicate name, schema validation), the resource registration failing. | Abort startup with a structured error to the host. This is a programmer error (a downstream plan introduced a duplicate or malformed schema) that no operator can fix at runtime; failing fast surfaces the bug instead of silently shipping a half-registered toolset. |
 
-### 7.4 sqlite3-mcp integration
+### 7.4 Native query / backup / inspect surfaces
 
-Scholar treats sqlite3-mcp as a **complementary** service:
+Scholar implements query, backup, and inspect surfaces natively (no external delegation):
 
-| Need | Scholar implements | Delegated to sqlite3-mcp |
+| Need | Scholar tool | Implementation |
 |---|---|---|
-| Schema migrations | ✔ via Drizzle | — |
-| Domain-specific reads/writes | ✔ as MCP tools | — |
-| Ad-hoc SQL exploration | — | `query_database`, `inspect_database`, `table_schema`, `list_tables` |
-| Backups | — | `configure_backup`, `backup_local`, `backup_to_repo`, `get_backup_config` |
-| Distribution (corpus snapshots) | — | `pack_repo`, `pack_local`, `unpack_from_git_ref`, `unpack_from_tarball` |
-| Cross-corpus copy | — | `copy_database` |
+| Schema migrations | — | Drizzle (§7.3 step 4) |
+| Domain-specific reads/writes | scholar.papers.*, scholar.annotations.*, etc. | Tool modules under `src/server/tools/` |
+| Ad-hoc SQL exploration | `scholar.query` (cycle 6.14) | `bun:sqlite` direct `prepare`/`run`; BEGIN/ROLLBACK gate on write-intent |
+| Schema/table inspection | `scholar.inspect` (cycle 6.14) | `bun:sqlite` `sqlite_master` reads; no-args structured response |
+| Backups | `scholar.backup` (cycle 6.14) | SQLite `VACUUM INTO` sole implementation |
+| Cross-host corpus distribution | (manual) | Filesystem copy of `scholar-<corpus>.db` (see §14.2) |
 
-When scholar opens a corpus, it calls `register_db` with that corpus's path under name `scholar:<corpus>`. When the user runs `/sqlite3-mcp query_database scholar:daisy "SELECT count(*) FROM papers"` they get the result without scholar mediating.
-
-**Lifecycle hooks against sqlite3-mcp (Integration F4).** The `register_db` call is one event in a larger lifecycle that scholar maintains symmetrically:
-
-| Scholar event | sqlite3-mcp action | Notes |
-|---|---|---|
-| `scholar.corpus.create` | `register_db` under `scholar:<id>` | Wrapped in the same `initOnce` slot as the corpus-open path so a first-run failure doesn't permanently break the corpus. |
-| `scholar.corpus.activate` | `register_db` (idempotent retry) | Re-attempted on every activate so a sqlite3-mcp restart re-establishes the binding without a scholar restart. Also re-attempted as a side effect of `scholar.corpus.status` so the operator can force-heal by polling status (Arch F4 + Integration F5). |
-| `scholar.corpus.archive` (sets `corpora.archived_at`) | `unregister_db scholar:<id>` if the API exposes it; otherwise log + skip and surface the stale entry through `scholar.corpus.status` | Verified at cycle 6.12 against the live sqlite3-mcp version; the table-row above records the contract scholar depends on. |
-| Corpus delete (physical removal — no v1 caller; documented for v2) | `unregister_db scholar:<id>` then `bun.unlink` the .db file | Order matters: unregister first so sqlite3-mcp doesn't try to hand out a soon-deleted DB. |
-| Corpus rename | `register_db scholar:<new-name>` then `unregister_db scholar:<old-name>` | New first, old second, so an interrupted rename leaves both names pointing at the live file rather than neither. |
-
-**Joint-ownership write discipline (Open Q2 / Integration F6).** Scholar's per-corpus DB is jointly owned: scholar holds the schema, caches, and reconciler state, but sqlite3-mcp's `query_database` exposes raw SQL to the model. Two access surfaces operate against the same file with different semantics:
-
-- **`bun:sqlite` (scholar code)** — the only path that maintains scholar's invariants. All writes from inside scholar's own tool handlers go through Drizzle on `bun:sqlite`. The transaction boundaries from §11 and §13 hold here.
-- **`sqlite3-mcp.query_database` (model ad-hoc)** — bypasses every scholar invariant. A `DELETE FROM paper_chunks` issued through this path silently desyncs `chunk_vec` (no FK cascade), drops the §13 reconciler's view of paper history, and invalidates any digest whose `scope_signature` covered the removed rows. The model has no awareness of which writes are safe.
-
-This is **not** an opportunity to swap to a `bun:sqlite`-native alternative — the two paths serve different roles. `bun:sqlite` is a Bun runtime API only scholar's TypeScript can call; `sqlite3-mcp` exposes MCP tools the model invokes from chat. Dropping `sqlite3-mcp` would remove the model's ad-hoc query surface, which is plan 1.2's deliverable.
-
-v1 discipline:
-
-1. Scholar documents the joint-ownership semantics in the `scholar.corpus.status` output and in any operator-facing message that references sqlite3-mcp by name — including a one-line warning that destructive SQL via `query_database` can desync caches.
-2. The skill `skills/scholar-workflow/SKILL.md` (cycle 6.10) carries the model-facing version of the same warning: **SELECT-only against `scholar:*` DBs unless you've read the schema and understand which caches your write disturbs.**
-3. v2 candidates recorded in §16: investigate whether sqlite3-mcp exposes a read-only registration mode that scholar could prefer when the operator hasn't opted into write access, and whether scholar can subscribe to sqlite3-mcp write events to invalidate caches reactively.
+The earlier sqlite3-mcp-delegation plan (Sessions 1–3) is retired (user ruling 2026-05-24): the upstream sqlite3-mcp is a Python/uv FastMCP server and is unvendorable for the scholar plugin's `bun build --compile` single-file distribution model. The new tools are added by cycle 6.14 (added by a separate chore: `amend-spec-add-cycle-6.14`).
 
 ### 7.5 Nushell module
 
@@ -1326,7 +1294,7 @@ ID stability is preserved across both paths.
 
 - The `.plugin` archive is installed via Cowork's plugin import UI.
 - On first corpus access the in-server first-run routine (§7.3 step 3) elicits the default PDF root via `elicitInput` (per the user's "user-pick" choice). There is no separate install-time wizard step.
-- The user can later distribute a *corpus* (not the plugin itself) via sqlite3-mcp's `pack_repo` against `scholar-<corpus>.db`, producing a git ref another user can `unpack_from_git_ref` into their scholar installation.
+- The user can later distribute a *corpus* (not the plugin itself) via filesystem copy of the per-corpus `scholar-<corpus>.db` file; the recipient drops it into their `runtime/dbs/` directory and registers it via `scholar.corpus.create` with the existing file path.
 
 ## 15. Cycle Sequencing
 
@@ -1360,7 +1328,7 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 - PDF root default → **prompt at install** with `%USERPROFILE%/mcp-data/literature/` as the suggested override path.
 - Mechanical LLM work → **Ollama by default**; `cowork.askClaude` is opt-in only.
 - pdf MCP → **bundled unmodified vendor of v1.7.2** (`@modelcontextprotocol/server-pdf@1.7.2` `dist/` shipped as-is under `src/vendor/pdf-server/`). Root injection rides the MCP `roots/list` protocol — scholar's MCP client advertises `capabilities.roots.listChanged` and serves `ListRootsRequestSchema` from the active corpus's `pdf_roots` rows; `notifications/roots/list_changed` fires on root mutation, no subprocess respawn. The earlier "two-line patch + `MCP_PDF_CLIENT_ROOTS_PATHS` env var" plan is retired (Session 3 / Integration F2/F3) — the patch existed only because scholar wasn't holding up its client-side end of the protocol.
-- sqlite3-mcp integration → **delegate query/backup/pack** surfaces to it via `register_db`.
+- Query / backup / inspect surfaces → **native** (`scholar.query`, `scholar.backup`, `scholar.inspect`; cycle 6.14). sqlite3-mcp **not used** — its upstream is a Python/uv FastMCP server and is unvendorable for the scholar plugin's `bun build --compile` single-file distribution (user ruling 2026-05-24).
 - Tool wiring → **registry barrel + foundation-scaffolded stubs** (§7.6) so the seven plans' blast-radii stay file-disjoint.
 - First-run wizard → **server-side `elicitInput`, invoked lazily by the corpus tool**; not a standalone script.
 - nu transport → **MCP client CLI** (named-pipe alternative dropped).
