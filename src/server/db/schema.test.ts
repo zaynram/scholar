@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openWithPragmas, applyMigrations } from "./migrations.ts";
+import { rawClient } from "./raw-client.ts";
 import { nowIso, ulid } from "./nowIso.ts";
 
 let dir: string | undefined;
@@ -38,7 +39,7 @@ test("applyMigrations creates the per-corpus tables enumerated in §8.2", () => 
   dir = mkdtempSync(join(tmpdir(), "scholar-schema-"));
   const db = openWithPragmas(join(dir, "corpus.db"));
   applyMigrations(db);
-  const tables = (db.$client as { query: (sql: string) => { all: () => unknown[] } })
+  const tables = rawClient(db)
     .query("SELECT name FROM sqlite_master WHERE type='table'")
     .all() as { name: string }[];
   const names = tables.map((t) => t.name);
@@ -54,7 +55,7 @@ test("applyMigrations creates the config DB tables enumerated in §8.1", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-schema-"));
   const db = openWithPragmas(join(dir, "config.db"));
   applyMigrations(db);
-  const tables = (db.$client as { query: (sql: string) => { all: () => unknown[] } })
+  const tables = rawClient(db)
     .query("SELECT name FROM sqlite_master WHERE type='table'")
     .all() as { name: string }[];
   const names = tables.map((t) => t.name);

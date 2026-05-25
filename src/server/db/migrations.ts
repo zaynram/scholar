@@ -8,6 +8,7 @@ import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { join } from "node:path";
 import { runRawDdl } from "./raw-ddl.ts";
+import { rawClient } from "./raw-client.ts";
 
 /**
  * Sole entry point for opening either the config DB or a per-corpus DB.
@@ -55,7 +56,7 @@ export function applyMigrations(
 
 function readMaxAppliedId(db: BunSQLiteDatabase): number | null {
   try {
-    const r = (db.$client as { query: (sql: string) => { get: () => unknown } })
+    const r = rawClient(db)
       .query("SELECT MAX(id) AS m FROM __drizzle_migrations")
       .get() as { m: number | null } | undefined;
     return r?.m ?? null;

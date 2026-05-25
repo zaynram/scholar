@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openWithPragmas } from "./migrations.ts";
+import { rawClient } from "./raw-client.ts";
 
 let dir: string | undefined;
 afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
@@ -15,9 +16,7 @@ afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
 test("openWithPragmas sets PRAGMA foreign_keys = ON on every open", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-mig-"));
   const db = openWithPragmas(join(dir, "t.db"));
-  const row = (db.$client as { query: (sql: string) => { get: () => unknown } })
-    .query("PRAGMA foreign_keys")
-    .get() as { foreign_keys: number };
+  const row = rawClient(db).query("PRAGMA foreign_keys").get() as { foreign_keys: number };
   expect(row.foreign_keys).toBe(1);
 });
 
@@ -25,9 +24,7 @@ test("openWithPragmas opens distinct paths to distinct files", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-mig-"));
   const a = openWithPragmas(join(dir, "a.db"));
   const b = openWithPragmas(join(dir, "b.db"));
-  (a.$client as { exec: (sql: string) => void }).exec("CREATE TABLE t (k TEXT)");
+  rawClient(a).exec("CREATE TABLE t (k TEXT)");
   // b must not see the table — distinct files.
-  expect(() =>
-    (b.$client as { query: (sql: string) => { all: () => unknown } }).query("SELECT * FROM t").all(),
-  ).toThrow();
+  expect(() => rawClient(b).query("SELECT * FROM t").all()).toThrow();
 });

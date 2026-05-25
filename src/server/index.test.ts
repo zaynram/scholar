@@ -42,7 +42,7 @@ test("ServerContext.withCorpus snapshots ctx.db at entry", async () => {
     ctx.db = fakeDbB;
     return snap;
   });
-  expect((result as { tag: string }).tag).toBe("A");
+  expect((result as unknown as { tag: string }).tag).toBe("A");
 });
 
 test("dispatch throws structured unknown_tool error for unregistered tools", async () => {
