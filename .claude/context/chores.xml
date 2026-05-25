@@ -134,7 +134,8 @@
   </chore>
 
   <chore id="propagate-proxy-regression-guard-across-plans"
-         status="open"
+         status="closed"
+         fulfillment="b9363e7"
          blast-radius="docs/superpowers/plans/2026-05-22-scholar-plugin-extraction.md docs/superpowers/plans/2026-05-22-scholar-plugin-annotations.md docs/superpowers/plans/2026-05-22-scholar-plugin-ingest.md docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md docs/superpowers/plans/2026-05-22-scholar-plugin-packaging.md"
          blocks-plans="">
     <synopsis>Propagate corpus-005's M6 posture-B regression-guard pattern (Proxy-based detection of any `ctx.sqlite3` property access + assertion that `callToolMock` is not called for `sqlite3-mcp.*` namespace) to the test surfaces of the other 5 plans (extraction, annotations, ingest, frontends, packaging). Driver: prevent future refactor from accidentally reintroducing sqlite3-mcp dependency that posture-B dropped. Per-plan adaptation: each plan adds 1 Red test at its MCP-touchpoint asserting the Proxy + callToolMock invariants. Interpretive-tier chore (Claude subagent, sonnet); requires per-plan judgment on the appropriate MCP-touchpoint (each plan has different ctx-access patterns). Packaging may skip if cycle 6.13 has no ctx-access whatsoever (pure file-system + bun-build operations); chore should verify this before adding a skip-rationale note.</synopsis>
