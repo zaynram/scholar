@@ -77,7 +77,8 @@
   </chore>
 
   <chore id="amend-spec-dep-enumeration"
-         status="open"
+         status="closed"
+         fulfillment="541ffcb"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="">
     <synopsis>Amend spec §6.1's "Pre-declaration of dependencies" paragraph to enumerate the five deps that were added during plan-md authoring but not reflected in the spec: zod (input validation at boundaries), typescript (toolchain dep already pre-declared but not enumerated in the v1 list), pdfjs-dist (PDF text extraction used by cycle 6.5), ulidx (chunk-ID determinism per §11.5 Ruling B), fflate (zip-creation for cycle 6.13 .plugin archive). Mechanical-tier chore (copilot-cli, gpt-5-mini); edit is line-by-line insertion into the existing pre-declaration list. Foundation-009 plan-md's deps section enumerates these correctly; the chore must produce a spec §6.1 dep list that matches verbatim.</synopsis>
