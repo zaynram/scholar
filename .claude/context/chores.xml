@@ -84,7 +84,8 @@
   </chore>
 
   <chore id="amend-spec-add-cycle-6.14"
-         status="open"
+         status="closed"
+         fulfillment="73ed88c"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="">
     <synopsis>Amend spec §6 to add cycle 6.14 (§10 first-party SQL/backup/inspect surface — scholar.query, scholar.backup, scholar.inspect). Cycle 6.14 owns the bodies of src/server/tools/{query,backup,inspect}.ts (foundation-009 scaffolds the stubs; extraction-003 fills the bodies). Mechanical-tier chore (copilot-cli, gpt-5-mini); edit is new-cycle insertion after existing §6.13. Cycle text should mirror extraction-003 plan-md's cycle 6.14 narrative (VACUUM INTO sole impl for backup; BEGIN/ROLLBACK engine-gate for query write-intent; no-args inspect surface; sqlite_master escape hatch via query for power users).</synopsis>
