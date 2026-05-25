@@ -1412,4 +1412,19 @@ git add -A && git commit -m "chore(ingest): type-check + test-suite clean-up pas
 | CrossRef + arXiv handler error codes structured (`CrossrefResponseInvalid`/`InvalidDoiError`/`CrossrefFetchError`/`InvalidArxivIdError`/`ArxivFetchError`) not `String(err)` blob | Task 4 DOI + arXiv handlers |
 | `titleWord` fallback `\|\| "x"` placed AFTER regex (not before), avoiding empty-base collapse on all-unicode titles | Task 4 `insertPaperSync` |
 | `wrapUntrusted` correctly absent (extraction/digest domain) | N/A |
+
+### Posture-B regression-guard (deferred)
+
+The canonical pattern at `src/server/tools/corpus.test.ts:259-280` wraps
+`built.ctx.pdf` in a Proxy that throws on any property-access whose
+name contains `"sqlite3"`, then exercises the happy-path handlers. If
+any code path attempts to dereference the dropped `ctx.sqlite3.*`
+delegated dependency from pre-posture-B, the test fails fast.
+
+For this plan, the parallel guard belongs in `src/server/tools/ingest.test.ts`,
+exercising `scholar.ingest.bibtex` or `scholar.ingest.crossref`. Documented
+post-execution by chore `propagate-proxy-regression-guard-across-plans`; add as a
+Red test in a future posture-B regression refactor cycle — NOT added by this chore
+because the plan-md is immutable post-close (plan-group
+`2026-05-22-scholar-plugin` closed at c4f61da on 2026-05-25).
 | No `bun add` / no `package.json` edit | All tasks |

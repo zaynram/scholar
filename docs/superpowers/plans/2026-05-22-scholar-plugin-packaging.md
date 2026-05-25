@@ -916,4 +916,14 @@ git commit -m "refactor(packaging): extract archive helpers into scripts/lib/arc
 - [ ] **No `bun add`:** No new deps introduced. `fflate` (imported as `{ zipSync }` and `{ unzipSync }`) is pre-declared by foundation (Ruling #2). No CLI zip tool invoked.
 - [ ] **Smoke test completeness:** Archive tests check (a) layout + platform variants + commands/skills + posture-B guard, (b) `plugin.json` shape, (c) `.mcp.json` `command` path present inside archive.
 - [ ] **No first-run wizard code:** `scripts/first-run.ts` is not referenced or created here. First-run wizard is owned entirely by the `corpus` sibling plan (cycle 6.3).
+
+### Posture-B regression-guard (deferred)
+
+SKIP — packaging cycle 6.13 has no ctx-access (pure file-system + Bun.build); no
+regression-guard surface exists. Verified by grep on `scripts/build-plugin.ts`:
+no `ctx.` or `built.ctx` references present. The plan's existing posture-B
+coverage is the archive-layout assertion (checklist item "No sqlite3-mcp packing")
+which confirms the binary is never packed — not an MCP-touchpoint guard.
+Documented post-execution by chore `propagate-proxy-regression-guard-across-plans`
+(plan-group `2026-05-22-scholar-plugin` closed at c4f61da on 2026-05-25).
 - [ ] **No sibling file edits:** Only `scripts/build-plugin.ts` and `scripts/build-plugin.test.ts` are created. No edits to `package.json`, `bun.lock`, `tsconfig.json`, `.claude/context/`, or any sibling plan's blast-radius files.

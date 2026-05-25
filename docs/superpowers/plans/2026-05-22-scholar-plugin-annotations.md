@@ -451,4 +451,20 @@ After all Red tests pass:
 | `ingest`        | 6.4             | All ingestion adapters and `scholar.ingest.*` tools.                                            |
 | `extraction`    | 6.5, 6.6, 6.8  | Text extraction, chunking, Ollama embeddings, `chunk_vec` + `reading_queue` DDL, hybrid search, reading queue, digest, reading-prompts. `scholar.pdf.*`, `scholar.papers.*`, `scholar.digest.*`, `scholar.prompts.*` tools. |
 | `frontends`     | 6.9, 6.10       | Five React UI views; nu module; slash commands; skills; rendering of annotation counts and annotation views. |
+
+### Posture-B regression-guard (deferred)
+
+The canonical pattern at `src/server/tools/corpus.test.ts:259-280` wraps
+`built.ctx.pdf` in a Proxy that throws on any property-access whose
+name contains `"sqlite3"`, then exercises the happy-path handlers. If
+any code path attempts to dereference the dropped `ctx.sqlite3.*`
+delegated dependency from pre-posture-B, the test fails fast.
+
+For this plan, the parallel guard belongs in `src/server/tools/annotations.test.ts`,
+exercising `scholar.annotations.list` (the canonical annotation handler) or
+`scholar.annotations.upsert`. Documented post-execution by chore
+`propagate-proxy-regression-guard-across-plans`; add as a Red test in
+a future posture-B regression refactor cycle — NOT added by this chore
+because the plan-md is immutable post-close (plan-group
+`2026-05-22-scholar-plugin` closed at c4f61da on 2026-05-25).
 | `packaging`     | 6.13            | `scripts/build-plugin.ts`; plugin archive assembly; single-file executable compile.             |

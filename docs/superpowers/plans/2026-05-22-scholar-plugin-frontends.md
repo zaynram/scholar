@@ -2383,4 +2383,19 @@ _(Part D disposition: lead ruling 2026-05-24 after extraction-003 DM; these fiel
 | `ingest` | 6.4 | `src/server/ingest/` adapters, `ingest.ts` (+ `scholar.ingest.*` tools) |
 | `extraction` | 6.5, 6.6, 6.8 | `src/server/ollama/`, `raw-ddl.ts`, `pdf.ts`, `papers.ts` (+ `scholar.paper.show`, `scholar.progress.show`), `digest.ts` (+ `scholar.digest.show`), `prompts.ts` (+ `scholar.prompts.show`) |
 | `annotations` | 6.7 | `annotations.ts` (+ `scholar.annotations.*` tools + §13 reconciliation) |
+
+### Posture-B regression-guard (deferred)
+
+The canonical pattern at `src/server/tools/corpus.test.ts:259-280` wraps
+`built.ctx.pdf` in a Proxy that throws on any property-access whose
+name contains `"sqlite3"`, then exercises the happy-path handlers. If
+any code path attempts to dereference the dropped `ctx.sqlite3.*`
+delegated dependency from pre-posture-B, the test fails fast.
+
+For this plan, the parallel guard belongs in `src/server/ui/resource.test.ts`,
+exercising the `ui://scholar/pdf/<id>` ReadResourceRequest handler. Documented
+post-execution by chore `propagate-proxy-regression-guard-across-plans`; add as a
+Red test in a future posture-B regression refactor cycle — NOT added by this chore
+because the plan-md is immutable post-close (plan-group
+`2026-05-22-scholar-plugin` closed at c4f61da on 2026-05-25).
 | `packaging` | 6.13 | `scripts/build-plugin.ts` — assembles `.plugin` archive |

@@ -2599,4 +2599,22 @@ Per `superpowers:writing-plans` skill self-review checklist:
     - **`scholar.inspect` design.** No arguments — dumps all user tables + indexes from `sqlite_master` (filters `sqlite_*` internals). Power users wanting per-table introspection use `scholar.query` with `SELECT * FROM sqlite_master WHERE name = ?`. Eliminates a 10-LOC SQL-identifier-validation path for a use case nobody asked for.
     - **Foundation coordination.** `backupRoot` ConfigAccessor + `BACKUP_ROOT_UNCONFIGURED` error pattern are confirmed in foundation-007 scope (lead 2026-05-24); the three new tool files (`query.ts`, `backup.ts`, `inspect.ts`) are scaffolded as no-op stubs by foundation at cycle 6.1 (stub count 8 → 11 per foundation-007). No peer-DM to foundation needed for stub creation.
 
+### Posture-B regression-guard (deferred)
+
+The canonical pattern at `src/server/tools/corpus.test.ts:259-280` wraps
+`built.ctx.pdf` in a Proxy that throws on any property-access whose
+name contains `"sqlite3"`, then exercises the happy-path handlers. If
+any code path attempts to dereference the dropped `ctx.sqlite3.*`
+delegated dependency from pre-posture-B, the test fails fast.
+
+For this plan, the parallel guard belongs in `src/server/tools/papers.test.ts`,
+exercising `scholar.papers.search` (the primary extraction-surface handler that
+routes through `ctx.pdf` for re-extraction). `src/server/tools/pdf.test.ts` is an
+equally valid alternative target exercising `scholar.pdf.refresh-extraction`.
+Documented post-execution by chore
+`propagate-proxy-regression-guard-across-plans`; add as a Red test in
+a future posture-B regression refactor cycle — NOT added by this chore
+because the plan-md is immutable post-close (plan-group
+`2026-05-22-scholar-plugin` closed at c4f61da on 2026-05-25).
+
 Plan complete. Ready for lead review.
