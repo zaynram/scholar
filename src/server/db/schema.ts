@@ -149,6 +149,34 @@ export const annotations = sqliteTable(
   }),
 );
 
+/**
+ * Resurrection-prevention audit log for annotation deletes. Inserted in the same
+ * db.transaction(...) as the soft-delete in annotations.deleted_at (see §13 propagation
+ * model and reconciler). The §13 reconciler loads the per-paper tombstone-id set in
+ * phase 1 and uses it as an in-memory filter in phase 3 step 3, preventing a viewer-side
+ * re-emergence of a deleted annotation from re-inserting. v1 keeps tombstones forever —
+ * no TTL, no background sweep, no lazy prune (see §13 "Tombstone retention"); the
+ * per-corpus DB stays small because tombstones are bounded by user delete actions, not
+ * by paper count, and any TTL would re-introduce the resurrection bug for tombstones
+ * older than the window.
+ *
+ * No FK to annotations(id): the tombstone is canonical and must survive a hypothetical
+ * hard-delete of the annotations row (e.g., a future schema migration that compacts
+ * soft-deleted rows). annotation_id is treated as an opaque ULID label here. The
+ * timestamp is TEXT/ISO to match annotations.deleted_at and reconcile_state
+ * .last_reconciled_at — uniform timestamp typing across §8.2 overrides the chore's
+ * integer-millis suggestion (decision logged here for §13 amendment 2026-05-25).
+ */
+export const annotation_tombstones = sqliteTable("annotation_tombstones", {
+  annotation_id:   text("annotation_id").primaryKey(),  // matches the deleted annotations.id (ULID)
+  paper_id:        text("paper_id").notNull(),          // denormalized for fast per-paper SELECT in §13 phase 1
+  deleted_at:      text("deleted_at").notNull(),        // ISO; mirrors the annotations.deleted_at value at delete time
+  deleted_by:      text("deleted_by"),                  // optional audit: 'scholar' | tool name | user identity
+  deletion_reason: text("deletion_reason"),             // optional free-form audit string
+}, (t) => ({
+  paper_idx: index("annotation_tombstones_paper_idx").on(t.paper_id),
+}));
+
 export const reconcile_state = sqliteTable(
   "reconcile_state",
   {
