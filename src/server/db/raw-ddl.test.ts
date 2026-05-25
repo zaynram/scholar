@@ -98,4 +98,50 @@ test("runRawDdl: idempotent — second call with chunk_vec.created='true' no-ops
   expect(() => runRawDdl(db)).not.toThrow();
 });
 
-// ─── cycle 6.6 — reading_queue view (added in the next Red commit) ────────────
+// ─── cycle 6.6 — reading_queue view ───────────────────────────────────────────
+
+function freshReadingQueueDb() {
+  const { sqlite, db } = freshExtDb();
+  db.run(sql`INSERT INTO settings(key,value) VALUES
+    ('embed.dim','768'),
+    ('chunk_vec.created','true')`);
+  db.run(sql`CREATE TABLE papers (
+    id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', priority INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL, status_touched_at TEXT
+  )`);
+  return { sqlite, db };
+}
+
+test("runRawDdl: creates reading_queue view that surfaces only pending+reading papers", () => {
+  const { sqlite, db } = freshReadingQueueDb();
+  db.run(sql`INSERT INTO papers(id,key,title,status,priority,imported_at) VALUES
+    ('p1','foo','Foo','pending',5,'2026-01-01T00:00:00.000Z'),
+    ('p2','bar','Bar','reading',1,'2026-05-01T00:00:00.000Z'),
+    ('p3','baz','Baz','reviewed',9,'2026-05-01T00:00:00.000Z')`);
+  runRawDdl(db);
+  const rows = sqlite.query("SELECT id, status FROM reading_queue").all() as { id: string; status: string }[];
+  const ids = rows.map((r) => r.id);
+  expect(ids).toContain("p1");
+  expect(ids).toContain("p2");
+  expect(ids).not.toContain("p3");
+  // §8.2 ordering: status='reading' DESC, priority DESC, days_since_touch DESC.
+  // 'reading' beats 'pending' regardless of priority, so p2 is first.
+  expect(rows[0]!.id).toBe("p2");
+});
+
+test("runRawDdl: reading_queue is idempotent — second call no-ops", () => {
+  const { db } = freshReadingQueueDb();
+  runRawDdl(db);
+  expect(() => runRawDdl(db)).not.toThrow();
+});
+
+test("runRawDdl: chunk_vec from cycle 6.5 still created when reading_queue lands — no regression", () => {
+  const { sqlite, db } = freshReadingQueueDb();
+  runRawDdl(db);
+  const names = (sqlite.query(
+    "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
+  ).all() as { name: string }[]).map((r) => r.name);
+  expect(names).toContain("chunk_vec");
+  expect(names).toContain("reading_queue");
+});
