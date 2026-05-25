@@ -228,5 +228,52 @@ What is OUT OF SCOPE: any src/ or tests/ edit (none required); any cycles attrib
 
 Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line replacements; bump to gpt-5.4-mini if the agent reports it needs additional context judgment for the plan-md edits). Pure text substitution; verbatim source for each edit provided above. No src/ test gate required; verification is `bun test && bunx tsc --noEmit` MUST still pass (which is trivially true — docs-only edits). Functionally orthogonal to wave execution; can dispatch in parallel with any wave teammate without scope-overlap risk because the blast-radius is disjoint from all plan-mds' src/+tests/ scope (plan-mds are read by teammates but not written).</synopsis>
   </chore>
+
+  <!--
+    Wave-2 prerequisite-fill chore (filed 2026-05-25 by exec-multi-plan
+    orchestrator after corpus teammate's pre-cycle gate-stop reported three
+    prerequisite gaps in foundation deliverables that the corpus plan-md
+    references but foundation-007 did not ship). Code-chore (touches src/);
+    routed via spec-pipeline:chore-executor (sonnet, interpretive). Dispatched
+    inline by orchestrator because it blocks all corpus cycles; chore-routing
+    constraint about queue-for-user-reroute applies to teammate-opened chores,
+    not dispatcher-discovered prerequisite-blockers (same precedent as the 5
+    precondition chores closed earlier this session).
+  -->
+
+  <chore id="foundation-fill-corpus-prereqs"
+         status="open"
+         blast-radius="src/server/db/default-pdf-root.ts src/server/util/runtime-config.ts src/server/tools/registry.ts src/server/index.ts"
+         blocks-plans="corpus ingest extraction annotations">
+    <synopsis>Fill the three foundation-owned gaps that corpus plan-md references but foundation-007 did not ship, plus the §7.6 PdfChild contract extension for setRoots. Tier: interpretive (sonnet). Vehicle: spec-pipeline:chore-executor. Blocks all corpus cycles (6.3 + 6.11) and consequently every downstream wave; high-priority dispatch.
+
+GAP 1 — allPdfRoots helper. Add to src/server/db/default-pdf-root.ts (alongside existing defaultPdfRoot), signature `allPdfRoots(tx: BunSQLiteDatabase, corpusId: string): string[]` per CLAUDE.md tx-first cross-plan helper convention. Returns all pdf_roots.path rows for corpusId in pdf_roots.created_at ascending order (used by corpus.activate's `ctx.pdf.setRoots(allPdfRoots(...))` and by scholar.roots.list). Empty array is valid (corpus exists, no roots configured — UI surfaces this as "configure a PDF root" affordance). Add unit test src/server/db/default-pdf-root.test.ts extension covering: empty result; single root; multiple roots in created_at order.
+
+GAP 2 — writeRuntimeConfig helper. Create NEW file src/server/util/runtime-config.ts exporting: (a) interface `RuntimeConfig { activeCorpusId: string | null }` (extensible later); (b) `writeRuntimeConfig(data: RuntimeConfig, runtimeRoot: string): Promise<void>` performing atomic write to `${runtimeRoot}/config.json` via `tmp + fsync + rename` pattern (per plan-md line 25 "atomic tmp + fsync + rename"; use `Bun.file().writer()` or fs/promises with mkstemp + writeFile + fdatasync + rename); (c) `readRuntimeConfig(runtimeRoot: string): Promise<RuntimeConfig | null>` returning null when file absent. Atomicity invariant: a crash mid-write must NEVER leave config.json in a partial state — readers either see the prior value or the new one. Add tests src/server/util/runtime-config.test.ts covering: write-then-read roundtrip; null-when-missing; atomic-rename verified by checking absence of partial-write tmp file after success.
+
+GAP 3 — real DB-backed buildConfigAccessor. Replace stub at src/server/index.ts:75-84 (the function whose self-comment reads "corpus plan (cycle 6.3) fills the real DB-backed implementation" — that delegation was an authoring mistake; ConfigAccessor is foundation-owned per §7.6, so foundation fills it here). The real implementation backs ConfigAccessor methods on the configDb:
+  - `get&lt;T&gt;(key: string)`: SELECT value FROM settings WHERE key=?; JSON.parse the value; return undefined if no row.
+  - `set(key: string, value: unknown)`: INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?) with JSON.stringify(value).
+  - `corpora()`: SELECT * FROM corpora ORDER BY created_at ASC; map to CorpusRow shape.
+  - `activeCorpusId()`: SELECT value FROM settings WHERE key='activeCorpusId' (string or undefined).
+NOTE on activeCorpusId persistence: while corpus plan-md uses writeRuntimeConfig to persist activeCorpusId to runtime/config.json, ConfigAccessor.activeCorpusId() reads from the settings TABLE in the config DB. Corpus.activate is responsible for keeping both in sync (DB UPDATE is the durable point per plan-md M4; config.json is a denormalized cache for startup-time corpus restoration). Foundation does NOT have to coordinate the two surfaces — just provide the DB-backed read.
+
+GAP 4 — §7.6 PdfChild contract extension. Extend src/server/tools/registry.ts PdfChild interface (lines 19-29) to add `setRoots(roots: string[]): Promise<void>`. Strict superset addition; the existing PdfChildHandle implementation in src/server/pdf/lifecycle.ts already exposes setRoots so no impl change needed there. Also update the test stub PdfChild factory in src/server/index.ts (lines 100-109 — the fallback when deps.spawnPdfChild is unset) to include `setRoots: async () => {}` so the type matches. Verify the production binding flow (productionSpawnPdfChild returns PdfChildHandle which satisfies the extended PdfChild) compiles clean — no cast needed at the binding site.
+
+ACCEPTANCE CRITERIA
+- All four files edited per the targets above.
+- New file src/server/util/runtime-config.ts created with tests.
+- `bun test` passes (no regression on the existing 57 pass / 6 skip; new tests add ~6-10 passing assertions).
+- `bunx tsc --noEmit` passes with no new errors.
+- `grep -rE "as PdfChildHandle" src/` returns no hits in non-test code (the type extension makes the cast unnecessary).
+- Single new commit per file is acceptable; one combined commit is preferred for atomicity. Commit message: `feat(foundation-fill): allPdfRoots + writeRuntimeConfig + DB-backed ConfigAccessor + PdfChild.setRoots extension (closes chore foundation-fill-corpus-prereqs)`.
+- Final stdout: WORK_COMMIT_SHA=&lt;sha&gt; for the most-recent commit.
+
+WHAT IS OUT OF SCOPE
+- Do NOT edit src/server/tools/corpus.ts, src/server/tools/roots.ts, src/server/tools/snapshot.ts, scripts/first-run.ts (those are corpus-owned and the corpus teammate fills them after this chore lands).
+- Do NOT edit src/server/pdf/lifecycle.ts (PdfChildHandle already has setRoots; no impl change needed).
+- Do NOT touch plans.xml, splits.xml, sequence.xml, chores.xml (lead owns those).
+- Do NOT edit package.json, bun.lock, tsconfig.json, drizzle.config.ts (foundation §6.1 froze the dep set).</synopsis>
+  </chore>
 </chores>
 </reference>
