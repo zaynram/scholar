@@ -78,7 +78,7 @@
     <invariant id="scholar-tool-namespace">
       <constraint>Every registerTool call site uses a name beginning with 'scholar.'. Pdf-child tools surface as scholar.pdf.* proxies, never as raw pdf.*.</constraint>
       <enforcement>
-        <gate kind="peer-symbol-check">grep -rhoE 'name:\s*"[^"]*"' src/server/tools/ 2&gt;/dev/null | grep -vE 'name:\s*"scholar\.' | grep -q . &amp;&amp; exit 1 || exit 0</gate>
+        <gate kind="peer-symbol-check">grep -rhoPz '_register\([\n ]*"[^"]+"' src/server/tools/ 2&gt;/dev/null | tr '\0' '\n' | grep -oE '"[^"]+"' | grep -vE '"scholar\.' | grep -q . &amp;&amp; exit 1 || exit 0</gate>
       </enforcement>
     </invariant>
     <invariant id="drizzle-then-raw-ddl">
