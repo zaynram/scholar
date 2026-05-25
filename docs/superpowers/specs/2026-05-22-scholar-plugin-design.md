@@ -338,9 +338,13 @@ The following cycles capture TDD-structured work units. Each cycle is independen
 - `@retorquere/bibtex-parser` — BibTeX import (RIS handled by an in-house adapter in `src/server/ingest/bibtex.ts`, §5.14).
 - `js-tiktoken` — pure-JS tokenizer for the chunker's 512/64 windowing (no native build; matches the Bun-first stance).
 - `chart.js` — bundled progress charts (`src/ui/views/ReaderProgress.tsx`; uPlot swap candidate documented in §17 gated on §14.1's bundle measurement).
-- `pdf.js` — bundled paper-detail renderer (worker resource split is the §14.1 fallback if bundle measurement exceeds 90% of the 5 MB iframe-resource cap).
+- `pdfjs-dist` — bundled paper-detail renderer for `src/ui/views/PaperDetail.tsx` (worker resource split is the §14.1 fallback if bundle measurement exceeds 90% of the 5 MB iframe-resource cap). The defunct `pdf.js` npm package (`pdf.js@0.1.0`) is **not** the same thing; `pdfjs-dist` is the canonical Mozilla distribution.
 - `react` + `react-dom` — UI runtime (Preact swap candidate documented in §17, same gate as Chart.js).
 - `bun:test` — test runner (built-in to the Bun runtime; zero deps; replaces vitest per the Bun-everywhere project convention pinned in CLAUDE.md).
+- `zod` — input validation at MCP-SDK tool boundaries (`inputSchema: z.object({...})` across every `src/server/tools/*.ts` registration).
+- `ulidx` — ULID generation for `paper_chunks`, `papers`, `annotations`, `digests`, `reading_prompts` id columns (per §11.5 Ruling B 2026-05-24; UPSERT-on-natural-key replaces SHA-256 content-addressed IDs). The `ulidx` package is preferred over the original `ulid` package because it is the maintained TypeScript fork.
+- `fflate` — zip-creation for the `.plugin` archive assembled by `scripts/build-plugin.ts` at cycle 6.13 (per §14.1 step 7, Ruling #2 2026-05-24).
+- `typescript` — `tsc --noEmit` typecheck step. Dev/build dep; the binary is implied by the `typecheck` script but enumerated here for completeness so foundation pre-declares the full toolchain.
 
 Foundation does **not** add a dedicated HTTP client; CrossRef and arXiv calls use Bun's native `fetch`. Foundation does **not** add `vite`, `vite-plugin-singlefile`, `better-sqlite3`, `citation.js`, `undici`, `ofetch`, or `gpt-tokenizer`. Native `vec0` build orchestration (compile-from-source when prebuilt Windows ABI mismatches Bun's linked SQLite) is scaffolded as a build script invoked by cycle 6.1 — see §16. Any subsequent change to this list lands as a single foundation-cycle edit; no later cycle gains write authority over `package.json` or `bun.lock`. This pre-declaration is what makes the splits-file `worktree="not-required"` invariant defensible: with `package.json` and `bun.lock` owned only by foundation, no two wave-2 worktrees can collide on dependency edits. The matching invariant lands in the splits.xml header (Session 4).
 
