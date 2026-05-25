@@ -449,6 +449,34 @@ Tier: mechanical (haiku) — pure mechanical: remove a line from a config file +
     <synopsis>Fix the foundation-declared `bun run build:ui` script in package.json so it handles Bun's HTML-bundler multi-file output (HTML entrypoint + JS chunks + sourcemaps + assets) correctly. Current declaration uses `--outfile` which silently emits only the HTML file and drops the JS chunks — broken for a real UI bundle. Frontends teammate worked around this at cycle 6.9 (e84621d) by inlining `Bun.build({ entrypoints: ["src/ui/index.html"], outdir: "dist/ui", target: "browser", minify: true })` into scripts/measure-bundle.ts so the cycle-6.9 bundle artifact + size-budget test could land. The workaround is scope-conformant (frontends BR includes scripts/measure-bundle.ts because it's pre-declared in package.json scripts as `measure-bundle`) but leaves the public `build:ui` entrypoint broken. Packaging cycle 6.13 (the .plugin archive assembler) will need a working build:ui to bundle the UI assets into the redistributable. Fix options: (a) extract the Bun.build invocation from measure-bundle.ts into scripts/build-ui.ts, point `build:ui` at it, leave measure-bundle.ts importing the helper (DRY); (b) inline the same Bun.build invocation directly in package.json's `build:ui` script via `bun -e '...'` (no new file, less DRY but minimal); (c) drop the public build:ui script entirely and have packaging-006 cycle 6.13 inline the bundle invocation. Recommendation: (a) — produces a stable scripts/build-ui.ts entrypoint that packaging-006 can import + invoke. Tier: interpretive (sonnet) — judgment on the helper signature (dist dir argument? minify flag? sourcemap toggle?) + matching the existing measure-bundle.ts invocation byte-for-byte. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) `bun run build:ui` emits HTML + JS chunks + sourcemaps to dist/ui/; (2) scripts/measure-bundle.ts continues to work (imports or duplicates the build invocation); (3) `bun test` still passes 266+; (4) tsc clean. BLOCKS packaging cycle 6.13 because the .plugin archive assembly path needs a working build:ui to embed UI assets.</synopsis>
   </chore>
 
+  <!--
+    Wave-5 packaging-surfaced foundation-fill chore (filed 2026-05-25 by
+    exec-multi-plan orchestrator at packaging close). Packaging teammate
+    flagged that the repo's package.json carries scholar.bundledBunVersion
+    ("1.3.11" — Bun version) and scholar.bunSqliteVersion ("3.51.2" — the
+    SQLite version Bun bundles). These fields have DIFFERENT semantic types
+    (Bun release version vs. SQLite library version), but spec §14.1 step 4
+    reads "scholar.bundledBunVersion ... must match scholar.bunSqliteVersion
+    from step 5 (both are read from the same Bun release)" — the wording
+    implies string-equality. The packaging cycle-6.13 assertVersionInvariant
+    enforces string-equality (SCHOLAR_BUILD_MISMATCH on diff) which would
+    FAIL against the real repo values — packaging's cycle-6.13 tests are
+    insulated via fixture package.json so this didn't block landing, but
+    a real production build would currently misfire. Functionally inert
+    until first real .plugin build attempt; same release-gate pattern as
+    license-audit-vendored-pdf-server and foundation-fix-build-ui-script-
+    for-multi-file-output. Filed AFTER plan-group close because cycle 6.13's
+    source deliverable is complete and the issue is a spec/foundation
+    ambiguity, not a packaging defect.
+  -->
+
+  <chore id="reconcile-bundled-bun-vs-sqlite-version-semantics"
+         status="open"
+         blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md package.json scripts/build-plugin.ts scripts/build-plugin.test.ts"
+         blocks-plans="">
+    <synopsis>Reconcile spec §14.1 step 4 / step 5 prose with foundation's actual package.json field semantics for scholar.bundledBunVersion and scholar.bunSqliteVersion. Spec wording (line ~1361 area): "scholar.bundledBunVersion ... must match scholar.bunSqliteVersion from step 5 (both are read from the same Bun release)" — interpretable as string-equality check. Packaging cycle 6.13 implemented assertVersionInvariant accordingly: aborts SCHOLAR_BUILD_MISMATCH on string-diff. But foundation populated the fields as: bundledBunVersion="1.3.11" (Bun runtime version, from `bun --version`) and bunSqliteVersion="3.51.2" (the SQLite library version Bun's bun:sqlite links — these are DIFFERENT semantic types, not the same string). Both legitimately "read from the same Bun release" but record different facts about it. A real production build would currently misfire on this string-inequality. Fix options: (a) Spec amendment: clarify §14.1 step 4 — fields record different facts about the same Bun release; the invariant check becomes "both fields populated + non-empty" rather than string-equality. Update scripts/build-plugin.ts:assertVersionInvariant to match. (b) Foundation alignment: collapse the two fields to a single canonical bundledBunVersion field, OR populate both fields with the same Bun release string (deferring the SQLite-version fact to a third field if needed). Recommendation: (a) preserves the existing field semantics (both are legitimately useful pieces of metadata) and is a smaller spec edit. Tier: interpretive (sonnet) — judgment on spec wording + matching assertVersionInvariant rewrite. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) spec §14.1 step 4 prose clarifies field semantics; (2) scripts/build-plugin.ts:assertVersionInvariant updated to match the clarified invariant (e.g., check both fields populated + non-empty); (3) scripts/build-plugin.test.ts SCHOLAR_BUILD_MISMATCH test updated to match the new invariant (or replaced with a "missing/empty field" test); (4) `bun test` 275+ pass; (5) tsc clean. RELEASE-GATE chore (does not block plan-group close — same precedent as license-audit-vendored-pdf-server and foundation-fix-build-ui-script-for-multi-file-output); must resolve before first real .plugin production build.</synopsis>
+  </chore>
+
   <chore id="foundation-fill-annotation-tombstones-schema"
          status="closed"
          fulfillment="a8576eb"
