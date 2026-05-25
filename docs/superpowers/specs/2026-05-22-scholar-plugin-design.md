@@ -745,8 +745,9 @@ export const paper_chunks = sqliteTable("paper_chunks", {
   // Ollama outage without re-embedding already-embedded ones.
   embedded_at:  text("embedded_at"),
 }, (t) => ({
-  // §11.5 idempotency claim ("chunk IDs deterministic from paper_id + ordinal")
-  // requires this uniqueness to hold at the storage layer, not just by convention.
+  // §11.5 idempotency claim (UPSERT on (paper_id, ordinal); paper_chunks.id is
+  // a fresh ulid() per row, per user-ratified Ruling B 2026-05-24) requires this
+  // uniqueness to hold at the storage layer, not just by convention.
   paper_ord_uniq: uniqueIndex("paper_chunks_paper_ord_idx").on(t.paper_id, t.ordinal),
   // Partial index for the catch-up scan after an outage.
   pending_idx:    index("paper_chunks_pending_idx").on(t.id).where(sql`embedded_at IS NULL`),
@@ -1011,13 +1012,13 @@ On seeing `structuredContent.askClaude`, the UI calls `window.cowork.askClaude(a
 
 v1 supports Cowork as the only host that delivers the full feature surface. Other hosts get a functional scholar — corpus management, search, digests, prompts, annotations — but lose the per-request Claude opt-in. The reduced surface is documented in `skills/scholar-workflow/SKILL.md` so the model doesn't suggest the toggle when it isn't available.
 
-### Embedding pipeline
+### 11.5 Embedding pipeline
 
 1. On `scholar.pdf.refresh-extraction`, scholar extracts the paper text via the bundled pdf MCP's `get_text` interaction.
-2. Text is split into ~512-token chunks with 64-token overlap.
-3. Chunks are written to `paper_chunks`.
-4. For each chunk, scholar calls Ollama `/api/embeddings`, writes the result to `chunk_vec`.
-5. The whole pipeline is idempotent (chunk IDs are deterministic from `paper_id + ordinal`).
+2. Text is split into ~512-token chunks with 64-token overlap. The chunker's ordinals are deterministic from `(text, WINDOW_WORDS, OVERLAP_WORDS)`, so a re-run on identical input produces identical ordinals.
+3. Chunks are written to `paper_chunks` via UPSERT on the `(paper_id, ordinal)` unique index. Each row receives a fresh `ulid()` value for `paper_chunks.id` — the ID is **not** derived from `paper_id + ordinal` (user-ratified Ruling B 2026-05-24, replacing the earlier SHA-256-derived posture). The natural-key UPSERT makes the write idempotent regardless of how many times a paper is re-extracted.
+4. For each chunk, scholar calls Ollama `/api/embeddings`, writes the result to `chunk_vec`, and stamps `paper_chunks.embedded_at = nowIso()`. The `embedded_at` column is the extraction-progress sentinel: null until embedded; non-null on completion. A partial index on `paper_chunks(id) WHERE embedded_at IS NULL` lets the catch-up scan after an Ollama outage find pending chunks without re-embedding already-embedded ones.
+5. The whole pipeline is idempotent: re-runs on identical input land identical `(paper_id, ordinal)` rows (with possibly-new `id` values on the UPSERTed rows), and the `embedded_at` sentinel keeps already-embedded chunks from being recomputed.
 
 ## 12. Citation / Metadata Pipeline
 
