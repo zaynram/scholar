@@ -59,5 +59,15 @@ export const runRawDdl: RunRawDdl = (db) => {
     );
   }
   // ─── cycle 6.6 — reading_queue (SQL view) ──────────────────────────────────
-  // Filled in cycle 6.6 (next Red/Green pair). Intentionally absent here.
+  // §8.2 view: surfaces only pending+reading papers; ordering puts the active
+  // reads first, then highest-priority pending, then the longest-untouched
+  // within each tier. Idempotent via IF NOT EXISTS; unconditional (does not
+  // depend on chunk_vec / settings state — reading queue is meaningful even
+  // when Ollama is offline).
+  db.run(sql`CREATE VIEW IF NOT EXISTS reading_queue AS
+    SELECT id, key, title, status, priority,
+           (julianday('now') - julianday(COALESCE(status_touched_at, imported_at))) AS days_since_touch
+    FROM papers
+    WHERE status IN ('pending','reading')
+    ORDER BY status='reading' DESC, priority DESC, days_since_touch DESC`);
 };

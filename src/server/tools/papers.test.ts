@@ -127,12 +127,6 @@ test("hybrid search: degrades to lexical-only when chunk_vec is deferred (still_
 
 test("hybrid search: respects limit parameter (default 20)", async () => {
   const sqlite = seededDb();
-  for (let i = 0; i < 30; i++) {
-    sqlite.run(
-      `INSERT INTO papers(id,key,title,imported_at)
-       VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')`,
-    );
-  }
   // Insert 30 papers with the same hit-word.
   const stmt = sqlite.prepare(
     `INSERT INTO papers(id,key,title,imported_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')`,
