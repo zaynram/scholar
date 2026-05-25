@@ -49,7 +49,10 @@ const FIXTURE_FILES: [string, string][] = [
   })],
 ];
 
-// package.json with matching bundledBunVersion / bunSqliteVersion
+// package.json with both version fields populated (intentionally differing values —
+// bundledBunVersion records the Bun runtime version, bunSqliteVersion records the
+// SQLite library version Bun's bun:sqlite links against; they record different facts
+// about the same Bun release and are expected to differ).
 const PKG_JSON = {
   name: "scholar",
   version: "0.1.0",
@@ -63,8 +66,8 @@ const PKG_JSON = {
     "build:plugin": "echo skip-in-fixture",
   },
   scholar: {
-    bundledBunVersion: "1.2.3",
-    bunSqliteVersion:  "1.2.3",
+    bundledBunVersion: "1.2.3",   // fake Bun runtime version
+    bunSqliteVersion:  "3.45.0",  // fake SQLite library version (intentionally different)
   },
   dependencies: {},
   devDependencies: {},
@@ -212,26 +215,54 @@ test("step1_buildServer creates extension-less build/scholar sibling (sibling-co
   }
 });
 
-test("build-plugin aborts with SCHOLAR_BUILD_MISMATCH when bundledBunVersion ≠ bunSqliteVersion", async () => {
-  const mismatchRoot = mkdtempSync(join(tmpdir(), "scholar-build-mismatch-"));
+test("build-plugin aborts with SCHOLAR_BUILD_MISMATCH when bundledBunVersion is missing", async () => {
+  // scholar.bundledBunVersion omitted entirely — the invariant is that BOTH fields
+  // must be populated and non-empty (they record different facts about the same Bun
+  // release; string-equality is NOT required).
+  const missingBvRoot = mkdtempSync(join(tmpdir(), "scholar-build-mismatch-bv-"));
   try {
     for (const [relPath, content] of FIXTURE_FILES) {
-      const abs = join(mismatchRoot, relPath);
+      const abs = join(missingBvRoot, relPath);
       mkdirSync(join(abs, ".."), { recursive: true });
       writeFileSync(abs, content, "utf8");
     }
-    const mismatchPkg = {
+    const missingBvPkg = {
       ...PKG_JSON,
-      scholar: { bundledBunVersion: "1.2.3", bunSqliteVersion: "1.2.4" }, // mismatch
+      scholar: { bunSqliteVersion: "3.45.0" }, // bundledBunVersion absent
     };
-    writeFileSync(join(mismatchRoot, "package.json"), JSON.stringify(mismatchPkg, null, 2));
-    mkdirSync(join(mismatchRoot, "dist"), { recursive: true });
+    writeFileSync(join(missingBvRoot, "package.json"), JSON.stringify(missingBvPkg, null, 2));
+    mkdirSync(join(missingBvRoot, "dist"), { recursive: true });
 
-    const { exitCode, stderr } = await runBuildScript(mismatchRoot, join(mismatchRoot, "dist"));
+    const { exitCode, stderr } = await runBuildScript(missingBvRoot, join(missingBvRoot, "dist"));
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("SCHOLAR_BUILD_MISMATCH");
   } finally {
-    rmSync(mismatchRoot, { recursive: true, force: true });
+    rmSync(missingBvRoot, { recursive: true, force: true });
+  }
+});
+
+test("build-plugin aborts with SCHOLAR_BUILD_MISMATCH when bunSqliteVersion is empty", async () => {
+  // scholar.bunSqliteVersion present but empty string — the invariant catches
+  // both missing and empty-string values.
+  const emptySvRoot = mkdtempSync(join(tmpdir(), "scholar-build-mismatch-sv-"));
+  try {
+    for (const [relPath, content] of FIXTURE_FILES) {
+      const abs = join(emptySvRoot, relPath);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, content, "utf8");
+    }
+    const emptySvPkg = {
+      ...PKG_JSON,
+      scholar: { bundledBunVersion: "1.2.3", bunSqliteVersion: "" }, // empty string
+    };
+    writeFileSync(join(emptySvRoot, "package.json"), JSON.stringify(emptySvPkg, null, 2));
+    mkdirSync(join(emptySvRoot, "dist"), { recursive: true });
+
+    const { exitCode, stderr } = await runBuildScript(emptySvRoot, join(emptySvRoot, "dist"));
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("SCHOLAR_BUILD_MISMATCH");
+  } finally {
+    rmSync(emptySvRoot, { recursive: true, force: true });
   }
 });
 

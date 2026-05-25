@@ -169,8 +169,14 @@ async function compileVec0FromSource(destPath: string): Promise<void> {
 
 // ── Pre-flight: version invariant (steps 4 ↔ 5) ─────────────────────────────
 // Reads scholar.bundledBunVersion and scholar.bunSqliteVersion from package.json
-// and aborts with SCHOLAR_BUILD_MISMATCH if they differ. Both fields must be set
-// from the same Bun release by foundation cycle 6.1.
+// and aborts with SCHOLAR_BUILD_MISMATCH if either is missing or empty.
+//
+// These two fields record DIFFERENT facts about the same Bun release:
+//   - bundledBunVersion: the Bun runtime version (value of `bun --version` at build time)
+//   - bunSqliteVersion:  the SQLite library version Bun's bun:sqlite statically links against
+// Their string values are expected to differ (e.g. "1.3.11" vs "3.51.2").
+// The invariant is that BOTH are populated and non-empty — not that they are equal.
+// Both fields must be set from the same Bun release by foundation cycle 6.1.
 
 function assertVersionInvariant(): void {
   const pkgRaw = readFileSync(rel("package.json"), "utf8");
@@ -179,20 +185,17 @@ function assertVersionInvariant(): void {
   };
   const bv = pkg.scholar?.bundledBunVersion;
   const sv = pkg.scholar?.bunSqliteVersion;
-  if (!bv || !sv) {
+  if (!bv || !bv.trim() || !sv || !sv.trim()) {
     abort(
       "SCHOLAR_BUILD_MISMATCH",
       "package.json is missing scholar.bundledBunVersion or scholar.bunSqliteVersion " +
-      "— foundation cycle 6.1 must set these fields."
+      "(both record different facts about the same Bun release; both must be populated). " +
+      `Got bundledBunVersion=${JSON.stringify(bv)}, bunSqliteVersion=${JSON.stringify(sv)}.`
     );
   }
-  if (bv !== sv) {
-    abort(
-      "SCHOLAR_BUILD_MISMATCH",
-      `bundledBunVersion (${bv}) ≠ bunSqliteVersion (${sv}). ` +
-      "Both must be set from the same Bun release."
-    );
-  }
+  // No string-equality check: bundledBunVersion (Bun runtime version) and
+  // bunSqliteVersion (SQLite library version) record different facts about
+  // the same Bun release and are expected to differ.
 }
 
 // ── Step 1: Build server binary ───────────────────────────────────────────────
