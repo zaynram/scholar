@@ -1587,7 +1587,7 @@ export function registerTools(server: McpServer, ctx: ServerContext): void {
     }),
   );
   // scholar.digest.change-since-last-open: consumes snapshot rows produced by
-  // the corpus plan's scholar.snapshot.take (§5.13, cycle 6.12). For v1, the
+  // the corpus plan's scholar.snapshot.take (§5.13, cycle 6.11). For v1, the
   // change-since computation iterates two SnapshotPayload structures (§8.2)
   // and feeds the diff to generateDigest with scope_key='stale'. Reads-only on
   // snapshots table; no schema mutation here.
@@ -1879,7 +1879,7 @@ Lives at `src/server/extraction.integration.test.ts`. Skipped on CI by default (
 
 **Spec source:** §10 (as amended by lead-owned chore `amend-spec-§7.4+§7.6+§10+§6.12-drop-sqlite3-mcp`), §6 (as amended by lead-owned chore `amend-spec-§6-add-cycle-6.14`), §7.6 `ctx.db` snapshot-at-entry, §12.0 `resolveUnderRoot`.
 
-**Why this cycle exists.** User-ratified posture B (2026-05-24): scholar drops the vendored Python `sqlite3-mcp` child entirely and reimplements the §10 query/backup/inspect surface as first-party scholar tools using `bun:sqlite` directly. This cycle absorbs that work. Spec §6 amendment to add cycle 6.14, and the §10 + §7.4 + §7.6 + §6.12 rewrite to describe scholar's new first-party surface, are both filed as lead-owned mechanical chores; this plan-md + the spec amendments land in one atomic commit (no in-between "cycle 6.14 doesn't exist in spec" state for readers to encounter — verified by lead 2026-05-24).
+**Why this cycle exists.** User-ratified posture B (2026-05-24): scholar drops the vendored Python `sqlite3-mcp` child entirely and reimplements the §10 query/backup/inspect surface as first-party scholar tools using `bun:sqlite` directly. This cycle absorbs that work. Spec §6 amendment to add cycle 6.14, and the §10 + §7.4 + §7.6 + §6.12 rewrite to describe scholar's new first-party surface, are both filed as lead-owned mechanical chores; Cycle 6.14 spec text landed via lead-owned chore amend-spec-add-cycle-6.14 (commit 73ed88c, 2026-05-24); plan-md authored against the spec amendment.
 
 **Depends-on (across plans):** foundation cycles 6.1, 6.2 (must be closed, for `ctx.db` + foundation-007's `backupRoot` `ConfigAccessor` key + stub scaffolding of the three new tool files at cycle 6.1); corpus cycle 6.3 (must be closed, so `ctx.db` is set by `scholar.corpus.activate`).
 

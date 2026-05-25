@@ -43,7 +43,7 @@ Verbatim quotes for drift detection at execution time. Any diff against the live
 | Sibling suffix | Cycles | Scope excluded from this plan |
 |---|---|---|
 | `foundation` | 6.1, 6.2 | `src/server/ingest/primitives.ts` (foundation-owned, do NOT edit); all nine tool module stubs; `src/server/db/schema.ts` + migrations; `allPdfRoots`/`defaultPdfRoot` helpers; `nowIso`/`ulid` re-exports; dependency pre-declaration |
-| `corpus` | 6.3, 6.11, 6.12 | Corpus CRUD tools, roots tools, first-run wizard, `ctx.db` corpus-open/activate flow, `scholar.snapshot.take`, sqlite3-mcp registration. **A corpus must be active before any ingest tool can write.** |
+| `corpus` | 6.3, 6.11 | Corpus CRUD tools, roots tools, first-run wizard, `ctx.db` corpus-open/activate flow, `scholar.snapshot.take` (sqlite3-mcp registration removed post-posture-B 2026-05-24). **A corpus must be active before any ingest tool can write.** |
 | `extraction` | 6.5, 6.6, 6.8 | **Text extraction from PDFs is extraction's domain.** This plan ingests metadata only (title, authors, year, venue, DOI, arXiv ID, abstract, pdf_path). Chunking, embedding, `chunk_vec`, `reading_queue`, digest/prompts — all extraction. |
 | `annotations` | 6.7 | Annotation CRUD and bidirectional pdf-MCP reconciliation. |
 | `frontends` | 6.9, 6.10 | UI views, nu module, slash commands, skills. |

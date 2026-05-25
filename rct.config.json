@@ -1,0 +1,48 @@
+{
+  "globals": {
+    "format": "xml",
+    "plugins": [
+      "rct-plugin-track-work",
+      "rct-plugin-read-guard"
+    ]
+  },
+  "lang": {
+    "node": {
+      "tools": [
+        {
+          "name": "bun",
+          "scripts": true
+        }
+      ],
+      "config": [
+        {
+          "name": "tsconfig",
+          "path": "tsconfig.json",
+          "extractPaths": true
+        }
+      ]
+    }
+  },
+  "_derived": {
+    "lang": {
+      "node": {
+        "tools": [
+          {
+            "name": "bun",
+            "scripts": true
+          }
+        ],
+        "config": [
+          {
+            "name": "tsconfig",
+            "path": "tsconfig.json",
+            "extractPaths": true
+          }
+        ]
+      }
+    },
+    "test": null,
+    "files": [],
+    "globals": {}
+  }
+}

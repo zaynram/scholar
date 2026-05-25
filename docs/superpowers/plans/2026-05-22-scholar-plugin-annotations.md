@@ -447,7 +447,7 @@ After all Red tests pass:
 | Sibling suffix  | Cycles owned    | Scope excluded from this plan                                                                   |
 |-----------------|-----------------|--------------------------------------------------------------------------------------------------|
 | `foundation`    | 6.1, 6.2        | Stub creation of `annotations.ts`; `ServerContext`, `PdfChild`, `Logger`, `ConfigAccessor`, `registerTools`, `runRawDdl` contracts; `sanitizeText` / `wrapUntrusted` / `resolveUnderRoot` / `encodeDoi` / `validateArxivId` / `loadVecAndProbeDim` / `initOnce` primitives; Drizzle schema (`annotations`, `reconcile_state` tables); vendored pdf MCP + `src/server/pdf/lifecycle.ts`. |
-| `corpus`        | 6.3, 6.11, 6.12 | `scholar.corpus.*` tools, `scholar.roots.*` tools, snapshot tool, sqlite3-mcp registration, first-run wizard. `corpus.activate` (which mutates `ctx.db` and `ctx.pdf`). |
+| `corpus`        | 6.3, 6.11 | `scholar.corpus.*` tools, `scholar.roots.*` tools, snapshot tool (sqlite3-mcp registration removed post-posture-B 2026-05-24), first-run wizard. `corpus.activate` (which mutates `ctx.db` and `ctx.pdf`). |
 | `ingest`        | 6.4             | All ingestion adapters and `scholar.ingest.*` tools.                                            |
 | `extraction`    | 6.5, 6.6, 6.8  | Text extraction, chunking, Ollama embeddings, `chunk_vec` + `reading_queue` DDL, hybrid search, reading queue, digest, reading-prompts. `scholar.pdf.*`, `scholar.papers.*`, `scholar.digest.*`, `scholar.prompts.*` tools. |
 | `frontends`     | 6.9, 6.10       | Five React UI views; nu module; slash commands; skills; rendering of annotation counts and annotation views. |

@@ -6,7 +6,7 @@
     Cycle 6.1 (foundation) additionally SCAFFOLDS, as no-op stubs, files it
     does not own the content of:
       src/server/tools/{corpus,roots,snapshot,ingest,pdf,papers,digest,
-                        prompts,annotations}.ts   (filled by their owners)
+                        prompts,annotations,query,backup,inspect}.ts   (filled by their owners)
       src/server/db/raw-ddl.ts                    (filled by extraction)
     foundation's stub creation is a wave-0 act, strictly ordered before any
     fill, so no two plans ever modify the same file's content. The only
@@ -74,14 +74,14 @@
         depends-on=""
         worktree="not-required"
         blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/server/ingest/primitives.ts src/server/ollama/client.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json"
-        synopsis="Project scaffolding, Drizzle schema, sqlite-vec loader, server skeleton, frozen §7.6 contracts, vendored unmodified pdf MCP with roots responder, no-op stubs for nine tool modules + raw-ddl.ts. Pre-declares every v1 npm dep per §6.1."/>
+        synopsis="Project scaffolding, Drizzle schema, sqlite-vec loader, server skeleton, frozen §7.6 contracts, vendored unmodified pdf MCP with roots responder, no-op stubs for twelve tool modules + raw-ddl.ts. Pre-declares every v1 npm dep per §6.1."/>
 
   <plan suffix="corpus"
         cycles="[§6.3,§6.11]"
         depends-on="foundation"
         worktree="not-required"
         blast-radius="src/server/tools/corpus.ts src/server/tools/roots.ts src/server/tools/snapshot.ts scripts/first-run.ts"
-        synopsis="Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open, sqlite3-mcp register integration. Owns the scholar.dashboard view-opener (registered from corpus.ts per the §7.6 mapping)."/>
+        synopsis="Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open. Owns the scholar.dashboard view-opener (registered from corpus.ts per the §7.6 mapping)."/>
 
   <plan suffix="ingest"
         cycles="[§6.4]"
@@ -95,7 +95,7 @@
         depends-on="corpus"
         worktree="not-required"
         blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts src/server/tools/query.ts src/server/tools/backup.ts src/server/tools/inspect.ts"
-        synopsis="Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts. Cycle order load-bearing: 6.5 fills chunk_vec, 6.6 adds reading_queue view. Owns scholar.paper.* view-openers."/>
+        synopsis="Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts, plus cycle 6.14 first-party SQL/backup/inspect surface (scholar.query/backup/inspect via bun:sqlite per posture B). Cycle 6.14 fills the foundation-scaffolded query/backup/inspect stubs. Cycle order load-bearing: 6.5 fills chunk_vec, 6.6 adds reading_queue view. Owns scholar.paper.* view-openers."/>
 
   <plan suffix="annotations"
         cycles="[§6.7]"
