@@ -371,7 +371,8 @@ Tier: interpretive (sonnet). Vehicle: spec-pipeline:chore-executor. Atomic-prere
   -->
 
   <chore id="foundation-isolate-happy-dom-to-ui-tests-only"
-         status="open"
+         status="closed"
+         fulfillment="859263d"
          blast-radius="bunfig.toml test-preload.ts"
          blocks-plans="frontends">
     <synopsis>Isolate the @happy-dom/global-registrator preload to opt-in UI-test usage. The prior chore foundation-fill-frontends-prereqs-dom-and-ctx (closed at 5e129f5) registered DOM globals via `bunfig.toml [test] preload = ["./test-preload.ts"]` where test-preload.ts unconditionally calls GlobalRegistrator.register(). This globally pollutes ALL test files with happy-dom's DOM shims (window, document, fetch, Response, Request) — incompatible with Bun.serve-based test stubs in 4 pre-existing server tests:
