@@ -313,7 +313,8 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
   -->
 
   <chore id="foundation-fill-frontends-prereqs-dom-and-ctx"
-         status="open"
+         status="closed"
+         fulfillment="5e129f5"
          blast-radius="package.json bun.lock bunfig.toml test-preload.ts src/server/index.ts src/server/ui/resource.ts"
          blocks-plans="frontends">
     <synopsis>Foundation-fill chore covering two distinct frontends-blocking gaps surfaced by the frontends teammate's pre-cycle STOP report. Bundle into ONE work commit for atomicity.
@@ -351,6 +352,79 @@ WHAT IS OUT OF SCOPE
 - Do NOT modify any spec file.
 
 Tier: interpretive (sonnet). Vehicle: spec-pipeline:chore-executor. Atomic-prerequisite precedent: same shape as foundation-fill-corpus-prereqs (5c34d70) and foundation-fill-annotation-tombstones-schema (a8576eb). Estimated 5-10 min based on prior chore-executor velocities.</synopsis>
+  </chore>
+
+  <!--
+    Gap-3 follow-up chore (filed 2026-05-25 by exec-multi-plan orchestrator
+    after frontends teammate's Gap 3 STOP report). The prior foundation-fill
+    chore foundation-fill-frontends-prereqs-dom-and-ctx (closed at 5e129f5)
+    landed @happy-dom/global-registrator with a GLOBAL preload via
+    bunfig.toml [test] preload, which inadvertently registered DOM globals
+    (window, document, fetch, Response, Request) for ALL test files. The
+    DOM-shim Response/fetch overrides collide with Bun.serve-based test
+    stubs in 4 server tests (prompts × 2, digest × 1, arxiv × 1). The fix
+    is to isolate happy-dom to opt-in usage from UI tests via beforeAll/
+    afterAll helpers rather than global preload — a well-known happy-dom
+    integration pattern. Filed AFTER the original chore closed (rather than
+    re-opening it) because the original chore's stated acceptance criteria
+    were met; Gap 3 is a follow-up surface, not a defect in chore delivery.
+  -->
+
+  <chore id="foundation-isolate-happy-dom-to-ui-tests-only"
+         status="open"
+         blast-radius="bunfig.toml test-preload.ts"
+         blocks-plans="frontends">
+    <synopsis>Isolate the @happy-dom/global-registrator preload to opt-in UI-test usage. The prior chore foundation-fill-frontends-prereqs-dom-and-ctx (closed at 5e129f5) registered DOM globals via `bunfig.toml [test] preload = ["./test-preload.ts"]` where test-preload.ts unconditionally calls GlobalRegistrator.register(). This globally pollutes ALL test files with happy-dom's DOM shims (window, document, fetch, Response, Request) — incompatible with Bun.serve-based test stubs in 4 pre-existing server tests:
+      - src/server/tools/prompts.test.ts: 2 fails (Bun.serve stub Ollama → fetch returns happy-dom Response → JSON parse fails)
+      - src/server/tools/digest.test.ts: 1 fail (same Bun.serve stub Ollama pattern)
+      - src/server/ingest/arxiv.test.ts: 1 fail (real fetch path; PDF bytes expected 37 received 91 — happy-dom Response.body normalization differs)
+
+FIX (per frontends teammate's recommendation, lead-concurred):
+1. Remove the `[test] preload` line from bunfig.toml (or remove the bunfig.toml file entirely if the only content was the [test] section).
+2. Rename test-preload.ts → test-dom-helpers.ts at repo root (or keep the same filename if you prefer; both work). Replace the unconditional GlobalRegistrator.register() call with two named exports:
+   ```typescript
+   import { GlobalRegistrator } from "@happy-dom/global-registrator";
+
+   export function registerDom(): void {
+     GlobalRegistrator.register();
+   }
+
+   export function unregisterDom(): void {
+     GlobalRegistrator.unregister();
+   }
+   ```
+3. Verify no test file currently imports from test-preload.ts (the global preload was the only consumer). If frontends teammate authored anything that imports it, flag in commit message — but at commit time they have not yet authored cycle 6.9 UI tests.
+
+ACCEPTANCE CRITERIA:
+- bunfig.toml's [test] preload line removed (or file removed entirely).
+- test-dom-helpers.ts (or test-preload.ts, your choice) exports registerDom + unregisterDom.
+- `bun test` returns to 242 pass / 6 skip / 0 fail (231 pre-Gap-1 baseline + 11 new nu-module tests landed at 6bdc167 = 242). The 4 happy-dom-induced regressions are GONE.
+- `bunx tsc --noEmit` clean.
+- Single work commit. Commit message format:
+  ```
+  fix(foundation-fill): isolate happy-dom DOM-shims to opt-in registerDom helper
+
+  Replaces global GlobalRegistrator.register() preload (which polluted
+  ALL test files with happy-dom Response/fetch overrides) with opt-in
+  registerDom/unregisterDom helpers consumed via beforeAll/afterAll
+  in UI tests only. Closes chore foundation-isolate-happy-dom-to-ui-
+  tests-only. Restores prompts/digest/arxiv server-test gate.
+
+  Gate: bun test 242 pass / 6 skip / 0 fail; bunx tsc --noEmit clean.
+
+  Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+  ```
+- Final stdout: `WORK_COMMIT_SHA=<the new commit's SHA>`. (PLEASE include this stdout marker.)
+
+WHAT IS OUT OF SCOPE:
+- Do NOT edit src/server/* (no changes needed there).
+- Do NOT edit src/ui/* (frontends teammate fills the UI test files at cycle 6.9 using the new registerDom/unregisterDom pattern).
+- Do NOT touch package.json or bun.lock (happy-dom stays as a devDep).
+- Do NOT touch .claude/context/chores.xml.
+- Do NOT touch plans.xml, splits.xml, sequence.xml.
+- Do NOT modify any spec file.
+
+Tier: mechanical (haiku) — pure mechanical: remove a line from a config file + rewrite a 3-line helper file. No judgment beyond verifying the 4 server tests pass after the change. Vehicle: spec-pipeline:chore-executor.</synopsis>
   </chore>
 
   <chore id="foundation-fill-annotation-tombstones-schema"
