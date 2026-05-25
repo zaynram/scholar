@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <reference>
-<plans modified-at="2026-05-25T08:22:41Z">
+<plans modified-at="2026-05-25T09:05:57Z">
   <plan-group index="1"
               id="2026-05-22-scholar-plugin"
               status="in-progress"
@@ -8,18 +8,20 @@
               spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
               splits-md="docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
               sequence-md="docs/superpowers/multi/2026-05-22-scholar-plugin-sequence.xml"
-              modified-at="2026-05-25T08:22:41Z">
+              modified-at="2026-05-25T09:05:57Z">
     <synopsis>Scholar literature-review plugin: vendored unmodified pdf MCP with protocol-based root injection, multi-corpus persistence on bun:sqlite+Drizzle, sqlite-vec embeddings via local Ollama, five mcp-apps UI surfaces, nu CLI module, sqlite3-mcp integration.</synopsis>
 
     <plan index="1.1"
           id="2026-05-22-scholar-plugin-foundation"
-          status="open"
+          status="closed"
+          fulfillment="006d8eb"
           expendable="false"
           plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-foundation.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.1, 6.2]"
           depends-on=""
-          worktree="not-required">
+          worktree="not-required"
+          modified-at="2026-05-25T09:05:57Z">
       <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored unmodified pdf MCP plus scholar's client-side MCP roots responder in src/server/pdf/lifecycle.ts (capabilities.roots.listChanged, ListRootsRequestSchema handler, roots/list_changed sender, Windows Job Object orphan reaping). Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts.</synopsis>
     </plan>
 
