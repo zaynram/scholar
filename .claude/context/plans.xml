@@ -83,13 +83,15 @@
 
     <plan index="1.6"
           id="2026-05-22-scholar-plugin-frontends"
-          status="open"
+          status="closed"
+          fulfillment="e84621d"
           expendable="false"
           plan-md="docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md"
           spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
           cycles="[6.9, 6.10]"
           depends-on="ingest extraction annotations"
-          worktree="not-required">
+          worktree="not-required"
+          modified-at="2026-05-25T11:15:00Z">
       <synopsis>MCP App UI bundle (five React views, host styling, vite singlefile build) and the user-facing nu module, slash commands, and skills.</synopsis>
     </plan>
 

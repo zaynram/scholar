@@ -428,6 +428,25 @@ WHAT IS OUT OF SCOPE:
 Tier: mechanical (haiku) — pure mechanical: remove a line from a config file + rewrite a 3-line helper file. No judgment beyond verifying the 4 server tests pass after the change. Vehicle: spec-pipeline:chore-executor.</synopsis>
   </chore>
 
+  <!--
+    Wave-4 frontends-surfaced foundation script bug (filed 2026-05-25 by
+    exec-multi-plan orchestrator at frontends plan close). Frontends teammate
+    discovered the foundation-declared `bun run build:ui` script is broken
+    for the multi-file emit Bun's HTML bundler produces (HTML + JS chunks +
+    sourcemaps). Worked around by inlining the bundle invocation into
+    scripts/measure-bundle.ts (committed at e84621d alongside the bundle
+    artifact size-budget test). Functionally inert at runtime — the build:ui
+    NPM script is never wired into MCP serving paths — but packaging cycle
+    6.13 will need a working build:ui to bundle the .plugin archive.
+  -->
+
+  <chore id="foundation-fix-build-ui-script-for-multi-file-output"
+         status="open"
+         blast-radius="package.json scripts/build-ui.ts"
+         blocks-plans="packaging">
+    <synopsis>Fix the foundation-declared `bun run build:ui` script in package.json so it handles Bun's HTML-bundler multi-file output (HTML entrypoint + JS chunks + sourcemaps + assets) correctly. Current declaration uses `--outfile` which silently emits only the HTML file and drops the JS chunks — broken for a real UI bundle. Frontends teammate worked around this at cycle 6.9 (e84621d) by inlining `Bun.build({ entrypoints: ["src/ui/index.html"], outdir: "dist/ui", target: "browser", minify: true })` into scripts/measure-bundle.ts so the cycle-6.9 bundle artifact + size-budget test could land. The workaround is scope-conformant (frontends BR includes scripts/measure-bundle.ts because it's pre-declared in package.json scripts as `measure-bundle`) but leaves the public `build:ui` entrypoint broken. Packaging cycle 6.13 (the .plugin archive assembler) will need a working build:ui to bundle the UI assets into the redistributable. Fix options: (a) extract the Bun.build invocation from measure-bundle.ts into scripts/build-ui.ts, point `build:ui` at it, leave measure-bundle.ts importing the helper (DRY); (b) inline the same Bun.build invocation directly in package.json's `build:ui` script via `bun -e '...'` (no new file, less DRY but minimal); (c) drop the public build:ui script entirely and have packaging-006 cycle 6.13 inline the bundle invocation. Recommendation: (a) — produces a stable scripts/build-ui.ts entrypoint that packaging-006 can import + invoke. Tier: interpretive (sonnet) — judgment on the helper signature (dist dir argument? minify flag? sourcemap toggle?) + matching the existing measure-bundle.ts invocation byte-for-byte. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) `bun run build:ui` emits HTML + JS chunks + sourcemaps to dist/ui/; (2) scripts/measure-bundle.ts continues to work (imports or duplicates the build invocation); (3) `bun test` still passes 266+; (4) tsc clean. BLOCKS packaging cycle 6.13 because the .plugin archive assembly path needs a working build:ui to embed UI assets.</synopsis>
+  </chore>
+
   <chore id="foundation-fill-annotation-tombstones-schema"
          status="closed"
          fulfillment="a8576eb"
