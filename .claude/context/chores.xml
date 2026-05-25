@@ -276,14 +276,16 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
   -->
 
   <chore id="foundation-fill-ollama-client-and-migrate-extraction"
-         status="open"
+         status="closed"
+         fulfillment="e309843"
          blast-radius="src/server/ollama/client.ts src/server/extraction/ollama-http.ts src/server/extraction/chunker.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts src/server/tools/pdf.ts"
          blocks-plans="">
     <synopsis>Fill foundation's src/server/ollama/client.ts (currently throw-on-call stubs for embed/chat/listModels/healthCheck) with a production HTTP client routed via SCHOLAR_OLLAMA_URL, then migrate extraction's call sites (papers.search / digest.generate / prompts.generate / refreshExtraction) to import from foundation instead of extraction-local helper. Extraction shipped src/server/extraction/ollama-http.ts (embedOllama/chatOllama + DEFAULT_EMBED_MODEL/DEFAULT_CHAT_MODEL/OllamaUnavailableError) as a blast-radius-conformant workaround during cycle 6.5/6.8 execution because foundation's own stubs were outside extraction's BR per spec-pipeline invariant #6. The split-path runtime risks divergence (e.g., two different SCHOLAR_OLLAMA_URL parsing paths, two different timeout policies). Tier: interpretive (sonnet) — judgment on the migration boundary (delete extraction's helper outright vs. keep as a thin re-export, naming reconciliation on OllamaUnavailableError, ensuring DEFAULT_EMBED_MODEL/DEFAULT_CHAT_MODEL match §11 defaults). Vehicle: spec-pipeline:chore-executor. Acceptance: (1) foundation's client.ts replaces stubs with real impl; (2) extraction/ollama-http.ts is deleted (or trivially re-exports foundation for backward-compat); (3) all four extraction call sites import from foundation; (4) `bun test` still passes 209+; (5) tsc clean. Note: the foundation header comment in client.ts says "Method bodies are filled by extraction at cycle 6.5/6.8" — that authoring directive is now factually wrong (extraction's BR forbade it). Update or remove the comment.</synopsis>
   </chore>
 
   <chore id="foundation-fill-loadvecanddim-primitive-and-migrate-extraction"
-         status="open"
+         status="closed"
+         fulfillment="e309843"
          blast-radius="src/server/ingest/primitives.ts src/server/extraction/vec-load.ts src/server/db/raw-ddl.ts src/server/tools/papers.ts"
          blocks-plans="">
     <synopsis>Fill foundation's src/server/ingest/primitives.ts:loadVecAndProbeDim (currently throw-on-call stub) with the real impl that calls foundation's resolveVec0Path + one embed-probe round-trip to determine the embedding dim, then migrate extraction's call sites to import the primitive instead of using src/server/extraction/vec-load.ts:probeEmbedDimAndLoadVec. Extraction shipped vec-load.ts during cycle 6.5 to unblock §11 deferred-chunk_vec path because primitives.ts was outside extraction's BR. Tier: interpretive (sonnet) — same migration-boundary judgment as the companion ollama-client chore. Vehicle: spec-pipeline:chore-executor. Acceptance: (1) primitives.ts loadVecAndProbeDim replaces stub with real impl; (2) extraction/vec-load.ts is deleted (or trivially re-exports primitive); (3) extraction call sites (raw-ddl.ts probably calls probeEmbedDimAndLoadVec; papers.search may also) import the primitive directly; (4) `bun test` still passes 209+; (5) the existing _testProbeDim test hook in extraction tests continues working (or is updated to mock the foundation primitive); (6) tsc clean. Companion chore to foundation-fill-ollama-client-and-migrate-extraction — they should ideally land in the same chore-executor session for atomicity.</synopsis>
