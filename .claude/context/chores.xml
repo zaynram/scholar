@@ -118,7 +118,8 @@
   </chore>
 
   <chore id="add-config-keys-from-cross-plan-coordination"
-         status="open"
+         status="closed"
+         fulfillment="6506a21"
          blast-radius="src/server/tools/registry.ts"
          blocks-plans="">
     <synopsis>Batch-add canonical ConfigAccessor key documentation to foundation-009's JSDoc canonical-keys list in src/server/tools/registry.ts. Surfaced during plan absorption in the 2026-05-24 spec-to-multi-plan workflow when sibling plans need keys not yet documented. Current additions: (1) `crossref.mailto` (string) — ingest cycle 6.4 CrossRef adapter polite-tier `?mailto=` parameter; foundation-009 lines 166-183 enumerate importDirs/backupRoot/ollama.*/scholar.askClaudeEnabled/ui.* but omit crossref.mailto. Functionally already works (ConfigAccessor.get&lt;T&gt;(key:string) accepts any string key per foundation-006 item-8 advisor pattern); chore canonicalizes the key in JSDoc only. Additional keys may be appended pre-execution if ingest-003 or frontends-005 absorption surface other gaps (currently none known). Mechanical-tier chore (copilot-cli, gpt-5-mini); pure JSDoc additions to the canonical-keys list. Foundation-009 plan-md status unchanged; this chore is the lead-owned, post-atomic-commit documentation pass that records the canonicalization without bumping foundation to foundation-010. Per scope-whitelist, the orchestrator does NOT directly edit src/server/tools/registry.ts; the chore-executor (which has src/ in its blast-radius per chore-executor scope) performs the edit + commit; dispatcher commits the status flip.</synopsis>
@@ -257,7 +258,8 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
   -->
 
   <chore id="tighten-i3-scholar-tool-namespace-regex"
-         status="open"
+         status="closed"
+         fulfillment="1038a32"
          blast-radius="docs/superpowers/multi/2026-05-22-scholar-plugin-sequence.xml"
          blocks-plans="">
     <synopsis>Tighten the I3 scholar-tool-namespace invariant regex in sequence.xml so it matches only registerTool `name:` fields and not `display_name:` test-fixture fields. Current gate: `grep -rhoE 'name:\s*"[^"]*"' src/server/tools/ 2&gt;/dev/null | grep -vE 'name:\s*"scholar\.' | grep -q . &amp;&amp; exit 1 || exit 0`. Fires false positives on src/server/tools/snapshot.test.ts:46 (`display_name: "Snapshot Test"`) and src/server/tools/roots.test.ts:44 (`display_name: "Daisy Corpus"`). Semantic intent is satisfied by hand-verification at every wave close (all `_register("scholar.<name>", ...)` call sites in src/server/tools/{corpus,roots,snapshot}.ts use scholar.* prefix), but the gate's textual output is misleading and noisy. Fix options: (a) restrict to `_register\(\s*"[^"]+"` and grep only the captured first argument, (b) anchor the regex to word-boundary or line-start so `display_name:` does not match, (c) exclude `display_name:` explicitly via additional `grep -v` step. Recommendation: option (a) is most precise — directly grep the actual `_register(...)` call sites instead of all `name:` fields. Mechanical-tier chore (copilot-cli, gpt-5-mini); pure regex substitution in one line of one XML file. Note: sequence.xml is read-only during plan-group execution per spec-pipeline invariant #13; this chore must wait until plan-group 2026-05-22-scholar-plugin closes status="closed" before dispatch.</synopsis>
