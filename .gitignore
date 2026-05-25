@@ -7,3 +7,9 @@ runtime/
 .DS_Store
 .tmp-*
 
+# Re-include the vendored pdf-server dist (cycle 6.2). The generic `dist/` rule
+# above would otherwise hide src/vendor/pdf-server/dist/, which MUST be tracked
+# so the packaging cycle can copy it verbatim into the .plugin archive.
+!src/vendor/pdf-server/dist/
+!src/vendor/pdf-server/dist/**
+
