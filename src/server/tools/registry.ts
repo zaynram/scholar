@@ -79,6 +79,7 @@ export interface ConfigAccessor {
    *                                  (§12.0 primitive rejects path traversal). Reads to
    *                                  undefined surface as a configuration-incomplete error
    *                                  from the backup tool.
+   *   - "crossref.mailto" : string  — CrossRef polite-tier `?mailto=` parameter (ingest cycle 6.4)
    *   - "ollama.host" / "ollama.model.embed" / "ollama.model.chat"
    *   - "scholar.askClaudeEnabled" — per-request opt-in default for cowork.askClaude
    *   - "ui.theme" / "ui.lastView"
