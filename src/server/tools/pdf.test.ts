@@ -264,6 +264,6 @@ test("refresh-extraction: NO_ACTIVE_CORPUS guard when ctx.db is undefined", asyn
   const ctx = fakeCtx(sqlite) as unknown as Record<string, unknown>;
   ctx.db = undefined;
   await expect(
-    refreshExtraction(ctx as Parameters<typeof refreshExtraction>[0], { paper_id: "p1" }),
+    refreshExtraction(ctx as unknown as Parameters<typeof refreshExtraction>[0], { paper_id: "p1" }),
   ).rejects.toThrow(/NO_ACTIVE_CORPUS/);
 });
