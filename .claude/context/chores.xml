@@ -13,7 +13,8 @@
   -->
 
   <chore id="license-audit-vendored-pdf-server"
-         status="open"
+         status="closed"
+         fulfillment="340ceb1"
          blast-radius="src/vendor/pdf-server/ docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="foundation packaging">
     <synopsis>Confirm @modelcontextprotocol/server-pdf@1.7.2's upstream license permits vendoring + redistribution under the scholar plugin's MIT license. Record the finding in src/vendor/pdf-server/PATCH.md (or a successor NOTICE file once §7.2 is finalized — the vendor is unmodified so no PATCH.md exists yet) and reflect the result in spec §7.2 and §17. Blocks foundation because cycle 6.2 vendors the dist; blocks packaging because cycle 6.13 archives it into the .plugin redistributable.</synopsis>
