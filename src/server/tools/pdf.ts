@@ -38,11 +38,11 @@ import { nowIso, ulid } from "../db/nowIso.ts";
 import { runRawDdl } from "../db/raw-ddl.ts";
 import { chunkText } from "../extraction/chunker.ts";
 import {
-  embedOllama,
+  ollama,
   DEFAULT_EMBED_MODEL,
   OllamaUnavailableError,
-} from "../extraction/ollama-http.ts";
-import { probeEmbedDimAndLoadVec } from "../extraction/vec-load.ts";
+} from "../ollama/client.ts";
+import { loadVecAndProbeDim } from "../ingest/primitives.ts";
 import type { RegisterTools, ServerContext } from "./registry.ts";
 
 // ─── error ────────────────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ async function materializeChunkVec(
   // Per §11 deferred-creation: probe Ollama for the embedding dimension, persist
   // settings.embed.{model,dim}, flip chunk_vec.created='true', then re-invoke
   // runRawDdl which now creates the vec0 table.
-  const result = probe ? await probe() : await probeEmbedDimAndLoadVec(db);
+  const result = probe ? await probe() : await loadVecAndProbeDim(db);
   const dimStr = String(result.dim);
   const modelStr = JSON.stringify(result.modelTag);
   db.run(sql.raw(
@@ -143,7 +143,7 @@ export async function refreshExtraction(
 
   // (4) Compute embeddings OUTSIDE the transaction (§13 discipline applied to
   //     extraction). Tests inject ctx.embed; production calls Ollama over HTTP.
-  const embed = ctx.embed ?? ((m: string, p: string) => embedOllama(m, p));
+  const embed = ctx.embed ?? ((m: string, p: string) => ollama.embed(m, p));
   const embeddings = await Promise.all(
     chunks.map((c) => embed(DEFAULT_EMBED_MODEL, c.text)),
   );

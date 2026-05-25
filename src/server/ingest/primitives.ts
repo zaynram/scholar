@@ -9,6 +9,9 @@
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import { rawClient } from "../db/raw-client.ts";
+import { resolveVec0Path } from "../db/sqlite-vec.ts";
+import { ollama, DEFAULT_EMBED_MODEL } from "../ollama/client.ts";
 
 export class SanitizeError extends Error { override name = "SanitizeError"; }
 export class PathEscapeError extends Error { override name = "PathEscapeError"; }
@@ -116,18 +119,27 @@ export function validateArxivId(id: string): string {
 
 /**
  * sqlite-vec load + dimension probe — called once per corpus at first open.
- * Foundation provides a typecheck-only stub; extraction cycle 6.5 fills the
- * full path: db.loadExtension(resolveVec0Path()) + POST /api/embeddings →
- * { dim: embedding.length, modelTag: embedModel }.
+ * Loads the vec0 extension on the raw bun:sqlite connection, then runs one
+ * tiny embed through Ollama to determine the embedding dimension.
+ * Returns { dim: embedding.length, modelTag: embedModel }.
+ *
+ * Filled at chore foundation-fill-loadvecanddim-primitive-and-migrate-extraction
+ * (2026-05-25). The ollamaUrl arg was dropped (was part of the original 3-arg stub
+ * signature); callers now rely on the ollama singleton which reads SCHOLAR_OLLAMA_URL.
  */
 export async function loadVecAndProbeDim(
-  _db: BunSQLiteDatabase,
-  _ollamaUrl: string,
-  _embedModel: string,
+  db: BunSQLiteDatabase,
+  embedModel: string = DEFAULT_EMBED_MODEL,
 ): Promise<{ dim: number; modelTag: string }> {
-  throw new VecLoadError(
-    "loadVecAndProbeDim is unimplemented at the foundation layer; filled by extraction cycle 6.5",
-  );
+  try {
+    rawClient(db).loadExtension(resolveVec0Path());
+  } catch (err) {
+    throw new VecLoadError(
+      `sqlite-vec loadExtension failed at ${resolveVec0Path()}: ${(err as Error).message}`,
+    );
+  }
+  const vec = await ollama.embed(embedModel, "scholar-vec-probe");
+  return { dim: vec.length, modelTag: embedModel };
 }
 
 /**

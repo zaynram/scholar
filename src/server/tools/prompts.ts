@@ -20,10 +20,10 @@ import { rawClient } from "../db/raw-client.ts";
 import { nowIso } from "../db/nowIso.ts";
 import { wrapUntrusted, sanitizeText } from "../ingest/primitives.ts";
 import {
-  chatOllama,
+  ollama,
   DEFAULT_CHAT_MODEL,
   OllamaUnavailableError,
-} from "../extraction/ollama-http.ts";
+} from "../ollama/client.ts";
 import type { RegisterTools, ServerContext } from "./registry.ts";
 
 // ─── error ────────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ export async function generatePrompts(
 
   let content: string;
   try {
-    content = await chatOllama(DEFAULT_CHAT_MODEL, [
+    content = await ollama.chat(DEFAULT_CHAT_MODEL, [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: prompt },
     ]);

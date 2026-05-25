@@ -1,10 +1,11 @@
 // src/server/ollama/client.test.ts — foundation cycle 6.1 (Task 1.9)
 //
-// Foundation pins the singleton surface; method bodies are filled by extraction
-// at cycle 6.5 (embed/listModels/healthCheck) and cycle 6.8 (chat). Foundation
-// asserts only that the methods exist and that the stubs throw "unimplemented".
+// Updated at chore foundation-fill-ollama-client-and-migrate-extraction
+// (2026-05-25): deleted the "stubs throw 'unimplemented'" test since the
+// methods now have real implementations. Retained: singleton surface
+// assertions (methods exist + default model constants exported correctly).
 import { test, expect } from "bun:test";
-import { ollama } from "./client.ts";
+import { ollama, DEFAULT_EMBED_MODEL, DEFAULT_CHAT_MODEL, OllamaUnavailableError } from "./client.ts";
 
 test("ollama exposes the foundation-frozen singleton surface", () => {
   expect(ollama).toBeDefined();
@@ -14,7 +15,23 @@ test("ollama exposes the foundation-frozen singleton surface", () => {
   expect(typeof ollama.healthCheck).toBe("function");
 });
 
-test("ollama method stubs throw 'unimplemented' at the foundation layer", async () => {
-  await expect(ollama.embed({ model: "x", input: "y" })).rejects.toThrow(/unimplemented/i);
-  await expect(ollama.chat({ model: "x", messages: [] })).rejects.toThrow(/unimplemented/i);
+test("DEFAULT_EMBED_MODEL defaults to nomic-embed-text:v1.5", () => {
+  // Only valid when SCHOLAR_OLLAMA_EMBED_MODEL is not set in test env.
+  // This asserts the §11 spec default; override via env var in production.
+  expect(DEFAULT_EMBED_MODEL).toBe(
+    process.env.SCHOLAR_OLLAMA_EMBED_MODEL ?? "nomic-embed-text:v1.5",
+  );
+});
+
+test("DEFAULT_CHAT_MODEL defaults to qwen3:8b", () => {
+  expect(DEFAULT_CHAT_MODEL).toBe(
+    process.env.SCHOLAR_OLLAMA_CHAT_MODEL ?? "qwen3:8b",
+  );
+});
+
+test("OllamaUnavailableError has correct code and name", () => {
+  const err = new OllamaUnavailableError("test");
+  expect(err.code).toBe("OLLAMA_UNAVAILABLE");
+  expect(err.name).toBe("OllamaUnavailableError");
+  expect(err instanceof Error).toBe(true);
 });

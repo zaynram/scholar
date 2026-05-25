@@ -23,10 +23,10 @@ import { z } from "zod";
 import { rawClient } from "../db/raw-client.ts";
 import { nowIso } from "../db/nowIso.ts";
 import {
-  embedOllama,
+  ollama,
   DEFAULT_EMBED_MODEL,
   OllamaUnavailableError,
-} from "../extraction/ollama-http.ts";
+} from "../ollama/client.ts";
 import type { RegisterTools, ServerContext } from "./registry.ts";
 
 // ─── error ────────────────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ export async function searchPapers(
   // Semantic: vec_distance_cosine asc → per-paper best (smallest) distance.
   let vecRank = new Map<string, number>();
   if (semanticOn) {
-    const embed = ctx.embed ?? ((m: string, p: string) => embedOllama(m, p));
+    const embed = ctx.embed ?? ((m: string, p: string) => ollama.embed(m, p));
     try {
       const qvec = await embed(DEFAULT_EMBED_MODEL, args.q);
       const vecRows = raw.prepare(
