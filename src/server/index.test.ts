@@ -5,7 +5,7 @@
 // so `--call` CLI mode can dispatch a tool by name without round-tripping
 // through the stdio MCP transport.
 import { test, expect } from "bun:test";
-import { buildServer, type BuildServerDeps } from "./index.ts";
+import { buildServer, spawnPdfChild, type BuildServerDeps } from "./index.ts";
 
 function makeDeps(overrides: Partial<BuildServerDeps> = {}): BuildServerDeps {
   return {
@@ -43,6 +43,12 @@ test("ServerContext.withCorpus snapshots ctx.db at entry", async () => {
     return snap;
   });
   expect((result as unknown as { tag: string }).tag).toBe("A");
+});
+
+test("spawnPdfChild is re-exported from foundation entry for corpus 6.3 handoff", () => {
+  // Foundation owns the production pdf-child spawner; corpus cycle 6.3
+  // (`scholar.corpus.activate`) imports it from this module surface.
+  expect(typeof spawnPdfChild).toBe("function");
 });
 
 test("dispatch throws structured unknown_tool error for unregistered tools", async () => {

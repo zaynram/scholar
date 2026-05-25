@@ -15,8 +15,17 @@ import {
 } from "./tools/registry.ts";
 import { registerUiResource } from "./ui/resource.ts";
 import { openWithPragmas } from "./db/migrations.ts";
+import { spawnPdfChild as productionSpawnPdfChild } from "./pdf/lifecycle.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+
+/**
+ * Re-export of the production pdf-child spawner so cycle 6.3 (corpus plan)
+ * can import it from the foundation module surface. Foundation does NOT call
+ * this during `main()` — pdf-child spawn is deferred per spec §7.3 step 5
+ * (must wait for an active corpus's roots; corpus.activate is the call site).
+ */
+export const spawnPdfChild = productionSpawnPdfChild;
 
 export interface BuildServerDeps {
   runtimeRoot: string;
