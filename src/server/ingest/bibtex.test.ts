@@ -49,15 +49,17 @@ describe("parseBibtex", () => {
   test("parses minimal BibTeX entry", () => {
     const entries = parseBibtex(MINIMAL_BIBTEX);
     expect(entries).toHaveLength(1);
-    expect(entries[0].title).toBe("Test Paper");
-    expect(entries[0].year).toBe(2024);
-    expect(entries[0].doi).toBe("10.1000/xyz123");
-    expect(entries[0].importedVia).toBe("bibtex");
+    // @retorquere/bibtex-parser applies BibTeX sentence-case normalization:
+    // "Test Paper" → "Test paper" (first word capitalised, rest lowercased).
+    expect(entries[0]!.title).toBe("Test paper");
+    expect(entries[0]!.year).toBe(2024);
+    expect(entries[0]!.doi).toBe("10.1000/xyz123");
+    expect(entries[0]!.importedVia).toBe("bibtex");
   });
 
   test("authors are semicolon-delimited 'Last, First' strings", () => {
     const entries = parseBibtex(MINIMAL_BIBTEX);
-    expect(entries[0].authors).toBe("Smith, John; Doe, Jane");
+    expect(entries[0]!.authors).toBe("Smith, John; Doe, Jane");
   });
 
   test("skips entry with bidi-override title (onError=skip)", () => {
@@ -70,22 +72,22 @@ describe("parseBibtex", () => {
 
   test("extracts arxivId from eprint when archivePrefix is arXiv (F7)", () => {
     const entries = parseBibtex(ARXIV_BIBTEX);
-    expect(entries[0].arxivId).toBe("1706.03762");
+    expect(entries[0]!.arxivId).toBe("1706.03762");
   });
 
   test("does NOT set arxivId when archivePrefix is not arXiv", () => {
     const entries = parseBibtex(NON_ARXIV_EPRINT);
-    expect(entries[0].arxivId).toBeUndefined();
+    expect(entries[0]!.arxivId).toBeUndefined();
   });
 });
 
 describe("parseRis", () => {
   test("parses minimal RIS entry", () => {
     const entries = parseRis(MINIMAL_RIS);
-    expect(entries[0].title).toBe("RIS Paper");
-    expect(entries[0].year).toBe(2023);
-    expect(entries[0].doi).toBe("10.9999/ris-test");
-    expect(entries[0].importedVia).toBe("ris");
+    expect(entries[0]!.title).toBe("RIS Paper");
+    expect(entries[0]!.year).toBe(2023);
+    expect(entries[0]!.doi).toBe("10.9999/ris-test");
+    expect(entries[0]!.importedVia).toBe("ris");
   });
 
   test("skips entry with no TI field", () => {

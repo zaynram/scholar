@@ -6,7 +6,6 @@
 import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test";
 import Database from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +16,10 @@ import { papers, citations } from "../db/schema.ts";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 // F1 test-isolation: mock the foundation helper so tests never hit the config DB pdf_roots table.
+// Use /tmp as the test root — it always exists, so realpathSync inside resolveUnderRoot won't throw ENOENT.
 mock.module("../db/default-pdf-root.ts", () => ({
-  allPdfRoots: (_tx: unknown, _corpusId: string) => ["/tmp/test-root"],
-  defaultPdfRoot: (_tx: unknown, _corpusId: string) => "/tmp/test-root",
+  allPdfRoots: (_tx: unknown, _corpusId: string) => ["/tmp"],
+  defaultPdfRoot: (_tx: unknown, _corpusId: string) => "/tmp",
   ConfigurationIncompleteError: class extends Error { override name = "ConfigurationIncompleteError"; },
 }));
 
@@ -33,9 +33,11 @@ const mockPdf: PdfChild = {
 
 function buildInMemoryCorpusDb(): BunSQLiteDatabase {
   const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON");
   const db = drizzle(sqlite);
   // F4: migrations MUST run — papers and citations tables don't exist otherwise.
-  migrate(db, { migrationsFolder: "./drizzle" });
+  // Use applyMigrations which resolves migrations relative to migrations.ts's import.meta.dir.
+  applyMigrations(db);
   return db;
 }
 
@@ -87,7 +89,7 @@ describe("papers table exists after migrate (F4 sanity)", () => {
 
 describe("Posture B: sqlite3-mcp never called", () => {
   test("ctx has no sqlite3 field", () => {
-    expect((built.ctx as Record<string, unknown>).sqlite3).toBeUndefined();
+    expect((built.ctx as unknown as Record<string, unknown>).sqlite3).toBeUndefined();
   });
 });
 
@@ -114,7 +116,7 @@ describe("scholar.ingest.bibtex", () => {
     });
     const rows = built.ctx.db!.select().from(papers).all();
     expect(rows).toHaveLength(1);
-    expect(rows[0].imported_via).toBe("bibtex");
+    expect(rows[0]!.imported_via).toBe("bibtex");
   });
 
   test("DOI-duplicate: second insert returns duplicate signal, row count stays 1", async () => {
@@ -134,7 +136,7 @@ describe("scholar.ingest.bibtex", () => {
     });
     const rows = built.ctx.db!.select().from(papers).all();
     expect(rows).toHaveLength(2);
-    expect(rows[0].key).not.toBe(rows[1].key);
+    expect(rows[0]!.key).not.toBe(rows[1]!.key);
   });
 });
 
@@ -143,7 +145,7 @@ describe("scholar.ingest.bibtex", () => {
 describe("scholar.ingest.manual", () => {
   test("inserts paper with correct importedVia", async () => {
     await d("scholar.ingest.manual", { title: "Manual Paper", year: 2023 });
-    expect(built.ctx.db!.select().from(papers).all()[0].imported_via).toBe("manual");
+    expect(built.ctx.db!.select().from(papers).all()[0]!.imported_via).toBe("manual");
   });
 
   test("rejects pdfPath outside every PDF root (PathEscapeError)", async () => {
@@ -196,7 +198,7 @@ describe("scholar.ingest.doi (citations)", () => {
     const origFetch = globalThis.fetch;
     globalThis.fetch = mock((_url: string) =>
       Promise.resolve(new Response(JSON.stringify(mockCrossref), { status: 200 })),
-    ) as typeof fetch;
+    ) as unknown as typeof fetch;
     try {
       await d("scholar.ingest.doi", { doi: "10.1000/citing" });
     } finally {
@@ -207,6 +209,6 @@ describe("scholar.ingest.doi (citations)", () => {
     // citations table must contain exactly one row: citing → cited
     const citationRows = db.select().from(citations).all();
     expect(citationRows).toHaveLength(1);
-    expect(citationRows[0].cited_id).toBeDefined();
+    expect(citationRows[0]!.cited_id).toBeDefined();
   });
 });
