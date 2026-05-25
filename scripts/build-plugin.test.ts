@@ -86,8 +86,11 @@ afterAll(() => {
 });
 
 // Helper: spawn the build script with fixture env, collect exit code + stderr.
+// process.execPath is used instead of "bun" to avoid PATH-resolution failure
+// when the SCHOLAR_BUILD_NO_C_TOOLCHAIN test overrides PATH to an empty dir —
+// Bun.spawn resolves the executable name from the env-supplied PATH.
 async function runBuildScript(buildRoot: string, pluginOut: string, extraEnv: Record<string, string> = {}) {
-  const proc = Bun.spawn(["bun", resolve("scripts/build-plugin.ts")], {
+  const proc = Bun.spawn([process.execPath, resolve("scripts/build-plugin.ts")], {
     env: {
       ...process.env,
       BUILD_FIXTURE: "1",
@@ -179,7 +182,8 @@ test("archive .mcp.json is valid JSON and command path is present in archive", a
   expect(serverEntry).toBeDefined();
 
   // Strip leading ./ and verify the command binary is present in the archive
-  const commandRel = serverEntry.command.replace(/^\.\//, "");
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const commandRel = serverEntry!.command.replace(/^\.\//, "");
   expect(Object.keys(entries), `command path '${commandRel}' not found in archive`)
     .toContain(commandRel);
 });
