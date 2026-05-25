@@ -1,0 +1,313 @@
+// src/server/pdf/lifecycle.ts — foundation cycle 6.2 (Task 2.2)
+//
+// scholar's client-side MCP-roots responder for the vendored pdf-server child.
+// Per spec §7.2, root injection MUST flow through the supported MCP protocol:
+//   1. scholar advertises `capabilities.roots.listChanged = true` in `initialize`.
+//   2. scholar registers a `ListRootsRequestSchema` handler returning the active
+//      corpus's PDF roots as `file://` URIs.
+//   3. On mutation, scholar emits `notifications/roots/list_changed`; the upstream
+//      `refreshRoots` then clears and re-fills its `allowedLocalDirs` from us.
+//
+// Additionally per §16 / foundation-006 item 10 (retained in -007/-008/-009):
+//   - Windows Job Object orphan reaping via koffi FFI (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
+//   - Linux best-effort: setPdeathsig stub (Bun/Node spawn doesn't expose pre-exec).
+//   - Supervised respawn with exponential backoff [1s, 2s, 4s, 8s, 30s], 5-trip crash-loop
+//     terminal, currentRoots survives respawn (lives in closure, not in the child).
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { existsSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { resolve, join, isAbsolute } from "node:path";
+import pLimit from "../util/p-limit.ts";
+import type { PdfChild } from "../tools/registry.ts";
+
+export interface SpawnOpts {
+  initialRoots: string[];
+  /** Override the child entrypoint path (test harness uses a stub). */
+  childEntrypoint?: string;
+  /** Override the bun runtime path (default: process.execPath). */
+  bunRuntime?: string;
+  /** Disable supervised respawn (test harness, default false). */
+  disableSupervisor?: boolean;
+}
+
+export interface PdfChildHandle extends PdfChild {
+  setRoots(paths: string[]): Promise<void>;
+  refreshChildRoots(): Promise<void>;
+  childPid(): number | undefined;
+  debugIntrospectAllowedDirs(): Promise<string[]>;
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Pure-logic helper: returns the `capabilities` object passed to the MCP Client
+ * constructor. Exposed for unit-test assertion on the load-bearing
+ * `roots.listChanged = true` invariant (§7.2 precondition #1).
+ */
+export function buildClientCapabilities(): { roots: { listChanged: boolean } } {
+  return { roots: { listChanged: true } };
+}
+
+/**
+ * Filters + canonicalises a candidate root list.
+ *   - drops non-absolute paths
+ *   - drops paths that don't exist
+ *   - resolves through realpathSync (follows symlinks)
+ *   - dedupes by realpath
+ */
+export function sanitizeRoots(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    if (typeof p !== "string" || !p) continue;
+    const abs = resolve(p);
+    if (!isOsAbsolute(abs)) continue;
+    if (!existsSync(abs)) continue;
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      continue;
+    }
+    if (seen.has(real)) continue;
+    seen.add(real);
+    out.push(real);
+  }
+  return out;
+}
+
+function isOsAbsolute(p: string): boolean {
+  // Windows: drive-letter or UNC. POSIX: leading /.
+  return process.platform === "win32" ? /^[A-Za-z]:[\\/]|^\\\\/.test(p) : isAbsolute(p);
+}
+
+function fileUrlToPath(uri: string): string {
+  return new URL(uri).pathname.replace(/^\/([A-Za-z]):/, "$1:");
+}
+
+// =========================================================================
+// Supervised spawn implementation.
+// =========================================================================
+
+const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 30_000] as const;
+const CRASH_LOOP_THRESHOLD_MS = 1_000;
+const CRASH_LOOP_TRIPS = 5;
+
+function resolveChildEntrypoint(override?: string): string {
+  if (override) return override;
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ?? resolve(import.meta.dir, "..", "..", "..");
+  return join(pluginRoot, "src", "vendor", "pdf-server", "dist", "index.js");
+}
+
+function resolveBunRuntime(override?: string): string {
+  if (override) return override;
+  // Bun is the runtime in dev AND packaged (build/runtime/bun{.exe}). The
+  // dispatcher gets process.execPath at runtime so this works in both layouts.
+  return process.execPath;
+}
+
+export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
+  let currentRoots: string[] = sanitizeRoots(opts.initialRoots);
+  let lastOkAt: number | null = null;
+  let shuttingDown = false;
+  let backoffIdx = 0;
+  let lastCrashAt = 0;
+  let crashTrips = 0;
+  let terminalCrashLoop = false;
+
+  const childPath = resolveChildEntrypoint(opts.childEntrypoint);
+  const bunPath = resolveBunRuntime(opts.bunRuntime);
+
+  let activeClient: Client | undefined;
+  let activeTransport: StdioClientTransport | undefined;
+  let activePid: number | undefined;
+
+  // Single-slot mutex over root mutations.
+  const mutex = pLimit(1);
+
+  async function attemptSpawn(): Promise<void> {
+    const transport = new StdioClientTransport({
+      command: bunPath,
+      args: ["run", childPath, "--stdio"],
+    });
+
+    const client = new Client(
+      { name: "scholar", version: "0.1.0" },
+      { capabilities: buildClientCapabilities() },
+    );
+
+    // Roots responder — the load-bearing piece per §7.2 precondition #2.
+    client.setRequestHandler(ListRootsRequestSchema, async () => ({
+      roots: sanitizeRoots(currentRoots).map((p) => ({ uri: pathToFileURL(p).toString() })),
+    }));
+
+    await client.connect(transport);
+    activeClient = client;
+    activeTransport = transport;
+
+    // Try to recover the underlying child PID from the transport (private surface).
+    activePid = (transport as unknown as { _process?: { pid?: number } })._process?.pid;
+    if (activePid && process.platform === "win32") {
+      attachJobObject(activePid);
+    } else if (activePid && process.platform === "linux") {
+      setPdeathsig(activePid);
+    }
+
+    lastOkAt = Date.now();
+    backoffIdx = 0;
+
+    // Wire supervisor: detect unexpected exit and schedule respawn.
+    if (!opts.disableSupervisor) {
+      transport.onclose = () => {
+        if (shuttingDown || terminalCrashLoop) return;
+        const now = Date.now();
+        if (lastCrashAt !== 0 && now - lastCrashAt < CRASH_LOOP_THRESHOLD_MS) {
+          crashTrips += 1;
+          if (crashTrips >= CRASH_LOOP_TRIPS) {
+            terminalCrashLoop = true;
+            return;
+          }
+        } else {
+          crashTrips = 1;
+        }
+        lastCrashAt = now;
+        const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)]!;
+        backoffIdx = Math.min(backoffIdx + 1, BACKOFF_MS.length - 1);
+        setTimeout(() => {
+          if (shuttingDown || terminalCrashLoop) return;
+          attemptSpawn().catch(() => {
+            /* swallow — next onclose will retry */
+          });
+        }, delay);
+      };
+    }
+  }
+
+  await attemptSpawn();
+
+  async function setRoots(paths: string[]): Promise<void> {
+    await mutex(async () => {
+      currentRoots = sanitizeRoots(paths);
+      await activeClient?.sendRootsListChanged();
+      lastOkAt = Date.now();
+    });
+  }
+
+  async function refreshChildRoots(): Promise<void> {
+    await activeClient?.sendRootsListChanged();
+    lastOkAt = Date.now();
+  }
+
+  const handle: PdfChildHandle = {
+    async interact(commands, opts) {
+      const [first] = commands as Array<{ type: string; [k: string]: unknown }>;
+      if (!first) return null;
+      // The "type" key is scholar's internal envelope; the upstream child knows
+      // tool names directly. Strip type before forwarding.
+      const { type, ...rest } = first;
+      const r = await activeClient!.callTool({ name: type, arguments: rest }, undefined, {
+        timeout: opts?.timeoutMs ?? 30_000,
+      });
+      lastOkAt = Date.now();
+      return r;
+    },
+    async getText(viewUUID, opts) {
+      const r = await activeClient!.callTool(
+        { name: "get_text", arguments: { viewUUID } },
+        undefined,
+        { timeout: opts?.timeoutMs ?? 120_000 },
+      );
+      lastOkAt = Date.now();
+      // The upstream `get_text` returns structured content; flatten to a string.
+      if (typeof r === "string") return r;
+      const content = (r as { content?: Array<{ type: string; text?: string }> }).content;
+      if (Array.isArray(content)) {
+        return content
+          .filter((c) => c.type === "text" && typeof c.text === "string")
+          .map((c) => c.text!)
+          .join("");
+      }
+      return JSON.stringify(r);
+    },
+    currentRoots: () => [...currentRoots],
+    isHealthy: () => ({
+      alive: !!activeClient && !terminalCrashLoop,
+      lastOkAt,
+      stdioOpen: !!activeTransport,
+    }),
+    setRoots,
+    refreshChildRoots,
+    childPid: () => activePid,
+    async debugIntrospectAllowedDirs() {
+      // Upstream pdf MCP @1.7.2 does not expose a list_roots tool; we fall back
+      // to currentRoots as a best-effort proxy. The downstream extraction plan
+      // can add a richer probe if upstream gains one.
+      return [...currentRoots];
+    },
+    async shutdown() {
+      shuttingDown = true;
+      try {
+        await activeClient?.close();
+      } catch {
+        /* ignore */
+      }
+      activeClient = undefined;
+      activeTransport = undefined;
+    },
+  };
+  return handle;
+}
+
+// =========================================================================
+// Windows Job Object orphan reaping (koffi FFI).
+// =========================================================================
+function attachJobObject(childPid: number): void {
+  try {
+    // Lazy-require so non-Windows tests don't load the FFI binding.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const koffi = require("koffi") as typeof import("koffi");
+    const kernel32 = koffi.load("kernel32.dll");
+
+    const CreateJobObjectW = kernel32.func("HANDLE CreateJobObjectW(void*, void*)");
+    const SetInformationJobObject = kernel32.func(
+      "BOOL SetInformationJobObject(HANDLE, int, void*, uint32)",
+    );
+    const AssignProcessToJobObject = kernel32.func("BOOL AssignProcessToJobObject(HANDLE, HANDLE)");
+    const OpenProcess = kernel32.func("HANDLE OpenProcess(uint32, BOOL, uint32)");
+
+    const job = CreateJobObjectW(null, null) as unknown as number;
+    if (!job) throw new Error("CreateJobObjectW failed");
+
+    // JOBOBJECT_EXTENDED_LIMIT_INFORMATION with LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000).
+    const limitInfo = Buffer.alloc(112);
+    limitInfo.writeUInt32LE(0x2000, 16); // LimitFlags offset
+    const ok = SetInformationJobObject(
+      job,
+      9 /* JobObjectExtendedLimitInformation */,
+      limitInfo,
+      limitInfo.length,
+    );
+    if (!ok) throw new Error("SetInformationJobObject failed");
+
+    const PROCESS_SET_QUOTA = 0x0100;
+    const PROCESS_TERMINATE = 0x0001;
+    const hChild = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, childPid) as unknown as number;
+    if (!hChild) throw new Error("OpenProcess failed");
+    if (!AssignProcessToJobObject(job, hChild)) throw new Error("AssignProcessToJobObject failed");
+    // Intentionally leak `job` — releasing the handle closes the job and terminates
+    // the child immediately. We rely on process exit to release.
+  } catch (err) {
+    // Non-fatal — supervisor still reaps on clean exit. Log to stderr.
+    console.error(JSON.stringify({ lvl: "warn", m: "Job Object attach failed", err: String(err) }));
+  }
+}
+
+function setPdeathsig(_childPid: number): void {
+  // The Linux equivalent (PR_SET_PDEATHSIG, SIGKILL) must run in the child
+  // after fork but before exec — Node/Bun's spawn doesn't expose a pre-exec
+  // hook. Foundation accepts the limitation: orphan reaping on Linux relies on
+  // the SDK transport's child cleanup + scholar's own shutdown handler.
+  // koffi-based prctl from the parent is not equivalent (it acts on parent PID).
+  // Documented as a known gap; matches §16 "set on Linux for parity" intent.
+}
