@@ -25,6 +25,14 @@ export interface PdfChild {
   /** Default timeoutMs = 120_000 (text extraction can be slow on large papers). */
   getText(viewUUID: string, opts?: { timeoutMs?: number }): Promise<string>;
   currentRoots(): string[];
+  /**
+   * Update the set of file:// roots scholar advertises to the pdf child via
+   * the MCP `roots/list_changed` protocol. The pdf child responds to the
+   * resulting `roots/list` request with the new set. Used by corpus.activate
+   * (to install the active corpus's roots) and by scholar.roots.add/remove
+   * (to push live mutations). Implementation lives in src/server/pdf/lifecycle.ts.
+   */
+  setRoots(roots: string[]): Promise<void>;
   isHealthy(): { alive: boolean; lastOkAt: number | null; stdioOpen: boolean };
 }
 

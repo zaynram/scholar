@@ -15,6 +15,7 @@ function makeDeps(overrides: Partial<BuildServerDeps> = {}): BuildServerDeps {
       interact: async () => null,
       getText: async () => "",
       currentRoots: () => [],
+      setRoots: async () => {},
       isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
     }),
     ...overrides,

@@ -5,11 +5,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import { sql } from "drizzle-orm";
 import {
   registerAll,
   type PdfChild,
   type ServerContext,
   type ConfigAccessor,
+  type CorpusRow,
   type Logger,
   type ToolRegistry,
 } from "./tools/registry.ts";
@@ -72,14 +74,43 @@ function makeStdoutLogger(quiet: boolean): Logger {
   };
 }
 
-function buildConfigAccessor(_configDb: BunSQLiteDatabase): ConfigAccessor {
-  // Foundation provides the type-correct shape; corpus plan (cycle 6.3) fills
-  // the real DB-backed implementation. Until then every method returns empties.
+function buildConfigAccessor(configDb: BunSQLiteDatabase): ConfigAccessor {
+  // Foundation-owned implementation (filled by chore foundation-fill-corpus-prereqs
+  // 2026-05-25). Reads/writes the `settings` table for typed key-value config
+  // and the `corpora` table for the canonical corpus list. The activeCorpusId
+  // read-path comes from the settings table (key='activeCorpusId'); corpus.activate
+  // is responsible for keeping the settings row in sync with runtime/config.json
+  // (the DB UPDATE is the durable point per spec §7.3; config.json is a
+  // denormalized cache used at startup before the active corpus DB is opened).
   return {
-    get: () => undefined,
-    set: () => {},
-    corpora: () => [],
-    activeCorpusId: () => undefined,
+    get<T>(key: string): T | undefined {
+      const row = configDb.all(
+        sql`SELECT value FROM settings WHERE key = ${key}`,
+      ) as { value: string }[];
+      if (row.length === 0) return undefined;
+      return JSON.parse(row[0]!.value) as T;
+    },
+    set(key: string, value: unknown): void {
+      const serialized = JSON.stringify(value);
+      configDb.run(
+        sql`INSERT INTO settings (key, value) VALUES (${key}, ${serialized})
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      );
+    },
+    corpora(): CorpusRow[] {
+      return configDb.all(
+        sql`SELECT id, display_name, archived_at, last_opened_at, created_at
+            FROM corpora ORDER BY created_at ASC`,
+      ) as CorpusRow[];
+    },
+    activeCorpusId(): string | undefined {
+      const row = configDb.all(
+        sql`SELECT value FROM settings WHERE key = 'activeCorpusId'`,
+      ) as { value: string }[];
+      if (row.length === 0) return undefined;
+      const parsed = JSON.parse(row[0]!.value) as string | null;
+      return parsed ?? undefined;
+    },
   };
 }
 
@@ -105,6 +136,9 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
       throw new Error("PDF_CHILD_UNAVAILABLE");
     },
     currentRoots: () => [],
+    setRoots: async () => {
+      throw new Error("PDF_CHILD_UNAVAILABLE");
+    },
     isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
   };
 

@@ -31,3 +31,24 @@ export function defaultPdfRoot(tx: BunSQLiteDatabase, corpusId: string): string 
   }
   return rows[0]!.path;
 }
+
+/**
+ * Cross-plan helper (foundation-owned). Returns all pdf_roots.path rows for
+ * the given corpus in insertion order (pdf_roots.id ASC, which is equivalent
+ * to created_at ASC given the AUTOINCREMENT primary key). Empty array is valid —
+ * the corpus exists but has no roots configured yet (the UI surfaces this as
+ * a "configure a PDF root" affordance).
+ *
+ * Used by corpus.activate (`ctx.pdf.setRoots(allPdfRoots(tx, corpusId))`) and
+ * by scholar.roots.list. Follows the tx-first cross-plan-helper convention
+ * (CLAUDE.md): callers wrap inside `db.transaction(tx => allPdfRoots(tx, id))`.
+ *
+ * Note: the pdf_roots schema uses AUTOINCREMENT `id` for ordering (no created_at
+ * column); `id ASC` is the stable insertion-order proxy.
+ */
+export function allPdfRoots(tx: BunSQLiteDatabase, corpusId: string): string[] {
+  const rows = tx.all(
+    sql`SELECT path FROM pdf_roots WHERE corpus_id = ${corpusId} ORDER BY id ASC`,
+  ) as { path: string }[];
+  return rows.map((r) => r.path);
+}

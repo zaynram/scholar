@@ -3,10 +3,10 @@
 // Per spec §8.1: defaultPdfRoot(corpusId) asserts exactly one is_default=true
 // row matches. The pdf_roots_one_default_idx partial unique index makes
 // "more than one" impossible; "zero" surfaces as ConfigurationIncompleteError.
-import { test, expect } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Database } from "bun:sqlite";
-import { defaultPdfRoot, ConfigurationIncompleteError } from "./default-pdf-root.ts";
+import { defaultPdfRoot, ConfigurationIncompleteError, allPdfRoots } from "./default-pdf-root.ts";
 
 function makeDb() {
   const raw = new Database(":memory:");
@@ -46,4 +46,37 @@ test("ignores rows from other corpora", () => {
   const { tx, raw } = makeDb();
   raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 1)", ["other", "/wrong"]);
   expect(() => defaultPdfRoot(tx, "c1")).toThrow(ConfigurationIncompleteError);
+});
+
+// =========================================================================
+// allPdfRoots — chore foundation-fill-corpus-prereqs 2026-05-25
+// =========================================================================
+
+describe("allPdfRoots", () => {
+  test("returns empty array when corpus has no pdf_roots rows", () => {
+    const { tx } = makeDb();
+    expect(allPdfRoots(tx, "c1")).toEqual([]);
+  });
+
+  test("returns single path when corpus has one pdf_roots row", () => {
+    const { tx, raw } = makeDb();
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 0)", ["c1", "/papers"]);
+    expect(allPdfRoots(tx, "c1")).toEqual(["/papers"]);
+  });
+
+  test("returns paths in insertion order (id ASC) for multiple rows", () => {
+    const { tx, raw } = makeDb();
+    // Insert in order: first /alpha, then /beta, then /gamma — expect same order back.
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 0)", ["c1", "/alpha"]);
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 0)", ["c1", "/beta"]);
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 1)", ["c1", "/gamma"]);
+    expect(allPdfRoots(tx, "c1")).toEqual(["/alpha", "/beta", "/gamma"]);
+  });
+
+  test("excludes rows for other corpora", () => {
+    const { tx, raw } = makeDb();
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 1)", ["other", "/wrong"]);
+    raw.run("INSERT INTO pdf_roots (corpus_id, path, is_default) VALUES (?, ?, 0)", ["c1", "/correct"]);
+    expect(allPdfRoots(tx, "c1")).toEqual(["/correct"]);
+  });
 });
