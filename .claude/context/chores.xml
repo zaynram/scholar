@@ -110,7 +110,8 @@
   </chore>
 
   <chore id="align-spec-vec0-fallback-with-implementation"
-         status="open"
+         status="closed"
+         fulfillment="e0f9f69"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="packaging">
     <synopsis>Verify spec §14.1 step 5 + §16 (sqlite-vec risks row) prose match what packaging cycle 6.13 actually implements after packaging-004 lands the I2 ruling (user ruled (a) on 2026-05-24: reinstate compile-from-source vec0 fallback). Spec already pins the compile-from-source posture but uses generic prose; chore verifies that the post-revision spec text accurately reflects: (1) ABI-mismatch detection via try/catch on prebuilt-vec0 load with SQLite-version-mismatch error classification, (2) `cc` invocation against vendored sqlite-vec source with Bun-runtime SQLite headers, (3) compiled-artifact cache at runtime/vendor/sqlite-vec/vec0.&lt;ext&gt;, (4) C toolchain as build-environment requirement (NOT runtime user dep) documented in README "Building from source". Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini); edit is prose tightening + cross-reference to packaging-004's cycle 6.13 narrative.</synopsis>
@@ -124,7 +125,8 @@
   </chore>
 
   <chore id="vendor-sqlite-vec-source"
-         status="open"
+         status="closed"
+         fulfillment="e0f9f69"
          blast-radius="src/vendor/sqlite-vec/ docs/ docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="packaging">
     <synopsis>Vendor the upstream sqlite-vec source (vec0.c + sqlite3.h + license file + README) into src/vendor/sqlite-vec/ so packaging cycle 6.13's compile-from-source fallback (per I2 ruling on 2026-05-24, user picked option (a)) has the source tree to compile against. Pinned version: sqlite-vec must match the prebuilt-binary version foundation-009 pulls in via npm/cargo (verify before vendoring; mismatch defeats the fallback's "same ABI" property). Also: (1) confirm upstream license (likely Apache-2.0 or MIT) permits vendoring + redistribution under the scholar plugin's MIT license, (2) record license confirmation in src/vendor/sqlite-vec/LICENSE or NOTICE, (3) update spec §7.2 to enumerate sqlite-vec as a second vendored component alongside @modelcontextprotocol/server-pdf, (4) update spec §16 to reflect that the C-toolchain risk-row's "vendored sqlite-vec source" reference is now concretely located at src/vendor/sqlite-vec/. Interpretive-tier chore (Claude subagent, sonnet); requires judgment on license compatibility + version pinning + how to document the revendor process. Sibling chore for the revendor process (mirror of upstream-pdf-server-revendor-process) should be filed if v1 needs documented refresh procedure — defer that to v1.1 unless packaging or foundation requests it earlier. BLOCKS packaging cycle 6.13 execution because the compile-fallback's SCHOLAR_BUILD_VEC_SOURCE_MISSING error path would fire at every fallback attempt without the vendoring.</synopsis>
