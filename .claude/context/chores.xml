@@ -69,7 +69,8 @@
   -->
 
   <chore id="amend-spec-drop-sqlite3-mcp"
-         status="open"
+         status="closed"
+         fulfillment="60d7f4e"
          blast-radius="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
          blocks-plans="">
     <synopsis>Amend spec §7.4, §7.6, §10, §6.12 to reflect posture-B (sqlite3-mcp dropped as a delegated dependency; scholar reimplements query/backup/inspect natively in cycle 6.14). Driver: user ruling on 2026-05-24 after primary-source inspection of /home/ramda/code/claude-lib/mcpb/mcp-sqlite3 revealed it is a Python/uv FastMCP server (unvendorable for bun --compile single-file distribution). Specific edits: (1) §7.4 — remove sqlite3-mcp from the delegated-tools list; (2) §7.6 — remove `sqlite3: Sqlite3McpChild` field from ServerContext frozen-contract type; (3) §10 — replace "delegated to sqlite3-mcp via register_db" prose with "natively implemented in src/server/tools/{query,backup,inspect}.ts per cycle 6.14"; (4) §6.12 — remove the cycle entirely (sqlite3-mcp integration cycle is OBSOLETE post-pivot). Analytical-tier chore (Claude subagent, opus); requires judgment on which sub-clauses to preserve vs. delete vs. rewrite. Foundation-009 + extraction-003 + corpus-005 plan-mds all reference this amendment; the chore execution must produce a spec consistent with what those plan-mds describe.</synopsis>
