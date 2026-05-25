@@ -1,18 +1,71 @@
-// src/server/tools/inspect.ts — foundation cycle 6.1 scaffold (Task 1.7)
-// Body filled by corpus plan at cycle 6.3 (per splits.xml).
+// src/server/tools/inspect.ts — extraction cycle 6.14 (Green)
 //
-// Foundation-009 contract for downstream plans filling this body:
-//   - Call `_register(name, def, handler)` (NOT `_server.registerTool(...)` directly)
-//     for every tool you register from this module. The foundation-supplied helper
-//     both wires the MCP-side stdio handler AND records the handler in the
-//     ToolRegistry that scholar's `--call` CLI mode dispatches from.
-//   - `handler` is `(args, ctx) => Promise<unknown>`. Throw to signal errors;
-//     foundation's CLI dispatcher converts thrown errors with errorCode/message/
-//     details shape into structured-error JSON on stderr.
-//   - You MAY call `_server.registerResource(...)` directly for non-tool surfaces
-//     (the ToolRegistry only tracks tool handlers).
-import type { RegisterTools } from "./registry.ts";
+// scholar.inspect — no-args dump of sqlite_master tables + indexes for the
+// active corpus DB. Filters sqlite_* internal objects. Power-user per-table
+// introspection is delegated to scholar.query so we don't open a
+// SQL-identifier-validation path nobody asked for (advisor guidance).
 
-export const registerTools: RegisterTools = (_server, _ctx, _register) => {
-  // intentionally empty — foundation scaffold.
+import { z } from "zod";
+import { rawClient } from "../db/raw-client.ts";
+import type { RegisterTools, ServerContext } from "./registry.ts";
+
+// ─── error ────────────────────────────────────────────────────────────────────
+
+export class InspectToolError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "InspectToolError";
+  }
+}
+
+// ─── shapes ───────────────────────────────────────────────────────────────────
+
+export type InspectResult = {
+  tables: Array<{ name: string; sql: string }>;
+  indexes: Array<{ name: string; table: string; sql: string | null }>;
+};
+
+// ─── handler ──────────────────────────────────────────────────────────────────
+
+export async function runInspect(ctx: ServerContext): Promise<InspectResult> {
+  const db = ctx.db;
+  if (!db) {
+    throw new InspectToolError(
+      "NO_ACTIVE_CORPUS",
+      "NO_ACTIVE_CORPUS: scholar.inspect requires an active corpus.",
+    );
+  }
+  const raw = rawClient(db);
+
+  const tables = raw.prepare(
+    `SELECT name, sql FROM sqlite_master
+     WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+     ORDER BY name`,
+  ).all() as Array<{ name: string; sql: string }>;
+
+  const indexes = raw.prepare(
+    `SELECT name, tbl_name AS "table", sql FROM sqlite_master
+     WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+     ORDER BY tbl_name, name`,
+  ).all() as Array<{ name: string; table: string; sql: string | null }>;
+
+  return { tables, indexes };
+}
+
+// ─── registerTools ────────────────────────────────────────────────────────────
+
+export const registerTools: RegisterTools = (_server, ctx, _register) => {
+  _register(
+    "scholar.inspect",
+    {
+      description:
+        "Return the active corpus DB's user tables and indexes from sqlite_master " +
+        "(no arguments). Filters sqlite_* internal objects. Use scholar.query for " +
+        "targeted per-object introspection.",
+      inputSchema: z.object({}).passthrough(),
+    },
+    async () => await runInspect(ctx),
+  );
 };

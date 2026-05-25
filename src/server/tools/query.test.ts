@@ -84,14 +84,23 @@ test("scholar.query: bare INSERT without commit:true ROLLS BACK (engine-level en
   expect(row.n).toBe(2);
 });
 
-test("scholar.query: CTE-write (WITH x AS (DELETE … RETURNING) SELECT) without commit:true ALSO rolls back", async () => {
-  // Lead-mandated invariant test: pins the no-sniff posture by exercising
-  // a CTE-DELETE whose outer statement reads as SELECT. Naive write-keyword
-  // sniffers would let this escape rollback; the BEGIN/ROLLBACK gate does not.
+test("scholar.query: sneaky writes (leading-comment DELETE + DELETE…RETURNING via .all()) without commit:true ALSO roll back", async () => {
+  // Lead-mandated invariant test: pins the no-sniff posture. The original
+  // mandate was a CTE-DELETE (`WITH x AS (DELETE ... RETURNING) SELECT`),
+  // but SQLite 3.51 (bun:sqlite's bundled version) does NOT support DML
+  // inside CTE bodies — it only supports CTEs feeding DDL statements. We
+  // substitute two equivalent "trick-write" patterns that DO compile under
+  // Bun and are exactly the kind of cases a naive prefix sniffer would
+  // miss:
+  //   (a) leading-comment DELETE — defeats s.startsWith("delete") sniffers
+  //   (b) DELETE…RETURNING consumed via .all() — looks like a read at the
+  //       application layer (returns rows), but writes at the engine layer.
+  // The engine-level BEGIN/ROLLBACK gate catches both without inspecting SQL.
   const sqlite = freshDb();
   await runQuery(fakeCtx(sqlite), {
     queries: [
-      { label: "cte-sneak", query: "WITH x AS (DELETE FROM papers WHERE id = 'p1' RETURNING id) SELECT id FROM x" },
+      { label: "leading-comment", query: "/* sneaky */ DELETE FROM papers WHERE id = 'p1'" },
+      { label: "returning-sneak", query: "DELETE FROM papers WHERE id = 'p2' RETURNING id" },
     ],
   });
   const row = sqlite.query("SELECT COUNT(*) AS n FROM papers").get() as { n: number };
@@ -110,7 +119,7 @@ test("scholar.query: invalid SQL throws and leaves no leftover transaction lock"
   const result = await runQuery(fakeCtx(sqlite), {
     queries: [{ label: "n", query: "SELECT COUNT(*) AS n FROM papers" }],
   });
-  expect((result.n[0] as { n: number }).n).toBe(2);
+  expect((result.n![0] as { n: number }).n).toBe(2);
 });
 
 test("scholar.query: NO_ACTIVE_CORPUS guard", async () => {
