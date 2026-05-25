@@ -186,5 +186,47 @@ PART D — Optional additives DEFERRED (lead disposition 2026-05-24): `snippet?:
 
 Acceptance criteria summary: (1) F2 test rewritten against MCP resources/read URI; PENDING comment removed; (2) all three Contract 3 tool surfaces match extraction-003 shapes verbatim; (3) four named Red tests (SA1 pill, SA2 capability+forward, SA3 scope_key enum, SA4 use_claude default-false) landed with the spec-§/CLAUDE.md anchor quotes preserved as the test docstrings or adjacent comments so future maintainers can trace the invariant to the spec; (4) optional additives explicitly NOT added with a one-line deferral note. Blast radius confined to docs/superpowers/plans/2026-05-22-scholar-plugin-frontends.md (chore is a plan-md amendment, NOT a src/ edit; src/ edits ride the eventual frontends-cycle-6.9 execution). Interpretive-tier chore (Claude subagent, sonnet) — requires judgment on insertion points within frontends-005's existing task list, on phrasing of Red test docstrings, and on preserving the four anchor quotes verbatim without paraphrase drift. Companion to chore `pin-ui-scholar-pdf-resource-scheme-in-frontends` which provides the URI scheme that Part A's rewritten F2 test asserts against — execute that chore first or together.</synopsis>
   </chore>
+
+  <!--
+    Cosmetic-drift sweep (filed 2026-05-24 by exec-multi-plan orchestrator
+    after registry reconciliation commit 365deb5). The 365deb5 commit fixed
+    load-bearing cycle/blast-radius/gate drift introduced by the 5 spec
+    amendments + spec-to-multi-plan atomic commit. The drifts captured below
+    are functionally inert — synopsis-text and plan-md prose references —
+    but mislead readers and could erode confidence. Filed as a single
+    mechanical-tier docs-sweep chore (NOT a TeamCreate precondition; can
+    dispatch during a wave's idle window).
+  -->
+
+  <chore id="cosmetic-drift-sweep-post-posture-b"
+         status="open"
+         blast-radius=".claude/context/plans.xml docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml docs/superpowers/plans/2026-05-22-scholar-plugin-ingest.md docs/superpowers/plans/2026-05-22-scholar-plugin-annotations.md docs/superpowers/plans/2026-05-22-scholar-plugin-packaging.md docs/superpowers/plans/2026-05-22-scholar-plugin-extraction.md"
+         blocks-plans="">
+    <synopsis>Sweep documentation prose drifts left behind by posture-B (sqlite3-mcp drop + cycle 6.14 addition) and the splits.xml/plans.xml synopsis text that pre-dates the cycle attribute reconciliation in commit 365deb5. Six targeted edits across six files; none affect coordination semantics (load-bearing fields already reconciled in 365deb5).
+
+PART A — plans.xml synopsis text (lines 12, 35, 47, 59, 83).
+  (1) Line 12 plan-group synopsis: drop the trailing "sqlite3-mcp integration" clause (posture B removed this).
+  (2) Line 35 corpus synopsis: drop ", sqlite3-mcp register integration"; corpus now owns only [6.3, 6.11].
+  (3) Line 47 ingest synopsis: replace "citation.js (BibTeX/RIS)" with "@retorquere/bibtex-parser (BibTeX) + in-house RIS adapter in src/server/ingest/bibtex.ts (§5.14)" — match splits.xml line 91 phrasing.
+  (4) Line 59 extraction synopsis: append ", plus cycle 6.14 first-party SQL/backup/inspect surface (scholar.query/backup/inspect via bun:sqlite per posture B)".
+  (5) Line 83 frontends synopsis: replace "vite singlefile build" with "single-file build via Bun's HTML bundler (no vite)" — match splits.xml line 112 phrasing and CLAUDE.md "Bun conventions" pin.
+
+PART B — splits.xml synopsis text + header comment (lines 8, 77, 84, 98).
+  (6) Line 8 header file-list block: extend the `src/server/tools/{...}.ts` curly-brace enumeration to add `query,backup,inspect` (12 total, matching sequence.xml's reconciled foundation-stub-set-present invariant).
+  (7) Line 77 foundation synopsis: replace "nine tool modules" with "twelve tool modules" (matches sequence.xml gate reconciled in 365deb5).
+  (8) Line 84 corpus synopsis: drop ", sqlite3-mcp register integration" (mirror of edit #2).
+  (9) Line 98 extraction synopsis: append ", plus cycle 6.14 first-party SQL/backup/inspect surface (scholar.query/backup/inspect via bun:sqlite per posture B). Cycle 6.14 fills the foundation-scaffolded query/backup/inspect stubs."
+
+PART C — plan-md prose references (4 files).
+  (10) ingest plan-md line ~46: "corpus owns [6.3, 6.11, 6.12] (… sqlite3-mcp registration)" → "corpus owns [6.3, 6.11] (sqlite3-mcp registration removed post-posture-B 2026-05-24)".
+  (11) annotations plan-md line ~450: same edit as #10 (identical phrasing in the Prerequisites table).
+  (12) packaging plan-md line ~80: same edit as #10 (identical phrasing in the Prerequisites table). Note packaging lines 69, 259, 263, 914 also reference sqlite3-mcp as an OBSOLETE-acknowledgment guard — those are correct and must be PRESERVED (intentional regression guards).
+  (13) extraction plan-md line ~1590: "scholar.snapshot.take (§5.13, cycle 6.12)" → "scholar.snapshot.take (§5.13, cycle 6.11)" — snapshot.take ownership moved to corpus 6.11 after 6.12 was dropped.
+  (14) extraction plan-md line ~1882: drop or revise the "this plan-md + the spec amendments land in one atomic commit (no in-between 'cycle 6.14 doesn't exist in spec' state for readers to encounter — verified by lead 2026-05-24)" clause; plan-mds landed at f92ae94 and spec amendments landed as 5 separate commits this session. Revise to: "Cycle 6.14 spec text landed via lead-owned chore amend-spec-add-cycle-6.14 (commit 73ed88c, 2026-05-24); plan-md authored against the spec amendment."
+
+What is OUT OF SCOPE: any src/ or tests/ edit (none required); any cycles attribute or blast-radius edit (already done in 365deb5); any sequence.xml edit (read-only during execution per spec-pipeline invariant #13). Do NOT modify packaging plan-md lines 69, 259, 263, 914 (intentional posture-B regression guards). Do NOT modify foundation plan-md (its 8→11 vs 9→12 stub-count internal notes pre-date cycle 6.14 addition and self-document the evolution; modifying would erase the narrative trail).
+
+Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line replacements; bump to gpt-5.4-mini if the agent reports it needs additional context judgment for the plan-md edits). Pure text substitution; verbatim source for each edit provided above. No src/ test gate required; verification is `bun test && bunx tsc --noEmit` MUST still pass (which is trivially true — docs-only edits). Functionally orthogonal to wave execution; can dispatch in parallel with any wave teammate without scope-overlap risk because the blast-radius is disjoint from all plan-mds' src/+tests/ scope (plan-mds are read by teammates but not written).</synopsis>
+  </chore>
 </chores>
 </reference>
