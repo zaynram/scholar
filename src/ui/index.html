@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scholar</title>
+  <style>
+    :root {
+      --color-background-primary: #ffffff;
+      --color-background-secondary: #f5f5f5;
+      --color-text-primary: #1a1a1a;
+      --color-text-secondary: #6b7280;
+      --color-accent: #2563eb;
+      --color-border: #e5e7eb;
+      --font-sans: system-ui, -apple-system, sans-serif;
+      --font-mono: ui-monospace, "Cascadia Code", monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-background-primary);
+      color: var(--color-text-primary);
+    }
+    #root { min-height: 100vh; }
+    button {
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid var(--color-border);
+      background: var(--color-background-primary);
+      color: var(--color-text-primary);
+      border-radius: 0.25rem;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    input { border: 1px solid var(--color-border); border-radius: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./App.tsx"></script>
+</body>
+</html>

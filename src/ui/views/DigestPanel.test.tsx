@@ -18,6 +18,12 @@ import {
 } from "bun:test";
 import { registerDom, unregisterDom } from "../../../test-preload.ts";
 
+// React 18: set IS_REACT_ACT_ENVIRONMENT so act() flushes state updates
+// synchronously and click handlers run their async callTool chains within
+// the act() boundary. Without this, useState updates batch and the SA3/SA4
+// tests race past their captures.
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
 describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", () => {
   beforeAll(registerDom);
   afterAll(unregisterDom);
@@ -103,9 +109,13 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
       );
     });
 
-    // Trigger generateDigest(false) — the "Generate (Ollama)" button is first.
-    const generateBtn = container.querySelector("button");
-    expect(generateBtn).not.toBeNull();
+    // Trigger generateDigest(false) — find "Generate (Ollama)" by text
+    // (the first <button> is the "Digest" tab-switcher, not the generator).
+    const buttons = container.querySelectorAll("button");
+    const generateBtn = Array.from(buttons).find((b) =>
+      b.textContent?.includes("Generate (Ollama)"),
+    );
+    expect(generateBtn).toBeDefined();
     await act(async () => {
       generateBtn!.click();
     });
@@ -164,14 +174,18 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
             }),
           );
         });
-        const generateBtn = localContainer.querySelector("button");
+        // Find "Generate (Ollama)" by text — first <button> is the tab switcher.
+        const buttons = localContainer.querySelectorAll("button");
+        const generateBtn = Array.from(buttons).find((b) =>
+          b.textContent?.includes("Generate (Ollama)"),
+        );
         await act(async () => {
           generateBtn?.click();
         });
         await act(async () => {});
 
         expect(capturedArgs).not.toBeNull();
-        expect((capturedArgs as Record<string, unknown>).scope_key).toBe(scopeKey);
+        expect((capturedArgs as unknown as Record<string, unknown>).scope_key).toBe(scopeKey);
         // Must NOT use `since` (old field name — renamed to scope_key).
         expect(capturedArgs).not.toHaveProperty("since");
         // Must NOT include corpus_id (per-corpus ctx.db snapshot).
@@ -217,14 +231,18 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
       );
     });
 
-    const generateBtn = container.querySelector("button");
+    // Find "Generate (Ollama)" by text — first <button> is the tab switcher.
+    const buttons = container.querySelectorAll("button");
+    const generateBtn = Array.from(buttons).find((b) =>
+      b.textContent?.includes("Generate (Ollama)"),
+    );
     await act(async () => {
       generateBtn?.click();
     });
     await act(async () => {});
 
     expect(capturedArgs).not.toBeNull();
-    const uc = (capturedArgs as Record<string, unknown>).use_claude;
+    const uc = (capturedArgs as unknown as Record<string, unknown>).use_claude;
     // use_claude=false OR omitted — both equivalent at the server.
     expect(uc === false || uc === undefined).toBe(true);
   });
@@ -270,6 +288,6 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     await act(async () => {});
 
     expect(capturedArgs).not.toBeNull();
-    expect((capturedArgs as Record<string, unknown>).use_claude).toBe(true);
+    expect((capturedArgs as unknown as Record<string, unknown>).use_claude).toBe(true);
   });
 });

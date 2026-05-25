@@ -58,7 +58,8 @@ test("ui://scholar/app.html is enumerable and readable via MCP protocol", async 
 
   const result = await client.readResource({ uri: "ui://scholar/app.html" });
   expect(result.contents).toHaveLength(1);
-  expect(typeof result.contents[0]!.text).toBe("string");
+  const appContent = result.contents[0] as { text?: string; blob?: string };
+  expect(typeof appContent.text).toBe("string");
 
   await client.close();
   await server.close();

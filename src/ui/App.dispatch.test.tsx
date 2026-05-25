@@ -12,6 +12,9 @@
 import { describe, beforeAll, afterAll, test, expect, beforeEach, afterEach } from "bun:test";
 import { registerDom, unregisterDom } from "../../test-preload.ts";
 
+// React 18 act() environment flag — required for act() to flush state updates.
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
 describe("App.tsx — view dispatcher (OPTION B: property-handler)", () => {
   beforeAll(registerDom);
   afterAll(unregisterDom);

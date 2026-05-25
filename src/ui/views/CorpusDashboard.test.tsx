@@ -27,6 +27,10 @@ import {
 } from "bun:test";
 import { registerDom, unregisterDom } from "../../../test-preload.ts";
 
+// React 18 act() environment flag — silences "not configured to support act"
+// warnings and makes act() actually flush state updates synchronously.
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
 describe("CorpusDashboard — SA1 still_indexing pill (spec §11)", () => {
   beforeAll(registerDom);
   afterAll(unregisterDom);
