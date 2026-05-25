@@ -8,8 +8,9 @@ import { registerUiResource } from "./resource.ts";
 
 test("registerUiResource is a foundation-scaffolded no-op (frontends fills at 6.9)", () => {
   expect(typeof registerUiResource).toBe("function");
-  expect(registerUiResource.length).toBe(1);
-  // Stub MUST NOT throw on a minimal server-shaped object.
+  expect(registerUiResource.length).toBe(2);
+  // Stub MUST NOT throw on a minimal server-shaped object + fake ctx.
   const fakeServer = { registerResource: () => {} } as never;
-  expect(() => registerUiResource(fakeServer)).not.toThrow();
+  const fakeCtx = {} as never;
+  expect(() => registerUiResource(fakeServer, fakeCtx)).not.toThrow();
 });

@@ -157,7 +157,7 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
 
   const server = new McpServer({ name: "scholar", version: "0.1.0" });
   const registry: ToolRegistry = registerAll(server, ctx);
-  registerUiResource(server); // ← scaffolded stub in Task 1.10b; filled by frontends cycle 6.9
+  registerUiResource(server, ctx); // ← scaffolded stub in Task 1.10b; filled by frontends cycle 6.9
 
   // Foundation-009: dispatch closure for CLI mode. Same ServerContext as stdio mode.
   const dispatch = async (toolName: string, args: unknown): Promise<unknown> => {

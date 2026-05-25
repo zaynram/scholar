@@ -4,7 +4,8 @@
 // The body will register `ui://scholar/app.html` and serve the single-file
 // React bundle produced by `bun build src/ui/index.html --target=browser`.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ServerContext } from "../tools/registry.js";
 
-export function registerUiResource(_server: McpServer): void {
-  // intentionally empty — foundation scaffold
+export function registerUiResource(_server: McpServer, _ctx: ServerContext): void {
+  // intentionally empty — foundation scaffold; frontends fills body at cycle 6.9
 }
