@@ -402,6 +402,11 @@ User-facing surfaces: `scholar.nu`, `/scholar:ingest`, `/scholar:digest`, `/scho
 **Touches:** §5.36.
 **Depends-on:** 6.9, 6.10.
 
+### 6.14 First-party SQL/backup/inspect surface
+Fills the three foundation-scaffolded stubs `src/server/tools/{query,backup,inspect}.ts` with first-party implementations using `bun:sqlite` directly. `scholar.query` exposes multi-query batch execution via prepared statements with parameter binding (no string interpolation) and a BEGIN/ROLLBACK engine-gate for write-intent classification — a `sqlite_master` escape hatch is intentionally permitted so power users can introspect schema via the same surface. `scholar.inspect` is a no-args structured dump of `sqlite_master` table list plus per-table schemas. `scholar.backup` is a WAL-safe online backup whose sole implementation is SQLite's `VACUUM INTO` against a path resolved via §12.0 `resolveUnderRoot(backupRoot, args.dest)` (path-traversal payloads cannot escape the configured backup root). The §10 tool-surface table is updated by the same cycle to add the three new entries. Driver: user-ratified posture B (2026-05-24) — scholar drops the unvendorable Python sqlite3-mcp child and reimplements query/backup/inspect natively.
+**Touches:** §5.41, §10, §12.0.
+**Depends-on:** 6.1, 6.3.
+
 ## 7. Plugin Manifest and MCP Server Design
 
 ### 7.1 Plugin manifest
