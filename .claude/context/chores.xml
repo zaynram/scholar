@@ -241,6 +241,25 @@ Mechanical/interpretive-tier chore (copilot-cli, gpt-5-mini for mechanical line 
     precondition chores closed earlier this session).
   -->
 
+  <!--
+    Sequence-invariant regex hygiene chore (filed 2026-05-25 by exec-multi-plan
+    orchestrator at wave-2 close). The I3 gate in sequence.xml uses a regex
+    too loose to distinguish `name:` (registerTool field) from `display_name:`
+    (corpus/test-fixture field) — fires false positives on legitimate fixtures.
+    Functionally inert during execution because the gate is advisory and the
+    semantic intent (all _register sites use scholar.* namespace) is hand-
+    verified by lead at each wave close. Lift to a real-precision gate post-
+    execution. Sequence.xml is read-only during execution per invariant #13;
+    this chore lands as a post-group-close edit.
+  -->
+
+  <chore id="tighten-i3-scholar-tool-namespace-regex"
+         status="open"
+         blast-radius="docs/superpowers/multi/2026-05-22-scholar-plugin-sequence.xml"
+         blocks-plans="">
+    <synopsis>Tighten the I3 scholar-tool-namespace invariant regex in sequence.xml so it matches only registerTool `name:` fields and not `display_name:` test-fixture fields. Current gate: `grep -rhoE 'name:\s*"[^"]*"' src/server/tools/ 2&gt;/dev/null | grep -vE 'name:\s*"scholar\.' | grep -q . &amp;&amp; exit 1 || exit 0`. Fires false positives on src/server/tools/snapshot.test.ts:46 (`display_name: "Snapshot Test"`) and src/server/tools/roots.test.ts:44 (`display_name: "Daisy Corpus"`). Semantic intent is satisfied by hand-verification at every wave close (all `_register("scholar.<name>", ...)` call sites in src/server/tools/{corpus,roots,snapshot}.ts use scholar.* prefix), but the gate's textual output is misleading and noisy. Fix options: (a) restrict to `_register\(\s*"[^"]+"` and grep only the captured first argument, (b) anchor the regex to word-boundary or line-start so `display_name:` does not match, (c) exclude `display_name:` explicitly via additional `grep -v` step. Recommendation: option (a) is most precise — directly grep the actual `_register(...)` call sites instead of all `name:` fields. Mechanical-tier chore (copilot-cli, gpt-5-mini); pure regex substitution in one line of one XML file. Note: sequence.xml is read-only during plan-group execution per spec-pipeline invariant #13; this chore must wait until plan-group 2026-05-22-scholar-plugin closes status="closed" before dispatch.</synopsis>
+  </chore>
+
   <chore id="foundation-fill-corpus-prereqs"
          status="closed"
          fulfillment="5c34d70"
