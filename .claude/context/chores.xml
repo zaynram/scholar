@@ -28,7 +28,8 @@
   </chore>
 
   <chore id="upstream-pdf-server-revendor-process"
-         status="open"
+         status="closed"
+         fulfillment="bc5eed0"
          blast-radius="src/vendor/pdf-server/ docs/"
          blocks-plans="">
     <synopsis>Document the re-vendor procedure for upstream @modelcontextprotocol/server-pdf bumps. Cycle 6.2 verification of the vendored copy (the roots/list responder fixture suite, list_changed round-trip, viewUUID survival across root mutation per spec §16) should produce the anchor quotes that mechanically detect drift on a new upstream release. Output is a short doc (likely docs/vendor/pdf-server-revendor.md) referenced from §7.2 and §16.</synopsis>
