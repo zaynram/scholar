@@ -15,11 +15,14 @@ afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
 
 test("nowIso returns ISO-8601 with millisecond precision in UTC", () => {
   const s = nowIso();
-  // Either a plain ISO ms-Z, or a same-ms-bumped variant ending in xZ where x is base36.
-  expect(s).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[0-9a-z]*Z$/);
-  // Two calls in sequence are lexically comparable.
-  const a = nowIso(); const b = nowIso();
-  expect(a <= b).toBe(true);
+  // Strictly-monotonic-ms scheme: every output is a plain ISO-8601 ms form.
+  expect(s).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  // Strict monotonicity — two adjacent calls are lexically ordered (b > a),
+  // even when they fall in the same wall-clock millisecond (the second is
+  // bumped to lastMs+1 so lexical = chronological).
+  const a = nowIso();
+  const b = nowIso();
+  expect(b > a).toBe(true);
 });
 
 test("ulid re-export produces 26-char Crockford-base32 ids that are monotonic", () => {
