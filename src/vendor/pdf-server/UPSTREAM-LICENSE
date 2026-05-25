@@ -1,0 +1,57 @@
+# Upstream license — @modelcontextprotocol/server-pdf@1.7.2
+
+This directory contains the unmodified `dist/` of the upstream
+`@modelcontextprotocol/server-pdf` npm package, version 1.7.2
+(published 2026-05-15), vendored as part of the scholar plugin
+for offline distribution per spec §7.2.
+
+The upstream is maintained by Anthropic and community contributors
+(`fweinberger@anthropic.com`, `ashwin@anthropic.com`,
+`jspahrsummers`, `pcarleton`, `thedsp`, `ochafik`) under the
+**MIT License**. The upstream repository is
+https://github.com/modelcontextprotocol/ext-apps and the npm
+distribution carries `license: MIT` in its package.json (confirmed
+via `bun pm view @modelcontextprotocol/server-pdf@1.7.2` on
+2026-05-24).
+
+MIT is a permissive license fully compatible with the scholar
+plugin's own MIT license. Vendoring this `dist/` and redistributing
+it as part of the scholar `.plugin` archive is permitted, subject
+to the MIT requirement that the upstream copyright notice and
+license text be carried with all copies. This file satisfies that
+requirement.
+
+When foundation cycle 6.2 vendors `dist/` into this directory, the
+upstream's own `LICENSE` file (if present in `dist/`) should be
+preserved alongside this NOTICE. If the upstream `dist/` does not
+include a `LICENSE`, this UPSTREAM-LICENSE file is the canonical
+record.
+
+When the vendored copy is bumped to a newer upstream version (per
+the open chore `upstream-pdf-server-revendor-process`), re-verify
+the license by re-running `bun pm view @modelcontextprotocol/server-pdf@<new-version>`
+and update the version + published-at fields above.
+
+## License text (MIT, upstream-canonical)
+
+The MIT License (MIT)
+
+Copyright (c) Anthropic, PBC and the @modelcontextprotocol contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
