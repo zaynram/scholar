@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Execution sequence for plan-group 2026-05-22-scholar-plugin.
+
+  Authored by spec-pipeline:sequence-multi-plan against the seven plan-mds in
+  docs/superpowers/plans/ + the splits.xml dependency declaration. Read-only
+  during execution per spec-pipeline invariant #13.
+
+  Wave shape: 5 waves, only wave 3 concurrent (annotations + extraction +
+  ingest run in parallel after corpus lands; each is content-disjoint per
+  splits.xml/@blast-radius, so worktree="not-required" is sound).
+-->
+<sequence
+    group-id="2026-05-22-scholar-plugin"
+    splits="docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
+    generated-at="2026-05-24T23:36:52Z">
+
+  <waves>
+    <wave index="1" mode="sequential">
+      <plan suffix="foundation"/>
+    </wave>
+    <wave index="2" mode="sequential">
+      <plan suffix="corpus"/>
+    </wave>
+    <wave index="3" mode="parallel">
+      <plan suffix="annotations"/>
+      <plan suffix="extraction"/>
+      <plan suffix="ingest"/>
+    </wave>
+    <wave index="4" mode="sequential">
+      <plan suffix="frontends"/>
+    </wave>
+    <wave index="5" mode="sequential">
+      <plan suffix="packaging"/>
+    </wave>
+  </waves>
+
+  <dependencies>
+    <edge from="corpus" to="foundation"
+          reason="corpus consumes foundation-frozen contracts: ServerContext, defaultPdfRoot, primitives. Per splits.xml/@depends-on."
+          symbol="ServerContext"/>
+    <edge from="ingest" to="corpus"
+          reason="ingest tools require an active corpus (NO_ACTIVE_CORPUS guard); corpus.activate must land first. Per splits.xml/@depends-on."
+          symbol="corpus.activate"/>
+    <edge from="extraction" to="corpus"
+          reason="extraction tools (pdf.refresh-extraction, papers.search) require an active corpus. Per splits.xml/@depends-on."
+          symbol="corpus.activate"/>
+    <edge from="annotations" to="corpus"
+          reason="annotations.* tools guard NO_ACTIVE_CORPUS; corpus.activate must precede. Per splits.xml/@depends-on."
+          symbol="corpus.activate"/>
+    <edge from="frontends" to="ingest"
+          reason="UI dispatch wires scholar.ingest.* commands; nu module exposes ingest verbs. Per splits.xml/@depends-on."
+          symbol="scholar.ingest"/>
+    <edge from="frontends" to="extraction"
+          reason="PaperDetail consumes scholar.paper.show + scholar.digest.show; ReaderProgress consumes scholar.progress.show. Per splits.xml/@depends-on."
+          symbol="scholar.paper.show"/>
+    <edge from="frontends" to="annotations"
+          reason="UI annotation surface depends on annotations.* tools landing first. Per splits.xml/@depends-on."
+          symbol="annotations.list"/>
+    <edge from="packaging" to="frontends"
+          reason="build-plugin.ts step 2 bundles src/ui/; UI artifact must exist before packaging. Per splits.xml/@depends-on."
+          symbol="src/ui/index.html"/>
+  </dependencies>
+
+  <invariants>
+    <invariant id="foundation-stub-set-present">
+      <constraint>All nine tool-module stubs (corpus, roots, snapshot, ingest, pdf, papers, digest, prompts, annotations) plus raw-ddl.ts, primitives.ts, and ollama/client.ts exist as foundation-scaffolded files before any wave-2+ teammate dispatches.</constraint>
+      <enforcement>
+        <gate kind="peer-symbol-check">test -f src/server/tools/corpus.ts &amp;&amp; test -f src/server/tools/roots.ts &amp;&amp; test -f src/server/tools/snapshot.ts &amp;&amp; test -f src/server/tools/ingest.ts &amp;&amp; test -f src/server/tools/pdf.ts &amp;&amp; test -f src/server/tools/papers.ts &amp;&amp; test -f src/server/tools/digest.ts &amp;&amp; test -f src/server/tools/prompts.ts &amp;&amp; test -f src/server/tools/annotations.ts &amp;&amp; test -f src/server/db/raw-ddl.ts &amp;&amp; test -f src/server/ingest/primitives.ts &amp;&amp; test -f src/server/ollama/client.ts</gate>
+      </enforcement>
+    </invariant>
+    <invariant id="package-json-foundation-only">
+      <constraint>Foundation is the sole writer of package.json and bun.lock per spec §6.1 (S4-pinned). No commit on wave 2+ may modify either file.</constraint>
+      <enforcement>
+        <gate kind="invariant-check">FOUNDATION_TIP=$(git log --format=%H --reverse --grep='cycle 6.1' -- package.json | head -1); test -n "$FOUNDATION_TIP" &amp;&amp; { git diff "$FOUNDATION_TIP"..HEAD -- package.json bun.lock | grep -q . &amp;&amp; exit 1 || exit 0; } || exit 0</gate>
+      </enforcement>
+    </invariant>
+    <invariant id="scholar-tool-namespace">
+      <constraint>Every registerTool call site uses a name beginning with 'scholar.'. Pdf-child tools surface as scholar.pdf.* proxies, never as raw pdf.*.</constraint>
+      <enforcement>
+        <gate kind="peer-symbol-check">grep -rhoE 'name:\s*"[^"]*"' src/server/tools/ 2&gt;/dev/null | grep -vE 'name:\s*"scholar\.' | grep -q . &amp;&amp; exit 1 || exit 0</gate>
+      </enforcement>
+    </invariant>
+    <invariant id="drizzle-then-raw-ddl">
+      <constraint>Foundation's migrations.ts invokes runRawDdl(db) after Drizzle migrate(). Cycle ordering depends on this: chunk_vec (6.5) and reading_queue view (6.6) materialize only after Drizzle tables exist.</constraint>
+      <enforcement>
+        <gate kind="peer-symbol-check">grep -q 'runRawDdl' src/server/db/migrations.ts</gate>
+      </enforcement>
+    </invariant>
+  </invariants>
+
+  <execution-policy
+      wave-gate="per-wave"
+      integration-checkpoint="per-wave"
+      code-review-checkpoint="per-wave"
+      code-review-critical-action="refactor"
+      finishing-skill="false"/>
+</sequence>

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<splits group-id="2026-05-22-scholar-plugin" modified-at="2026-05-23T00:00:00Z">
+<plan-splits spec="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md" group-id="2026-05-22-scholar-plugin" generated-at="2026-05-23T00:00:00Z">
   <!--
     Module-skeleton convention (spec §7.6). Blast-radius lists below denote
     CONTENT OWNERSHIP — which plan fills a file's body — not file creation.
@@ -70,58 +70,51 @@
     without touching the stub files.
   -->
   <plan suffix="foundation"
-        cycles="[6.1, 6.2]"
+        cycles="[§6.1,§6.2]"
         depends-on=""
         worktree="not-required"
-        blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/server/ingest/primitives.ts src/server/ollama/client.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json">
-    <synopsis>Project scaffolding (package.json, tsconfig, Drizzle schema + migrations + sqlite-vec loader, server skeleton, tool-registry barrel with no-op stub modules, plugin manifest + .mcp.json) and the vendored unmodified pdf MCP plus scholar's client-side MCP roots responder in src/server/pdf/lifecycle.ts (capabilities.roots.listChanged, ListRootsRequestSchema handler, roots/list_changed sender, Windows Job Object orphan reaping). Also scaffolds no-op stubs for the nine tool modules and raw-ddl.ts — see the header comment. Pre-declares every v1 npm dep per spec §6.1 (no downstream plan ever edits package.json or bun.lock).</synopsis>
-  </plan>
+        blast-radius="src/server/index.ts src/server/tools/registry.ts src/server/db/schema.ts src/server/db/migrations.ts src/server/db/sqlite-vec.ts src/server/pdf/lifecycle.ts src/server/ingest/primitives.ts src/server/ollama/client.ts src/vendor/pdf-server/ package.json tsconfig.json drizzle.config.ts .claude-plugin/plugin.json .mcp.json"
+        synopsis="Project scaffolding, Drizzle schema, sqlite-vec loader, server skeleton, frozen §7.6 contracts, vendored unmodified pdf MCP with roots responder, no-op stubs for nine tool modules + raw-ddl.ts. Pre-declares every v1 npm dep per §6.1."/>
 
   <plan suffix="corpus"
-        cycles="[6.3, 6.11, 6.12]"
+        cycles="[§6.3,§6.11,§6.12]"
         depends-on="foundation"
         worktree="not-required"
-        blast-radius="src/server/tools/corpus.ts src/server/tools/roots.ts src/server/tools/snapshot.ts scripts/first-run.ts">
-    <synopsis>Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open, sqlite3-mcp register integration. Owns the scholar.dashboard view-opener (registered from corpus.ts per the §7.6 mapping).</synopsis>
-  </plan>
+        blast-radius="src/server/tools/corpus.ts src/server/tools/roots.ts src/server/tools/snapshot.ts scripts/first-run.ts"
+        synopsis="Corpus and roots tools, first-run wizard, snapshot tool for change-since-last-open, sqlite3-mcp register integration. Owns the scholar.dashboard view-opener (registered from corpus.ts per the §7.6 mapping)."/>
 
   <plan suffix="ingest"
-        cycles="[6.4]"
+        cycles="[§6.4]"
         depends-on="corpus"
         worktree="not-required"
-        blast-radius="src/server/ingest/ src/server/tools/ingest.ts">
-    <synopsis>Ingestion adapters and tools: @retorquere/bibtex-parser (BibTeX) + in-house RIS adapter in src/server/ingest/bibtex.ts (§5.14), CrossRef DOI, arXiv, manual entry.</synopsis>
-  </plan>
+        blast-radius="src/server/ingest/ src/server/tools/ingest.ts"
+        synopsis="Ingestion adapters and tools: @retorquere/bibtex-parser (BibTeX) + in-house RIS adapter in src/server/ingest/bibtex.ts (§5.14), CrossRef DOI, arXiv, manual entry."/>
 
   <plan suffix="extraction"
-        cycles="[6.5, 6.6, 6.8]"
+        cycles="[§6.5,§6.6,§6.8]"
         depends-on="corpus"
         worktree="not-required"
-        blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts">
-    <synopsis>Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts generation. Cycle order is load-bearing: 6.5 fills runRawDdl to materialize chunk_vec, then 6.6 extends raw-ddl.ts with the reading_queue view (see header comment). Owns the scholar.paper.show, scholar.digest.show, scholar.prompts.show, and scholar.progress.show view-openers (registered from papers.ts / digest.ts / prompts.ts per the §7.6 mapping).</synopsis>
-  </plan>
+        blast-radius="src/server/ollama/ src/server/db/raw-ddl.ts src/server/tools/pdf.ts src/server/tools/papers.ts src/server/tools/digest.ts src/server/tools/prompts.ts"
+        synopsis="Text extraction, chunker, Ollama embeddings, chunk_vec + reading_queue raw DDL, hybrid search, reading queue, digest and reading-prompts. Cycle order load-bearing: 6.5 fills chunk_vec, 6.6 adds reading_queue view. Owns scholar.paper.* view-openers."/>
 
   <plan suffix="annotations"
-        cycles="[6.7]"
+        cycles="[§6.7]"
         depends-on="corpus"
         worktree="not-required"
-        blast-radius="src/server/tools/annotations.ts">
-    <synopsis>Annotation CRUD with bidirectional reconciliation against the child pdf MCP. Schema-compatible with the Daisy round-trip. §13 reconciler discipline is load-bearing: phase-1 reads → phase-2 MCP I/O → phase-3 db.transaction(...) with no awaits inside the closure.</synopsis>
-  </plan>
+        blast-radius="src/server/tools/annotations.ts"
+        synopsis="Annotation CRUD with bidirectional reconciliation against the child pdf MCP. Schema-compatible with the Daisy round-trip. §13 reconciler discipline load-bearing: phase-1 reads → phase-2 MCP I/O → phase-3 db.transaction(...) no awaits."/>
 
   <plan suffix="frontends"
-        cycles="[6.9, 6.10]"
-        depends-on="ingest extraction annotations"
+        cycles="[§6.9,§6.10]"
+        depends-on="ingest,extraction,annotations"
         worktree="not-required"
-        blast-radius="src/server/ui/ src/ui/ nu/ commands/ skills/">
-    <synopsis>MCP App UI bundle (five React views, host styling, single-file build via Bun's HTML bundler — no vite.config.ts) and the user-facing nu module, slash commands, and skills. Cycle 6.9 emits the per-dep KB measurement that gates the §14.1 bundle-budget remediations.</synopsis>
-  </plan>
+        blast-radius="src/server/ui/ src/ui/ nu/ commands/ skills/"
+        synopsis="MCP App UI bundle (five React views, host styling, single-file build via Bun's HTML bundler — no vite) plus user-facing nu module, slash commands, skills. Cycle 6.9 emits per-dep KB measurement gating §14.1 bundle-budget remediations."/>
 
   <plan suffix="packaging"
-        cycles="[6.13]"
+        cycles="[§6.13]"
         depends-on="frontends"
         worktree="not-required"
-        blast-radius="scripts/build-plugin.ts">
-    <synopsis>scripts/build-plugin.ts to assemble the .plugin archive — orchestrates the seven §14.1 build steps (server compile, UI bundle, pdf vendor copy, Bun runtime copy, vec0 build, nu copy, plugin zip). The first-run PDF-root wizard is owned by the corpus plan, not packaging.</synopsis>
-  </plan>
-</splits>
+        blast-radius="scripts/build-plugin.ts"
+        synopsis="scripts/build-plugin.ts assembles the .plugin archive — orchestrates the seven §14.1 build steps (server compile, UI bundle, pdf vendor copy, Bun runtime, vec0, nu copy, zip). First-run PDF-root wizard owned by corpus, not packaging."/>
+</plan-splits>

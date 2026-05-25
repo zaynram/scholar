@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <reference>
-<plans modified-at="2026-05-24T20:40:00Z">
+<plans modified-at="2026-05-25T01:36:00Z">
   <plan-group index="1"
               id="2026-05-22-scholar-plugin"
               status="open"
               expendable="false"
               spec-md="docs/superpowers/specs/2026-05-22-scholar-plugin-design.md"
               splits-md="docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
-              sequence-md=""
-              modified-at="2026-05-24T20:40:00Z">
+              sequence-md="docs/superpowers/multi/2026-05-22-scholar-plugin-sequence.xml"
+              modified-at="2026-05-25T01:36:00Z">
     <synopsis>Scholar literature-review plugin: vendored unmodified pdf MCP with protocol-based root injection, multi-corpus persistence on bun:sqlite+Drizzle, sqlite-vec embeddings via local Ollama, five mcp-apps UI surfaces, nu CLI module, sqlite3-mcp integration.</synopsis>
 
     <plan index="1.1"
