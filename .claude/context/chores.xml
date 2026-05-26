@@ -71,10 +71,27 @@
   </chore>
 
   <chore id="reconcile-registry-schemas-and-data"
+         status="closed"
+         fulfillment="dbd1b89"
+         blast-radius=".claude/context/chores.xml"
+         blocks-plans="">
+    <synopsis>Closed at well-formedness scope only (per user option-d 2026-05-26): chores.xml synopses contained literal `&amp;&amp;`, `&lt;...&gt;` code/email tokens, and XML-comment-forbidden `--` that broke xmllint --noout before XSD validation could even run. The seven-line escape fix landed at dbd1b89. XSD-vs-data reconciliation (schema rewrite or data retrofit; original synopsis drift items 1–5) is reissued as redesign-registry-schemas with broader scope including chore-body verbosity tightening.</synopsis>
+  </chore>
+
+  <!--
+    Follow-up to reconcile-registry-schemas-and-data (closed at dbd1b89,
+    well-formedness scope only). The XSDs in .claude/context/schema/ still
+    reject the active pipeline data; the decision deferred from chore #d
+    (2026-05-26) plus the user's "obscenely verbose synopses" feedback
+    means the right move is a schema redesign that matches what the
+    pipeline emits AND tightens the prose budget.
+  -->
+
+  <chore id="redesign-registry-schemas"
          status="open"
          blast-radius=".claude/context/schema/ .claude/context/plans.xml .claude/context/chores.xml docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
          blocks-plans="">
-    <synopsis>The XSDs in .claude/context/schema/ (untracked at filing time) reject both the existing registry data and the attributes the spec-pipeline workflow itself writes. Concrete drift: (1) plans.xsd requires &lt;reference&gt; with name/path/created-at/modified-at/context attributes — the wrap commit added the element but none of those attrs; (2) plan-group requires synopsis as an attribute (currently a child element) and disallows modified-at, which workflow step 8 writes; (3) chore.id must match `\d{4}-\d{2}-\d{2}-...` — the three existing chore ids do not; (4) chore requires type/origin/baseline/index/expendable/synopsis and forbids blast-radius/blocks-plans (both used by every existing entry); (5) splits.xsd expects root &lt;plan-splits&gt; with spec/generated-at attrs and per-plan synopsis attribute — splits.xml has none of that. Decide between: (a) relax/replace the schemas to match the active pipeline + existing data, (b) retrofit data + workflow code to schemas, (c) drop the schemas entirely and document the implicit contract elsewhere. Until decided, xmllint validation in spec-pipeline workflow step 2 (spec-to-multi-plan) and any future ingest-spec re-runs cannot be honored as written.</synopsis>
+    <synopsis>Replace the XSDs to match the active spec-pipeline emission shape (modified-at, fulfillment, synopsis-as-element, blast-radius/blocks-plans attrs, slug-only chore ids) AND tighten _long_desc maxLength to keep chore bodies terse. Concrete drifts from the closed sibling: plans.xsd &lt;reference&gt; required-attrs unused; plan-group synopsis as element not attr; chores.xsd requires type/origin/baseline none of the existing chores carry; chore.id pattern `\d{4}-\d{2}-\d{2}-...` rejects every existing slug; splits.xsd 250-char _long_desc cap exceeded by the extraction plan synopsis (435 chars). Open question for the user: schema-then-data retrofit, schema-rewrite to fit data, or drop schemas. Once shape lands, sweep all four files into compliance and re-enable xmllint --schema in spec-pipeline workflow step 2.</synopsis>
   </chore>
 
   <!--
