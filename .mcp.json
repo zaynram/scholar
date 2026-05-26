@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "scholar": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/build/scholar",
+      "command": "${__dirname}/build/scholar",
       "args": [],
       "env": {
         "SCHOLAR_RUNTIME_ROOT": "${HOME}/mcp-data/scholar/runtime",
