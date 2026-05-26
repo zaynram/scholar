@@ -31,6 +31,7 @@
     "pdfjs-dist": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "reactive-context-toolkit": "github:zaynram/reactive-context-toolkit",
     "sqlite-vec": "latest",
     "ulidx": "latest",
     "zod": "latest"
