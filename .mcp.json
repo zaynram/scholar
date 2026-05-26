@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "scholar": {
-      "command": "${__dirname}/build/scholar",
-      "args": [],
+      "command": "bun",
+      "args": ["run", "start"],
       "env": {
         "SCHOLAR_RUNTIME_ROOT": "${HOME}/mcp-data/scholar/runtime",
         "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",

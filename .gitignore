@@ -1,6 +1,7 @@
 node_modules/
 build/
 dist/
+out/
 runtime/
 *.db
 *.db-journal
@@ -12,4 +13,3 @@ runtime/
 # so the packaging cycle can copy it verbatim into the .plugin archive.
 !src/vendor/pdf-server/dist/
 !src/vendor/pdf-server/dist/**
-

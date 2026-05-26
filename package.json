@@ -6,6 +6,9 @@
   "engines": {
     "bun": ">=1.1.27"
   },
+  "bin": {
+    "mcp-scholar": "./src/server/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -18,7 +21,9 @@
     "build:vec": "bun scripts/build-vec0.ts",
     "build:nu": "bun scripts/copy-nu.ts",
     "build:plugin": "bun scripts/build-plugin.ts",
-    "measure-bundle": "bun scripts/measure-bundle.ts"
+    "measure-bundle": "bun scripts/measure-bundle.ts",
+    "start": "bun ./scripts/start.ts",
+    "dev": "bun ./src/server/index.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

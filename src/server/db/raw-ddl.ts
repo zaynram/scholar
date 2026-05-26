@@ -17,31 +17,33 @@
 //     trusted per-corpus `settings` row written by `loadVecAndProbeDim`, NOT
 //     user input. The Number() coercion in `embedDim()` guarantees a numeric
 //     literal regardless of how the row arrived.
-import { sql } from "drizzle-orm";
-import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { rawClient } from "./raw-client.ts";
-import type { RunRawDdl } from "../tools/registry.ts";
+import { sql } from "drizzle-orm"
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite"
+import { rawClient } from "./raw-client.ts"
+import type { RunRawDdl } from "../tools/registry.ts"
 
 function readSetting(db: BunSQLiteDatabase, key: string): string | null {
   try {
-    const row = db.all(sql`SELECT value FROM settings WHERE key = ${key}`) as { value: string }[];
-    return row.length > 0 ? row[0]!.value : null;
+    const row = db.all(sql`SELECT value FROM settings WHERE key = ${key}`) as {
+      value: string
+    }[]
+    return row.length > 0 ? row[0]!.value : null
   } catch {
     // `settings` table absent — typical on the very-first migrate call before
     // any extraction state has been recorded. Treat as "no settings yet".
-    return null;
+    return null
   }
 }
 
 function chunkVecCreated(db: BunSQLiteDatabase): boolean {
-  return readSetting(db, "chunk_vec.created") === "true";
+  return readSetting(db, "chunk_vec.created") === "true"
 }
 
 function embedDim(db: BunSQLiteDatabase): number | null {
-  const raw = readSetting(db, "embed.dim");
-  if (raw === null) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
+  const raw = readSetting(db, "embed.dim")
+  if (raw === null) return null
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
 }
 
 export const runRawDdl: RunRawDdl = (db) => {
@@ -49,14 +51,14 @@ export const runRawDdl: RunRawDdl = (db) => {
   // Created only once the embed dimension is known AND the deferred-creation
   // flag has flipped to true. The vec0 module supports IF NOT EXISTS, so
   // re-invocation after the first materialization is a no-op.
-  const dim = embedDim(db);
+  const dim = embedDim(db)
   if (dim !== null && chunkVecCreated(db)) {
-    rawClient(db).exec(
+    rawClient(db).run(
       `CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
         chunk_id TEXT PRIMARY KEY,
         embedding FLOAT[${dim}]
       )`,
-    );
+    )
   }
   // ─── cycle 6.6 — reading_queue (SQL view) ──────────────────────────────────
   // §8.2 view: surfaces only pending+reading papers; ordering puts the active
@@ -69,5 +71,5 @@ export const runRawDdl: RunRawDdl = (db) => {
            (julianday('now') - julianday(COALESCE(status_touched_at, imported_at))) AS days_since_touch
     FROM papers
     WHERE status IN ('pending','reading')
-    ORDER BY status='reading' DESC, priority DESC, days_since_touch DESC`);
-};
+    ORDER BY status='reading' DESC, priority DESC, days_since_touch DESC`)
+}
