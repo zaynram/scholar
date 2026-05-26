@@ -22,9 +22,27 @@
 
   <chore id="ci-setup-scholar-plugin"
          status="open"
-         blast-radius=".github/ scripts/"
+         blast-radius=".github/"
          blocks-plans="">
-    <synopsis>CI for the scholar plugin: bun install, bun typecheck (tsc --noEmit), bun test, scripts/build-plugin.ts smoke run. Spec §6.1 cites "basic CI" without enumerating jobs; this chore turns that into a concrete workflow file. Does not block any single plan (each plan's local tests pass under bun test) but should land before merging the foundation branch so downstream plans benefit from CI signal.</synopsis>
+    <synopsis>CI for the scholar plugin: bun install --frozen-lockfile, bunx tsc --noEmit, bun test. Spec §6.1 cites "basic CI" without enumerating jobs; this chore turns that into a concrete workflow file. Does not block any single plan (each plan's local tests pass under bun test) but should land before merging the foundation branch so downstream plans benefit from CI signal. Option D scope (selected by lead 2026-05-26 after H5a STOP report): the build-plugin smoke step originally proposed is DEFERRED — see companion chore ci-add-smoke-build-step. SCHOLAR_BUILD_VEC_MISSING blocks the smoke step locally because src/vendor/sqlite-vec/vec0.so stub is not tracked (FIXTURE_FILES pattern from build-plugin.test.ts does not apply when invoking the script against the real repo root); deferring keeps source-gate green.</synopsis>
+  </chore>
+
+  <!--
+    Companion to ci-setup-scholar-plugin (filed 2026-05-26 as lead's
+    deferral commitment after picking Option D on H5a's STOP report).
+    H5a originally proposed a 4-step CI workflow (install + typecheck +
+    test + BUILD_FIXTURE=1 smoke build); the smoke step failed locally
+    with SCHOLAR_BUILD_VEC_MISSING because step5_copyVec() in fixture
+    mode requires a stub src/vendor/sqlite-vec/vec0.so that isn't
+    tracked. Option D shipped the 3-step CI immediately and parked the
+    smoke step here as a release-gate item.
+  -->
+
+  <chore id="ci-add-smoke-build-step"
+         status="open"
+         blast-radius=".github/workflows/ci.yml src/vendor/sqlite-vec/"
+         blocks-plans="">
+    <synopsis>Add the BUILD_FIXTURE=1 bun scripts/build-plugin.ts smoke build step to .github/workflows/ci.yml. Currently blocked because step5_copyVec() in fixture mode requires src/vendor/sqlite-vec/vec0.so (and vec0.dll) stubs that are not tracked. Three implementation paths: (a) Option A from the H5a STOP report — stage minimal stub vec0.so + vec0.dll binaries in src/vendor/sqlite-vec/; matches the FIXTURE_FILES pattern from build-plugin.test.ts. (b) Option B — set SCHOLAR_BUILD_VEC_FORCE_COMPILE=1 in CI; triggers compile-from-source against vendored vec0.c; Ubuntu-latest has gcc but the compile step may fail if sqlite3.h is not co-located with vec0.c (needs local verification first). (c) When packaging-cycle-6.13 outputs are staged in a release pipeline, copy the real prebuilt artifacts into a CI-only fixture step. Release-gate chore (does NOT block any plan); resolve before relying on CI to catch packaging regressions. Tier: interpretive (sonnet — judgment on a/b/c). Vehicle: spec-pipeline:chore-executor.</synopsis>
   </chore>
 
   <chore id="upstream-pdf-server-revendor-process"
