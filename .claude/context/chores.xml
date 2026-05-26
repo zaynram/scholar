@@ -40,10 +40,11 @@
   -->
 
   <chore id="ci-add-smoke-build-step"
-         status="open"
-         blast-radius=".github/workflows/ci.yml src/vendor/sqlite-vec/"
+         status="closed"
+         fulfillment="233471c"
+         blast-radius=".github/workflows/ci.yml src/vendor/sqlite-vec/ scripts/build-plugin.ts scripts/build-plugin.test.ts"
          blocks-plans="">
-    <synopsis>Add the BUILD_FIXTURE=1 bun scripts/build-plugin.ts smoke build step to .github/workflows/ci.yml. Currently blocked because step5_copyVec() in fixture mode requires src/vendor/sqlite-vec/vec0.so (and vec0.dll) stubs that are not tracked. Three implementation paths: (a) Option A from the H5a STOP report — stage minimal stub vec0.so + vec0.dll binaries in src/vendor/sqlite-vec/; matches the FIXTURE_FILES pattern from build-plugin.test.ts. (b) Option B — set SCHOLAR_BUILD_VEC_FORCE_COMPILE=1 in CI; triggers compile-from-source against vendored vec0.c; Ubuntu-latest has gcc but the compile step may fail if sqlite3.h is not co-located with vec0.c (needs local verification first). (c) When packaging-cycle-6.13 outputs are staged in a release pipeline, copy the real prebuilt artifacts into a CI-only fixture step. Release-gate chore (does NOT block any plan); resolve before relying on CI to catch packaging regressions. Tier: interpretive (sonnet — judgment on a/b/c). Vehicle: spec-pipeline:chore-executor.</synopsis>
+    <synopsis>Closed via Option B (FORCE_COMPILE) with two unanticipated prereq fixes: (1) build-plugin.ts drifted from spec §14.1 step 5 (used `vec0.c` instead of `sqlite-vec.c`); (2) vendoring lacked `sqlite3.h`+`sqlite3ext.h` matching Bun 1.3.11's bundled SQLite 3.51.2 — both required for compileVec0FromSource. Vendored the SQLite 3.51.2 headers, renamed the source ref + FIXTURE entry, and added a narrow CI smoke (gcc compile + bun:sqlite load + vec_version probe) that exercises the FORCE_COMPILE path without staging the rest of the build artifacts. Blast radius widened beyond the originally-declared two paths.</synopsis>
   </chore>
 
   <chore id="upstream-pdf-server-revendor-process"
