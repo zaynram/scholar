@@ -21,7 +21,8 @@
   </chore>
 
   <chore id="ci-setup-scholar-plugin"
-         status="open"
+         status="closed"
+         fulfillment="ab0958b"
          blast-radius=".github/"
          blocks-plans="">
     <synopsis>CI for the scholar plugin: bun install --frozen-lockfile, bunx tsc --noEmit, bun test. Spec §6.1 cites "basic CI" without enumerating jobs; this chore turns that into a concrete workflow file. Does not block any single plan (each plan's local tests pass under bun test) but should land before merging the foundation branch so downstream plans benefit from CI signal. Option D scope (selected by lead 2026-05-26 after H5a STOP report): the build-plugin smoke step originally proposed is DEFERRED — see companion chore ci-add-smoke-build-step. SCHOLAR_BUILD_VEC_MISSING blocks the smoke step locally because src/vendor/sqlite-vec/vec0.so stub is not tracked (FIXTURE_FILES pattern from build-plugin.test.ts does not apply when invoking the script against the real repo root); deferring keeps source-gate green.</synopsis>
