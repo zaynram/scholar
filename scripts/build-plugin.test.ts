@@ -25,8 +25,9 @@ const FIXTURE_FILES: [string, string][] = [
   ["build/vendor/sqlite-vec/vec0.dll",          "stub-dll-win"],
   ["src/vendor/sqlite-vec/vec0.so",             "stub-so-linux"],
   ["build/vendor/sqlite-vec/vec0.so",           "stub-so-linux"],
-  // sqlite-vec source for compile fallback (build-time only; NOT archived)
-  ["src/vendor/sqlite-vec/vec0.c",              "/* stub vec0 source */"],
+  // sqlite-vec source for compile fallback (build-time only; NOT archived).
+  // Source filename is sqlite-vec.c per spec §14.1 step 5 + §7.2.1.
+  ["src/vendor/sqlite-vec/sqlite-vec.c",        "/* stub sqlite-vec source */"],
   ["src/vendor/sqlite-vec/sqlite3.h",           "/* stub sqlite3 header */"],
   // Both Bun runtime platform variants
   ["build/runtime/bun.exe",                     "stub-runtime-win"],

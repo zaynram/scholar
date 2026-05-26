@@ -97,21 +97,22 @@ async function resolveCompiler(): Promise<{ bin: string; args: string[] } | null
 }
 
 // ── vec0 compile-from-source fallback ────────────────────────────────────────
-// Compiles vec0.c from vendored source against the vendored sqlite3.h header.
+// Compiles sqlite-vec.c (the vendored amalgamation source, §7.2.1) against
+// the vendored sqlite3.h + sqlite3ext.h pinned to Bun's bundled SQLite version.
 // Caches the result at runtime/vendor/sqlite-vec/<libname> to skip recompile.
 // Aborts with SCHOLAR_BUILD_NO_C_TOOLCHAIN if no C compiler is found.
 
 async function compileVec0FromSource(destPath: string): Promise<void> {
   const isWin     = process.platform === "win32";
   const vecSrcDir = rel("src/vendor/sqlite-vec");
-  const vec0Src   = join(vecSrcDir, "vec0.c");
+  const vecSrc    = join(vecSrcDir, "sqlite-vec.c");
   const sqliteH   = join(vecSrcDir, "sqlite3.h");
 
-  if (!existsSync(vec0Src) || !existsSync(sqliteH)) {
+  if (!existsSync(vecSrc) || !existsSync(sqliteH)) {
     abort(
       "SCHOLAR_BUILD_VEC_SOURCE_MISSING",
       `Vendored sqlite-vec source not found at ${vecSrcDir}. ` +
-      "Foundation cycle 6.1 must vendor vec0.c + sqlite3.h alongside the prebuilt. " +
+      "Foundation must vendor sqlite-vec.c + sqlite3.h alongside the prebuilt. " +
       "See the 'sqlite-vec source' row in the packaging plan's 'What this plan consumes' table."
     );
   }
@@ -144,8 +145,8 @@ async function compileVec0FromSource(destPath: string): Promise<void> {
   // are passed as a proper argv array — $`${cc} -flag` treats the whole
   // interpolated string as a single argument (no shell word-splitting).
   const compileArgs = isWin
-    ? [...prefixArgs, "/LD", `/I${vecSrcDir}`, vec0Src, `/Fe:${destPath}`]
-    : [...prefixArgs, "-shared", "-fPIC", `-I${vecSrcDir}`, vec0Src, "-o", destPath];
+    ? [...prefixArgs, "/LD", `/I${vecSrcDir}`, vecSrc, `/Fe:${destPath}`]
+    : [...prefixArgs, "-shared", "-fPIC", `-I${vecSrcDir}`, vecSrc, "-o", destPath];
 
   const proc = Bun.spawn([bin, ...compileArgs], {
     cwd: BUILD_ROOT,
@@ -157,7 +158,7 @@ async function compileVec0FromSource(destPath: string): Promise<void> {
     const errText = await new Response(proc.stderr).text();
     abort(
       "SCHOLAR_BUILD_VEC_COMPILE_FAILED",
-      `Compiling vec0.c failed (exit ${exitCode}):\n${errText}`
+      `Compiling sqlite-vec.c failed (exit ${exitCode}):\n${errText}`
     );
   }
 

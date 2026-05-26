@@ -12,12 +12,21 @@ Note: `sqlite-vec.c` and `sqlite-vec.h` are sourced from the release amalgamatio
 the amalgamation build artifact. `LICENSE` and `UPSTREAM-README.md` are sourced from the raw
 tree at `https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/`.
 
+`sqlite3.h` and `sqlite3ext.h` are sourced from the SQLite 3.51.2 amalgamation
+(`sqlite-amalgamation-3510200.zip`), pinned to match the SQLite version Bun 1.3.11's
+`bun:sqlite` module statically links (`scholar.bunSqliteVersion = "3.51.2"`). They are
+required by `scripts/build-plugin.ts:compileVec0FromSource` (spec §14.1 step 5) when the
+prebuilt `vec0` triple is ABI-mismatched or absent. **The pair must be re-vendored every
+time `bundledBunVersion` changes** — Bun release notes record any SQLite version bump.
+
 ## Source URLs
 
 | File | Source URL |
 |---|---|
 | `sqlite-vec.c` | `https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-amalgamation.tar.gz` → `sqlite-vec.c` |
 | `sqlite-vec.h` | `https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-amalgamation.tar.gz` → `sqlite-vec.h` |
+| `sqlite3.h` | `https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip` → `sqlite3.h` |
+| `sqlite3ext.h` | `https://www.sqlite.org/2026/sqlite-amalgamation-3510200.zip` → `sqlite3ext.h` |
 | `LICENSE` | `https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/LICENSE-MIT` |
 | `UPSTREAM-README.md` | `https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/README.md` |
 
@@ -26,6 +35,8 @@ tree at `https://raw.githubusercontent.com/asg017/sqlite-vec/v0.1.9/`.
 ```
 ba081a47fa02eadc3cf6b16c314b695b84081269349aac722b4efa338fe8fd85  sqlite-vec.c
 8e4d7bfcd779c89bd19a6b2959fce24ee391b2eaf79a85a979377a36627cb060  sqlite-vec.h
+6c8b9f648f36c84b0eeb3239b1e6f32b459d2c859d905ba5d59153c3569e6562  sqlite3.h
+ea81fb7bd05882e0e0b92c4d60f677b205f7f1fbf085f218b12f0b5b3f0b9e48  sqlite3ext.h
 6ce72bbe12d975bd5286e5ab0a064c069693300c47bccbc57bec18485f1621ea  LICENSE
 9116ef6e0b78eb0caf5c6bb6419ccf4f8c6523967eef2045928c33dc66053d64  UPSTREAM-README.md
 ```
@@ -56,3 +67,9 @@ or equivalent) against the newly compiled or prebuilt `vec0` binary to verify AB
 with the active Bun release. A forward-ref: a more structured re-vendor runbook (mirroring
 the `upstream-pdf-server-revendor-process` chore for the pdf-server vendor) is a v1.1 candidate
 chore (`upstream-sqlite-vec-revendor-process`) — the orchestrator will decide post-v1.
+
+To refresh `sqlite3.h` + `sqlite3ext.h` when `bundledBunVersion` (or its corresponding
+`bunSqliteVersion`) changes: download the SQLite amalgamation matching the new
+`bunSqliteVersion` (URL pattern: `https://www.sqlite.org/<release-year>/sqlite-amalgamation-<X0YY0ZZ>.zip`
+where `X.YY.ZZ` is the SQLite version), extract `sqlite3.h` and `sqlite3ext.h`, overwrite the
+files here, and refresh the two header rows in the hashes table.
