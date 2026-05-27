@@ -14,16 +14,13 @@
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "build:server": "tsc --noEmit && bun build src/server/index.ts --compile --target=bun-windows-x64 --outfile build/scholar.exe",
-    "build:ui": "bun scripts/build-ui.ts",
-    "build:ui:dev": "UI_MINIFY=false bun scripts/build-ui.ts",
-    "build:pdf": "bun scripts/vendor-pdf-server.ts",
-    "build:runtime": "bun scripts/copy-bun-runtime.ts",
-    "build:vec": "bun scripts/build-vec0.ts",
-    "build:nu": "bun scripts/copy-nu.ts",
-    "build:plugin": "bun scripts/build-plugin.ts",
-    "measure-bundle": "bun scripts/measure-bundle.ts",
-    "start": "bun ./scripts/start.ts",
-    "dev": "bun ./src/server/index.ts"
+    "build:ui": "bun --cwd=scripts build-ui",
+    "build:ui:dev": "UI_MINIFY=false bun -q build:ui",
+    "build:pdf": "bun --cwd=scripts vendor-pdf-server",
+    "build:vec": "bun --cwd=scripts build-vec0",
+    "build:plugin": "bun --cwd=scripts build-plugin",
+    "measure-bundle": "bun --cwd=scripts measure-bundle",
+    "serve": "bun --cwd=scripts start-server.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -24,7 +24,7 @@ export function getVec0Extension() {
 export const resolveVec0Path = (): string =>
   process.env.SCHOLAR_VEC0_PATH ??
   join(
-    process.env.SCHOLAR_VEC0_PATH ?? process.cwd(),
+    process.env.CLAUDE_PLUGIN_ROOT ?? process.env.__dirname ?? process.cwd(),
     "build",
     "vendor",
     "sqlite-vec",

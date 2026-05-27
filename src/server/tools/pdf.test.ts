@@ -8,8 +8,8 @@ import { test, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { refreshExtraction } from "./pdf.ts"
-import { runRawDdl } from "../db/raw-ddl.ts"
-import { ensureVec0Path } from "%/index"
+import { runRawDdl } from "#server/db/raw-ddl.ts"
+import { ensureVec0Path } from "%/util"
 
 // Deterministic embedding: same input → same Float32Array. Avoids both
 // network round-trips and accidental cross-test coupling.

@@ -25,7 +25,7 @@ import {
   test,
   expect,
 } from "bun:test";
-import { registerDom, unregisterDom } from "../../../test-preload.ts";
+import { registerDom, unregisterDom } from "%/util";
 
 // React 18 act() environment flag — silences "not configured to support act"
 // warnings and makes act() actually flush state updates synchronously.
@@ -65,11 +65,11 @@ describe("CorpusDashboard — SA1 still_indexing pill (spec §11)", () => {
 
     await act(async () => {
       createRoot(container).render(
-        createElement(CorpusDashboard, { papers: [], onAction: () => {} }),
+        createElement(CorpusDashboard, { papers: [], onAction: () => { } }),
       );
     });
     // Let the useEffect-triggered search resolve.
-    await act(async () => {});
+    await act(async () => { });
 
     expect(container.innerHTML).toContain('data-badge="still-indexing"');
   });
@@ -89,10 +89,10 @@ describe("CorpusDashboard — SA1 still_indexing pill (spec §11)", () => {
 
     await act(async () => {
       createRoot(container).render(
-        createElement(CorpusDashboard, { papers: [], onAction: () => {} }),
+        createElement(CorpusDashboard, { papers: [], onAction: () => { } }),
       );
     });
-    await act(async () => {});
+    await act(async () => { });
 
     expect(container.innerHTML).not.toContain('data-badge="still-indexing"');
   });

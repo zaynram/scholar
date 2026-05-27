@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "scholar": {
-      "command": "bun",
-      "args": ["run", "start"],
+      "command": "${CLAUDE_PLUGIN_ROOT}/build/scholar",
       "env": {
         "SCHOLAR_RUNTIME_ROOT": "${HOME}/mcp-data/scholar/runtime",
         "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",

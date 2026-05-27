@@ -17,12 +17,13 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs"
-import { join } from "node:path"
-import { homedir } from "node:os"
-import { $ } from "bun"
-import { rel, err, paths, flags } from "."
+import path, { join } from "node:path"
 import { compileVec0FromSource, probeVec0Abi } from "./build-vec0"
 import { getVec0Extension } from "^src/server/db/sqlite-vec"
+import util, { OUTPUT } from "./util"
+import env from "./util/env"
+
+const VEC0 = `vec0.${getVec0Extension()}`
 
 // ── Pre-flight: version invariant (steps 4 ↔ 5) ─────────────────────────────
 // Reads scholar.bundledBunVersion and scholar.bunSqliteVersion from package.json
@@ -36,14 +37,14 @@ import { getVec0Extension } from "^src/server/db/sqlite-vec"
 // Both fields must be set from the same Bun release by foundation cycle 6.1.
 
 function assertVersionInvariant(): void {
-  const pkgRaw = readFileSync(rel("package.json"), "utf8")
+  const pkgRaw = readFileSync(util.subpath("package.json"), "utf8")
   const pkg = JSON.parse(pkgRaw) as {
     scholar?: { bundledBunVersion?: string; bunSqliteVersion?: string }
   }
   const bv = pkg.scholar?.bundledBunVersion
   const sv = pkg.scholar?.bunSqliteVersion
   if (!bv || !bv.trim() || !sv || !sv.trim()) {
-    err(
+    util.abort(
       "SCHOLAR_BUILD_MISMATCH",
       "package.json is missing scholar.bundledBunVersion or scholar.bunSqliteVersion " +
         "(both record different facts about the same Bun release; both must be populated). " +
@@ -62,21 +63,23 @@ function assertVersionInvariant(): void {
 // Exported and parameterised so the sibling-copy branch can be unit-tested in
 // isolation. fixture=true skips the shell-out but still performs the copy.
 
-export async function step1_buildServer(
-  buildRoot: string,
-  fixture: boolean,
-): Promise<void> {
-  if (!fixture) {
-    await $`bun run build:server`.cwd(buildRoot)
+export async function step1_buildServer(root?: string): Promise<void> {
+  function dynResolve(name: string) {
+    return root ? path.join(root, "build", name) : util.subpath("build", name)
   }
-  // Extension-less sibling — runs in BOTH production and fixture mode.
-  // .mcp.json command is "./build/scholar" (no extension); Windows hosts need
-  // the sibling for runtime extension-search resolution (§14.1 step 1).
-  const exePath = join(buildRoot, "build/scholar.exe")
-  const sibPath = join(buildRoot, "build/scholar")
-  if (existsSync(exePath)) {
-    copyFileSync(exePath, sibPath)
-  }
+  await util
+    .onfixture(util.noop, {
+      async default() {
+        return void util.sh`bun run build:server`
+      },
+    })
+    .then(() => {
+      let binaries = {
+        src: dynResolve("scholar.exe"),
+        dst: dynResolve("scholar"),
+      } as const
+      if (existsSync(binaries.src)) copyFileSync(binaries.src, binaries.dst)
+    })
 }
 
 // ── Step 2: Build UI bundle ───────────────────────────────────────────────────
@@ -84,9 +87,12 @@ export async function step1_buildServer(
 // Target ≤ 4.5 MB (bundle-budget gate resolved upstream by frontends cycle 6.9).
 
 async function step2_buildUI(): Promise<void> {
-  if (flags.FIXTURE) return
-  mkdirSync(rel("build/ui"), { recursive: true })
-  await $`bun run build:ui`.cwd(paths.ROOT)
+  await util.onfixture(util.noop, {
+    async default() {
+      mkdirSync(util.subpath("build", "ui"), { recursive: true })
+      await util.sh`bun run build:ui`
+    },
+  })
 }
 
 // ── Step 3: Copy vendored pdf dist ────────────────────────────────────────────
@@ -94,11 +100,14 @@ async function step2_buildUI(): Promise<void> {
 // No transpilation, no patch step (vendor is unmodified per §7.2).
 
 async function step3_copyPdf(): Promise<void> {
-  if (flags.FIXTURE) return
-  const src = rel("src/vendor/pdf-server")
-  const dest = rel("build/vendor/pdf-server")
-  mkdirSync(dest, { recursive: true })
-  cpSync(src, dest, { recursive: true })
+  await util.onfixture(util.noop, {
+    default() {
+      const src = util.subpath("src/vendor/pdf-server")
+      const dest = util.subpath("build/vendor/pdf-server")
+      mkdirSync(dest, { recursive: true })
+      cpSync(src, dest, { recursive: true })
+    },
+  })
 }
 
 // ── Step 4: Copy Bun runtime ──────────────────────────────────────────────────
@@ -106,25 +115,22 @@ async function step3_copyPdf(): Promise<void> {
 // The bundled runtime is the pdf-child spawn target.
 
 async function step4_copyRuntime(): Promise<void> {
-  if (flags.FIXTURE) return
-  const isWin = process.platform === "win32"
-  const bunName = isWin ? "bun.exe" : "bun"
-  const which = (
-    (await $`which bun`.text().catch(() => null)) ??
-    (await $`where bun`.text().catch(() => null))
-  )?.trim()
-
-  if (!which)
-    return err(
-      "SCHOLAR_BUILD_RUNTIME_MISSING",
-      "Cannot locate bun binary on PATH. Ensure bun is installed on the build host.",
-    )
-
-  const [firstLine = ""] = which.split("\n")
-  const bunSrc = firstLine.trim()
-  const destDir = rel("build/runtime")
-  mkdirSync(destDir, { recursive: true })
-  copyFileSync(bunSrc, join(destDir, bunName))
+  await util.onfixture(util.noop, {
+    default() {
+      const name = env.dynamic({ win32: "bun.exe", default: "bun" })
+      const path = Bun.which(name)
+      if (!path)
+        return util.abort(
+          "SCHOLAR_BUILD_RUNTIME_MISSING",
+          "Cannot locate bun binary on PATH. Ensure bun is installed on the build host.",
+        )
+      const [firstLine = ""] = path.split("\n")
+      const bunSrc = firstLine.trim()
+      const destDir = util.subpath("build/runtime")
+      mkdirSync(destDir, { recursive: true })
+      copyFileSync(bunSrc, join(destDir, name))
+    },
+  })
 }
 
 // ── Step 5: vec0 shared library — ABI probe then compile fallback ─────────────
@@ -136,47 +142,53 @@ async function step4_copyRuntime(): Promise<void> {
 
 async function step5_copyVec(): Promise<void> {
   const libName = `vec0.${getVec0Extension()}`
-  const prebuilt = rel(`runtime/vendor/sqlite-vec/${libName}`)
-  const destDir = rel("build/vendor/sqlite-vec")
+  const prebuilt = util.subpath(`runtime/vendor/sqlite-vec/${libName}`)
+  const destDir = util.subpath("build/vendor/sqlite-vec")
   mkdirSync(destDir, { recursive: true })
   const destPath = join(destDir, libName)
 
-  if (flags.FIXTURE && !flags.COMPILE)
-    if (!existsSync(prebuilt))
-      // Fixture: skip ABI probe; just assert prebuilt stub is staged and copy it.
-      err(
-        "SCHOLAR_BUILD_VEC_MISSING",
-        `Prebuilt ${libName} not found at ${prebuilt} [fixture mode]. ` +
-          "Ensure FIXTURE_FILES stages both vec0.dll and vec0.so.",
-      )
-    else copyFileSync(prebuilt, destPath)
-
-  // Production or FORCE_COMPILE: ABI probe → use prebuilt or compile fallback.
-  const usePrebuilt =
-    !flags.COMPILE && existsSync(prebuilt) && probeVec0Abi(prebuilt)
-  if (usePrebuilt) {
-    copyFileSync(prebuilt, destPath)
-    return
-  }
-
-  if (!flags.COMPILE) {
-    const reason = !existsSync(prebuilt)
-      ? `prebuilt ${libName} not found`
-      : "prebuilt ABI probe failed (SQLite version mismatch between vec0 and Bun's bundled engine)"
-    console.warn(`vec0 ${reason} — falling back to compile-from-source`)
-  }
-
-  await compileVec0FromSource(destPath)
+  await util.onfixture(
+    () =>
+      util.oncompile(() => compileVec0FromSource(destPath), {
+        default() {
+          if (!existsSync(prebuilt))
+            // Fixture: skip ABI probe; just assert prebuilt stub is staged and copy it.
+            util.abort(
+              "SCHOLAR_BUILD_VEC_MISSING",
+              `Prebuilt ${libName} not found at ${prebuilt} [fixture mode]. ` +
+                "Ensure FIXTURE_FILES stages both vec0.dll and vec0.so.",
+            )
+          else copyFileSync(prebuilt, destPath)
+        },
+      }),
+    {
+      default() {
+        util.oncompile(async () => await compileVec0FromSource(destPath), {
+          default() {
+            if (existsSync(prebuilt) && probeVec0Abi(prebuilt))
+              copyFileSync(prebuilt, destPath)
+            else
+              console.warn(
+                `vec0 ${existsSync(prebuilt) ? "prebuilt ABI probe failed; sqlite version mismatch between vec0 and Bun's bundled engine" : `prebuild ${libName} not found`} - falling back to source compilation`,
+              )
+          },
+        })
+      },
+    },
+  )
 }
 
 // ── Step 6: Copy nu module ────────────────────────────────────────────────────
 
 async function step6_copyNu(): Promise<void> {
-  if (flags.FIXTURE) return
-  const src = rel("nu/scholar.nu")
-  const dest = rel("build/nu/scholar.nu")
-  mkdirSync(rel("build/nu"), { recursive: true })
-  copyFileSync(src, dest)
+  util.onfixture(util.noop, {
+    default() {
+      const src = util.subpath("nu/scholar.nu")
+      const dest = util.subpath("build/nu/scholar.nu")
+      mkdirSync(util.subpath("build/nu"), { recursive: true })
+      copyFileSync(src, dest)
+    },
+  })
 }
 
 // ── Step 7: Assemble plugin tree + zip ────────────────────────────────────────
@@ -185,50 +197,44 @@ async function step6_copyNu(): Promise<void> {
 
 async function step7_assemblePlugin(): Promise<void> {
   // Files to include in the archive: [src-abs-path, archive-relative-path]
-  const isWin = process.platform === "win32"
 
   const manifest: [string, string][] = [
-    [rel(".claude-plugin/plugin.json"), ".claude-plugin/plugin.json"],
-    [rel(".mcp.json"), ".mcp.json"],
-    [rel("build/scholar.exe"), "build/scholar.exe"],
-    [rel("build/scholar"), "build/scholar"], // extension-less sibling
-    [rel("build/ui/app.html"), "build/ui/app.html"],
-    [
-      rel("build/runtime/" + (isWin ? "bun.exe" : "bun")),
-      "build/runtime/" + (isWin ? "bun.exe" : "bun"),
-    ],
-    [
-      rel("build/vendor/sqlite-vec/" + (isWin ? "vec0.dll" : "vec0.so")),
-      "build/vendor/sqlite-vec/" + (isWin ? "vec0.dll" : "vec0.so"),
-    ],
-    [rel("nu/scholar.nu"), "nu/scholar.nu"],
-  ]
+    ".claude-plugin/plugin.json",
+    ".mcp.json",
+    "build/scholar.exe",
+    "build/scholar",
+    "build/ui/app.html",
+    `build/runtime/bun${env.dynamic({ win32: ".exe", default: "" })}`,
+    `build/vendor/sqlite-vec/${VEC0}`,
+    "nu/scholar.nu",
+  ].map((p) => [util.subpath(p), p] as const)
 
   // Recursively collect all files from a directory into the manifest.
   // Used for pdf dist, slash commands, and skills — so frontends can add
   // a file without requiring a packaging revision.
-  function collectDir(srcBase: string, archBase: string): void {
+  function collect(archBase: string): void {
+    const srcBase = util.subpath(archBase)
     if (!existsSync(srcBase)) return // gracefully skip absent optional dirs
     for (const entry of readdirSync(srcBase, { withFileTypes: true })) {
       const srcPath = join(srcBase, entry.name)
       const archPath = archBase + "/" + entry.name
       if (entry.isDirectory()) {
-        collectDir(srcPath, archPath)
+        collect(archPath)
       } else {
         manifest.push([srcPath, archPath])
       }
     }
   }
 
-  collectDir(rel("build/vendor/pdf-server"), "build/vendor/pdf-server")
+  collect("build/vendor/pdf-server")
   // Slash commands + skills (frontends cycle 6.10).
-  collectDir(rel("commands"), "commands")
-  collectDir(rel("skills"), "skills")
+  collect("commands")
+  collect("skills")
 
   // Validate every source file exists before attempting zip.
   const missing = manifest.map(([src]) => src).filter((src) => !existsSync(src))
   if (missing.length > 0)
-    return err(
+    return util.abort(
       "SCHOLAR_BUILD_MISSING_ARTIFACT",
       `Expected artifact(s) not found: ${missing.join(", ")}. ` +
         "Ensure all upstream plans have completed their cycles.",
@@ -243,15 +249,14 @@ async function step7_assemblePlugin(): Promise<void> {
   const zipped = zipSync(fileMap, { level: 6 })
 
   // Determine output paths.
-  const coworkSystemDir =
-    paths.OUTPUT ?? join(homedir(), "Documents", "Cowork", "System")
-  mkdirSync(coworkSystemDir, { recursive: true })
-  const primaryOut = join(coworkSystemDir, "scholar.plugin")
+  mkdirSync(OUTPUT, { recursive: true })
+  const primaryOut = join(OUTPUT, "scholar.plugin")
   await Bun.write(primaryOut, zipped)
   console.log(`scholar.plugin written to: ${primaryOut}`)
 
   // Best-effort secondary copy to COWORK_PLUGINS_DIR if set.
-  const stagingEnv = process.env.COWORK_PLUGINS_DIR
+  const stagingEnv = env.static("COWORK_PLUGINS_DIR")
+
   if (stagingEnv) {
     try {
       mkdirSync(stagingEnv, { recursive: true })
@@ -270,21 +275,19 @@ async function step7_assemblePlugin(): Promise<void> {
 // ── Orchestrator ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log(
-    `scholar plugin build — ${flags.FIXTURE ? "FIXTURE MODE" : "production"}`,
-  )
-
+  const tag = `[${util.onfixture(() => "scholar-fixture", {
+    default: () => "scholar",
+  })}]`
+  console.log(`${tag} plugin build`)
   assertVersionInvariant() // pre-flight: steps 4 ↔ 5 version match
-
-  await step1_buildServer(paths.ROOT, flags.FIXTURE) // §14.1 step 1
+  await step1_buildServer() // §14.1 step 1
   await step2_buildUI() // §14.1 step 2
   await step3_copyPdf() // §14.1 step 3
   await step4_copyRuntime() // §14.1 step 4
   await step5_copyVec() // §14.1 step 5 (also runs in fixture for vec0 check)
   await step6_copyNu() // §14.1 step 6
   await step7_assemblePlugin() // §14.1 step 7
-
-  console.log("Build complete.")
+  console.log(`${tag} build complete.`)
 }
 
 // Guard main() so the module can be imported by tests without triggering the

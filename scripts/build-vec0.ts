@@ -2,7 +2,10 @@ import { $ } from "bun"
 import { Database } from "bun:sqlite"
 import { join, basename } from "node:path"
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
-import { rel, err, env, paths } from "."
+import util, { ROOT } from "./util"
+import env from "./util/env"
+
+const CC = env.static("CC")
 
 // ── vec0 ABI probe ────────────────────────────────────────────────────────────
 // Exported for unit testing. Returns true if extPath loads cleanly into an
@@ -35,9 +38,9 @@ async function resolveCompiler(): Promise<{
   bin: string
   args: string[]
 } | null> {
-  if (env.CC) {
+  if (CC) {
     // Destructuring ensures `bin` is `string` (not `string | undefined`).
-    const [bin = "", ...prefixArgs] = env.CC.split(/\s+/)
+    const [bin = "", ...prefixArgs] = CC.split(/\s+/)
 
     if (prefixArgs.length > 0) {
       // Multi-word CC (e.g., "bun /path/to/stub-cc.ts"): use as-is without which check.
@@ -54,24 +57,22 @@ async function resolveCompiler(): Promise<{
     // CC is set but the binary wasn't found on PATH — fall through to system compilers.
   }
 
-  if (!env.WIN) {
-    for (const candidate of ["cc", "gcc", "clang"]) {
-      const found = await $`which ${candidate}`
+  async function inner(candidates: string[]) {
+    for (const bin of candidates) {
+      const found = await $`which ${bin}`
         .text()
         .catch(() => "")
         .then((s: string) => s.trim())
-      if (found) return { bin: candidate, args: [] }
+      if (found) return found
     }
-  } else {
-    // Windows: prefer CC (already checked above), then fall back to MSVC cl.
-    const found = await $`where cl`
-      .text()
-      .catch(() => "")
-      .then((s: string) => s.trim())
-    if (found) return { bin: "cl", args: [] }
   }
 
-  return null
+  const bin = env.dynamic({
+    win32: await inner(["cc", "gcc", "clang"]),
+    default: await inner(["cl"]),
+  })
+
+  return bin ? { bin, args: [] } : null
 }
 
 // ── vec0 compile-from-source fallback ────────────────────────────────────────
@@ -81,12 +82,12 @@ async function resolveCompiler(): Promise<{
 // Aborts with SCHOLAR_BUILD_NO_C_TOOLCHAIN if no C compiler is found.
 
 export async function compileVec0FromSource(destPath: string): Promise<void> {
-  const vecSrcDir = rel("src/vendor/sqlite-vec")
+  const vecSrcDir = util.subpath("src/vendor/sqlite-vec")
   const vecSrc = join(vecSrcDir, "sqlite-vec.c")
   const sqliteH = join(vecSrcDir, "sqlite3.h")
 
   if (!existsSync(vecSrc) || !existsSync(sqliteH)) {
-    err(
+    util.abort(
       "SCHOLAR_BUILD_VEC_SOURCE_MISSING",
       `Vendored sqlite-vec source not found at ${vecSrcDir}. ` +
         "Foundation must vendor sqlite-vec.c + sqlite3.h alongside the prebuilt. " +
@@ -95,7 +96,7 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
   }
 
   // Stable cache location — avoids recompile on subsequent builds.
-  const cacheDir = rel("runtime/vendor/sqlite-vec")
+  const cacheDir = util.subpath("runtime/vendor/sqlite-vec")
   const libName = basename(destPath)
   const cachedLib = join(cacheDir, libName)
   if (existsSync(cachedLib)) {
@@ -107,7 +108,7 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
   const compiler = await resolveCompiler()
 
   if (!compiler)
-    return err(
+    return util.abort(
       "SCHOLAR_BUILD_NO_C_TOOLCHAIN",
       "vec0 prebuilt is ABI-mismatched or absent, and no C compiler " +
         "(cc, gcc, clang, or CC env var) is available. " +
@@ -121,27 +122,24 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
   // Use Bun.spawn (not $`...`) so multi-word CC commands (bin + prefixArgs)
   // are passed as a proper argv array — $`${cc} -flag` treats the whole
   // interpolated string as a single argument (no shell word-splitting).
-  const compileArgs = env.WIN
-    ? [...prefixArgs, "/LD", `/I${vecSrcDir}`, vecSrc, `/Fe:${destPath}`]
-    : [
-        ...prefixArgs,
-        "-shared",
-        "-fPIC",
-        `-I${vecSrcDir}`,
-        vecSrc,
-        "-o",
-        destPath,
-      ]
+  const compileArgs = prefixArgs.concat(
+    env
+      .dynamic({
+        win32: `/LD /I${vecSrcDir} ${vecSrc} /Fe:${destPath}`,
+        default: `-shared -fPIC -I${vecSrcDir} ${vecSrc} -o ${destPath}`,
+      })
+      .split(` `),
+  )
 
   const proc = Bun.spawn([bin, ...compileArgs], {
-    cwd: paths.ROOT,
+    cwd: ROOT,
     stdout: "pipe",
     stderr: "pipe",
   })
   const exitCode = await proc.exited
   if (exitCode !== 0) {
     const errText = await new Response(proc.stderr).text()
-    err(
+    util.abort(
       "SCHOLAR_BUILD_VEC_COMPILE_FAILED",
       `Compiling sqlite-vec.c failed (exit ${exitCode}):\n${errText}`,
     )
@@ -154,7 +152,7 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
 }
 
 if (import.meta.main)
-  compileVec0FromSource(rel("build/vendor/sqlite-vec")).catch((e) => {
+  compileVec0FromSource(util.subpath("build/vendor/sqlite-vec")).catch((e) => {
     const error =
       e instanceof Error ? `Unhandled compile error: ${e.message}\n` : String(e)
     process.stderr.write(error)

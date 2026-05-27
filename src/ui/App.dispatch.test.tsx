@@ -10,7 +10,7 @@
 //
 // Uses registerDom/unregisterDom opt-in pattern (chore 859263d).
 import { describe, beforeAll, afterAll, test, expect, beforeEach, afterEach } from "bun:test";
-import { registerDom, unregisterDom } from "../../test-preload.ts";
+import { registerDom, unregisterDom } from "%/util/preload.ts";
 
 // React 18 act() environment flag — required for act() to flush state updates.
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;

@@ -15,29 +15,29 @@ import {
   test,
   expect,
   mock,
-} from "bun:test";
-import { registerDom, unregisterDom } from "../../../test-preload.ts";
+} from "bun:test"
+import { registerDom, unregisterDom } from "%/util"
 
 // React 18: set IS_REACT_ACT_ENVIRONMENT so act() flushes state updates
 // synchronously and click handlers run their async callTool chains within
 // the act() boundary. Without this, useState updates batch and the SA3/SA4
 // tests race past their captures.
-(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", () => {
-  beforeAll(registerDom);
-  afterAll(unregisterDom);
+  beforeAll(registerDom)
+  afterAll(unregisterDom)
 
-  let container: HTMLDivElement;
+  let container: HTMLDivElement
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
-  });
+  })
   afterEach(() => {
     document.body.removeChild(container);
     delete (globalThis as Record<string, unknown>).cowork;
     delete (globalThis as Record<string, unknown>).mcp;
-  });
+  })
 
   // ──────────────────────────────────────────────────────────────────────────
   // SA2 — askClaude sentinel + host-capability detection
@@ -65,7 +65,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         createElement(DigestPanel, {
           scopeKey: "all",
           digest: null,
-          onAction: () => {},
+          onAction: () => { },
         }),
       );
     });
@@ -104,7 +104,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         createElement(DigestPanel, {
           scopeKey: "all",
           digest: null,
-          onAction: () => {},
+          onAction: () => { },
         }),
       );
     });
@@ -120,7 +120,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
       generateBtn!.click();
     });
     // Flush microtasks for the async callTool → askClaude chain.
-    await act(async () => {});
+    await act(async () => { });
 
     expect(askClaudeMock).toHaveBeenCalledWith(
       sentinelPayload.prompt,
@@ -170,7 +170,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
             createElement(DigestPanel, {
               scopeKey,
               digest: null,
-              onAction: () => {},
+              onAction: () => { },
             }),
           );
         });
@@ -182,7 +182,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         await act(async () => {
           generateBtn?.click();
         });
-        await act(async () => {});
+        await act(async () => { });
 
         expect(capturedArgs).not.toBeNull();
         expect((capturedArgs as unknown as Record<string, unknown>).scope_key).toBe(scopeKey);
@@ -226,7 +226,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         createElement(DigestPanel, {
           scopeKey: "all",
           digest: null,
-          onAction: () => {},
+          onAction: () => { },
         }),
       );
     });
@@ -239,7 +239,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     await act(async () => {
       generateBtn?.click();
     });
-    await act(async () => {});
+    await act(async () => { });
 
     expect(capturedArgs).not.toBeNull();
     const uc = (capturedArgs as unknown as Record<string, unknown>).use_claude;
@@ -271,7 +271,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         createElement(DigestPanel, {
           scopeKey: "all",
           digest: null,
-          onAction: () => {},
+          onAction: () => { },
         }),
       );
     });
@@ -285,7 +285,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     await act(async () => {
       claudeBtn!.click();
     });
-    await act(async () => {});
+    await act(async () => { });
 
     expect(capturedArgs).not.toBeNull();
     expect((capturedArgs as unknown as Record<string, unknown>).use_claude).toBe(true);

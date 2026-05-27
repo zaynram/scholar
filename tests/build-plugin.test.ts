@@ -8,14 +8,16 @@ import {
   mkdtempSync,
   readFileSync,
 } from "node:fs"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { unzipSync } from "fflate" // pre-declared by foundation; no CLI dependency
+import util from "^scripts/util"
+import env from "^scripts/util/env.ts"
+import { getVec0Extension } from "^src/server/db/sqlite-vec.ts"
 
 // Fixture root — a temp dir acting as the repo root for the test run
 const FIXTURE_ROOT = mkdtempSync(join(tmpdir(), "scholar-build-test-"))
 const OUTPUT_DIR = join(FIXTURE_ROOT, "dist")
-const isWin = process.platform === "win32"
 
 // Paths the build script expects to find (fixture stubs).
 // BOTH platform variants for runtime and vec0 are staged so the test suite
@@ -28,9 +30,9 @@ const FIXTURE_FILES: [string, string][] = [
   ["build/ui/app.html", "<!DOCTYPE html><html><body>stub</body></html>"],
   ["build/vendor/pdf-server/dist/index.js", "// stub pdf server"],
   // Both vec0 platform variants (step5 copies from src/ to build/)
-  ["src/vendor/sqlite-vec/vec0.dll", "stub-dll-win"],
+  ["runtime/vendor/sqlite-vec/vec0.dll", "stub-dll-win"],
   ["build/vendor/sqlite-vec/vec0.dll", "stub-dll-win"],
-  ["src/vendor/sqlite-vec/vec0.so", "stub-so-linux"],
+  ["runtime/vendor/sqlite-vec/vec0.so", "stub-so-linux"],
   ["build/vendor/sqlite-vec/vec0.so", "stub-so-linux"],
   // sqlite-vec source for compile fallback (build-time only; NOT archived).
   // Source filename is sqlite-vec.c per spec §14.1 step 5 + §7.2.1.
@@ -120,7 +122,7 @@ async function runBuildScript(
   extraEnv: Record<string, string> = {},
 ) {
   const proc = Bun.spawn(
-    [process.execPath, resolve("scripts/build-plugin.ts")],
+    [process.execPath, util.subpath("scripts/build-plugin.ts")],
     {
       env: {
         ...process.env,
@@ -131,7 +133,7 @@ async function runBuildScript(
       },
       stdout: "pipe",
       stderr: "pipe",
-      cwd: process.cwd(),
+      cwd: util.subpath(),
     },
   )
   const exitCode = await proc.exited
@@ -155,11 +157,8 @@ test("build-plugin produces a .plugin archive with the required layout", async (
   const entryNames = Object.keys(entries)
 
   // Platform-specific variants — step7 picks based on process.platform
-  const runtimeEntry = isWin ? "build/runtime/bun.exe" : "build/runtime/bun"
-  const vec0Entry = isWin
-    ? "build/vendor/sqlite-vec/vec0.dll"
-    : "build/vendor/sqlite-vec/vec0.so"
-
+  const runtimeEntry = `build/runtime/bun${env.dynamic({ win32: ".exe", default: "" })}`
+  const vec0Entry = `build/vendor/sqlite-vec/vec0.${getVec0Extension()}`
   const requiredEntries = [
     ".claude-plugin/plugin.json",
     ".mcp.json",
@@ -236,10 +235,11 @@ test("step1_buildServer creates extension-less build/scholar sibling (sibling-co
 
     // step1_buildServer is exported and accepts (buildRoot, fixture) explicitly
     // so it can be called in isolation without module-level env var coupling.
-    const { step1_buildServer } = (await import("./build-plugin.ts")) as {
-      step1_buildServer: (buildRoot: string, fixture: boolean) => Promise<void>
-    }
-    await step1_buildServer(tmpDir, /* fixture= */ true) // skips shell-out; runs copy
+    const { step1_buildServer } =
+      (await import("^scripts/build-plugin.ts")) as {
+        step1_buildServer: (root: string) => Promise<void>
+      }
+    await step1_buildServer(tmpDir) // skips shell-out; runs copy
 
     const siblingPath = join(tmpDir, "build/scholar")
     expect(
@@ -323,7 +323,7 @@ test("build-plugin aborts with SCHOLAR_BUILD_VEC_MISSING when vec0 prebuilt is a
     for (const [relPath, content] of FIXTURE_FILES) {
       // Omit all src/vendor/sqlite-vec/ entries (both .dll and .so) — the script
       // must detect the platform-appropriate prebuilt is absent and abort.
-      if (relPath.startsWith("src/vendor/sqlite-vec/")) continue
+      if (relPath.startsWith("runtime/vendor/sqlite-vec/")) continue
       const abs = join(noVecRoot, relPath)
       mkdirSync(join(abs, ".."), { recursive: true })
       writeFileSync(abs, content, "utf8")
@@ -352,10 +352,10 @@ test("build-plugin aborts with SCHOLAR_BUILD_VEC_MISSING when vec0 prebuilt is a
 
 test("probeVec0Abi returns false for a file that is not a valid SQLite extension", async () => {
   // Unit test for the ABI probe helper. probeVec0Abi must be exported.
-  const { probeVec0Abi } = (await import("./build-vec0.ts")) as {
+  const { probeVec0Abi } = (await import("^scripts/build-vec0.ts")) as {
     probeVec0Abi: (extPath: string) => boolean
   }
-  const stubPath = join(FIXTURE_ROOT, "src/vendor/sqlite-vec/vec0.dll")
+  const stubPath = join(FIXTURE_ROOT, "runtime/vendor/sqlite-vec/vec0.dll")
   // The fixture stub contains plain text ("stub-dll-win"), not a real extension.
   // loadExtension must throw, and probeVec0Abi must return false.
   const result = probeVec0Abi(stubPath)
@@ -371,6 +371,12 @@ test("compile fallback produces vec0 artifact when SCHOLAR_BUILD_VEC_FORCE_COMPI
   const compileRoot = mkdtempSync(join(tmpdir(), "scholar-compile-"))
   try {
     for (const [relPath, content] of FIXTURE_FILES) {
+      // Skip both the runtime/ cache and the build/ destination so the compile
+      // path actually fires: compileVec0FromSource short-circuits on a cached
+      // artifact at runtime/vendor/sqlite-vec/, and a pre-staged destination
+      // would make existsSync(compiledPath) pass without the stub CC running.
+      if (relPath.startsWith("runtime/vendor/sqlite-vec/")) continue
+      if (relPath.startsWith("build/vendor/sqlite-vec/")) continue
       const abs = join(compileRoot, relPath)
       mkdirSync(join(abs, ".."), { recursive: true })
       writeFileSync(abs, content, "utf8")
@@ -414,12 +420,15 @@ if (oIdx !== -1 && args[oIdx + 1]) {
     )
 
     // Compiled artifact should exist at build/vendor/sqlite-vec/<libname>
-    const libName = isWin ? "vec0.dll" : "vec0.so"
+    // AND contain the stub CC's output — proves the compile path actually ran
+    // rather than copying a pre-staged stub.
+    const libName = `vec0.${getVec0Extension()}`
     const compiledPath = join(compileRoot, "build/vendor/sqlite-vec", libName)
     expect(
       existsSync(compiledPath),
       `compiled vec0 not found at ${compiledPath}`,
     ).toBe(true)
+    expect(readFileSync(compiledPath, "utf8")).toBe("stub-compiled-vec0")
   } finally {
     rmSync(compileRoot, { recursive: true, force: true })
   }
@@ -429,6 +438,7 @@ test("build-plugin aborts with SCHOLAR_BUILD_NO_C_TOOLCHAIN when no compiler is 
   const noCcRoot = mkdtempSync(join(tmpdir(), "scholar-no-cc-"))
   try {
     for (const [relPath, content] of FIXTURE_FILES) {
+      if (relPath.startsWith("runtime/vendor/sqlite-vec/")) continue
       const abs = join(noCcRoot, relPath)
       mkdirSync(join(abs, ".."), { recursive: true })
       writeFileSync(abs, content, "utf8")

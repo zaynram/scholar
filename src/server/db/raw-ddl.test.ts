@@ -12,7 +12,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openWithPragmas } from "./migrations.ts"
 import { runRawDdl } from "./raw-ddl.ts"
-import { ensureVec0Path } from "%/index"
+import { ensureVec0Path } from "%/util"
 // Ensure vec0 path is discoverable by `Database.loadExtension`. The build
 // pipeline (foundation's `bun run build:vec`) is expected to land a copy at
 // build/vendor/sqlite-vec/vec0.so; in dev we fall back to the npm package's

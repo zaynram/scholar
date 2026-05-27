@@ -9,7 +9,7 @@ import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { searchPapers, updatePaper } from "./papers.ts"
 import { runRawDdl } from "#server/db/raw-ddl.ts"
-import { ensureVec0Path } from "^/tests"
+import { ensureVec0Path } from "%/util"
 
 function deterministicEmbedding(dim: number, input: string): Float32Array {
   const out = new Float32Array(dim)

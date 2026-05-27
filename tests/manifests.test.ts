@@ -13,7 +13,7 @@ test("plugin manifest matches spec §7.1", () => {
 
 test(".mcp.json points command at the compiled binary placeholder", () => {
   expect(mcpManifest.mcpServers.scholar.command).toBe(
-    "${__dirname}/build/scholar",
+    "${CLAUDE_PLUGIN_ROOT}/build/scholar",
   )
   expect(mcpManifest.mcpServers.scholar.env.SCHOLAR_OLLAMA_EMBED_MODEL).toBe(
     "nomic-embed-text:v1.5",
