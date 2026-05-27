@@ -162,15 +162,18 @@ async function step5_copyVec(): Promise<void> {
         },
       }),
     {
-      default() {
-        util.oncompile(async () => await compileVec0FromSource(destPath), {
-          default() {
-            if (existsSync(prebuilt) && probeVec0Abi(prebuilt))
+      async default() {
+        await util.oncompile(() => compileVec0FromSource(destPath), {
+          async default() {
+            if (existsSync(prebuilt) && probeVec0Abi(prebuilt)) {
               copyFileSync(prebuilt, destPath)
-            else
-              console.warn(
-                `vec0 ${existsSync(prebuilt) ? "prebuilt ABI probe failed; sqlite version mismatch between vec0 and Bun's bundled engine" : `prebuild ${libName} not found`} - falling back to source compilation`,
-              )
+              return
+            }
+            const reason = existsSync(prebuilt)
+              ? "prebuilt ABI probe failed (SQLite version mismatch between vec0 and Bun's bundled engine)"
+              : `prebuilt ${libName} not found`
+            console.warn(`vec0 ${reason} — falling back to source compilation`)
+            await compileVec0FromSource(destPath)
           },
         })
       },
