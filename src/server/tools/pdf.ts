@@ -98,20 +98,18 @@ async function materializeChunkVec(
   // settings.embed.{model,dim}, flip chunk_vec.created='true', then re-invoke
   // runRawDdl which now creates the vec0 table.
   const result = probe ? await probe() : await loadVecAndProbeDim(db);
-  const dimStr = String(result.dim);
-  const modelStr = JSON.stringify(result.modelTag);
-  db.run(sql.raw(
-    `INSERT INTO settings(key,value) VALUES('embed.dim', '${dimStr}')
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-  ));
-  db.run(sql.raw(
-    `INSERT INTO settings(key,value) VALUES('embed.model', '${modelStr}')
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-  ));
-  db.run(sql.raw(
-    `INSERT INTO settings(key,value) VALUES('chunk_vec.created', 'true')
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-  ));
+  // Settings values are JSON-encoded so the ConfigAccessor read path
+  // (JSON.parse(value)) round-trips. Use parameter binding rather than
+  // `sql.raw` string concat so a future modelTag with a single quote in it
+  // doesn't break out of the SQL literal (CLAUDE.md §12.0 discipline).
+  const dimJson = JSON.stringify(result.dim);
+  const modelJson = JSON.stringify(result.modelTag);
+  db.run(sql`INSERT INTO settings(key,value) VALUES('embed.dim', ${dimJson})
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+  db.run(sql`INSERT INTO settings(key,value) VALUES('embed.model', ${modelJson})
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
+  db.run(sql`INSERT INTO settings(key,value) VALUES('chunk_vec.created', 'true')
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`);
   runRawDdl(db);
 }
 

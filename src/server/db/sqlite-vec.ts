@@ -24,7 +24,10 @@ export function getVec0Extension() {
 export const resolveVec0Path = (): string =>
   process.env.SCHOLAR_VEC0_PATH ??
   join(
-    process.env.CLAUDE_PLUGIN_ROOT ?? process.env.__dirname ?? process.cwd(),
+    // `process.env.__dirname` was a CommonJS-ism never actually set by Bun or
+    // Node — it always fell through to cwd(). Drop it; rely on cwd() in dev
+    // and CLAUDE_PLUGIN_ROOT in the packaged binary.
+    process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd(),
     "build",
     "vendor",
     "sqlite-vec",

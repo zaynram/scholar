@@ -237,9 +237,9 @@ test("step1_buildServer creates extension-less build/scholar sibling (sibling-co
     // so it can be called in isolation without module-level env var coupling.
     const { step1_buildServer } =
       (await import("^scripts/build-plugin.ts")) as {
-        step1_buildServer: (root: string) => Promise<void>
+        step1_buildServer: (root: string, fixture: boolean) => Promise<void>
       }
-    await step1_buildServer(tmpDir) // skips shell-out; runs copy
+    await step1_buildServer(tmpDir, true) // fixture=true skips shell-out; runs copy
 
     const siblingPath = join(tmpDir, "build/scholar")
     expect(

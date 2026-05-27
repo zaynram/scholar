@@ -68,8 +68,8 @@ async function resolveCompiler(): Promise<{
   }
 
   const bin = env.dynamic({
-    win32: await inner(["cc", "gcc", "clang"]),
-    default: await inner(["cl"]),
+    win32: await inner(["cl"]),
+    default: await inner(["cc", "gcc", "clang"]),
   })
 
   return bin ? { bin, args: [] } : null

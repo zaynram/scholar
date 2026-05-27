@@ -83,10 +83,12 @@ export function parseBibtex(source: string, _opts: ParseOptions = {}): ParsedEnt
     const year = yearRaw !== undefined ? parseInt(String(yearRaw), 10) : undefined;
 
     // F7: bibtex-parser lowercases all field keys — archivePrefix becomes archiveprefix.
+    // Field VALUES are not normalized, so compare case-insensitively: publisher-exported
+    // .bib files commonly use lowercase `arxiv` as the archivePrefix value.
     let arxivId: string | undefined;
     const archivePrefix = (entry.fields.archiveprefix as string | undefined)?.trim();
     const eprint = (entry.fields.eprint as string | undefined)?.trim();
-    if (archivePrefix === "arXiv" && eprint) {
+    if (archivePrefix?.toLowerCase() === "arxiv" && eprint) {
       try {
         arxivId = validateArxivId(eprint);
       } catch {

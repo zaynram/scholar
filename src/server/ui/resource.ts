@@ -39,7 +39,17 @@ export function registerUiResource(server: McpServer, ctx: ServerContext): void 
       );
       const html = await Bun.file(htmlPath)
         .text()
-        .catch(() => PLACEHOLDER_HTML);
+        .catch((e: NodeJS.ErrnoException) => {
+          // Only swallow the "build:ui hasn't run yet" case. Permission errors,
+          // IO errors, or anything else should surface — otherwise operators
+          // see the placeholder UI and never diagnose the real fault.
+          if (e.code === "ENOENT") return PLACEHOLDER_HTML;
+          ctx.log?.error?.("scholar.ui.resource: failed to read UI bundle", {
+            path: htmlPath,
+            err: String(e),
+          });
+          throw e;
+        });
       return {
         contents: [{ uri: uri.href, mimeType: "text/html", text: html }],
       };

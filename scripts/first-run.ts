@@ -22,6 +22,7 @@ import { nowIso } from "../src/server/db/nowIso.ts";
 export type FirstRunResult =
   | { code: "FIRST_RUN_COMPLETE"; slug: string }
   | { code: "FIRST_RUN_ELICIT_UNAVAILABLE" }
+  | { code: "FIRST_RUN_PROVISION_FAILED"; message: string }
   | { code: "FIRST_RUN_DISMISSED" };
 
 // ─── default PDF root suggestion per platform ─────────────────────────────────
@@ -167,9 +168,15 @@ export async function runFirstRun(
     await provisionBootstrapCorpus(ctx, slug, resolvedRoot, runtimeRoot);
   } catch (err) {
     ctx.log.error("scholar.corpus: first-run provisioning failed", { err: String(err) });
-    // Don't rethrow — return unavailable so the caller can tell the user to
-    // retry via scholar.corpus.create directly.
-    return { code: "FIRST_RUN_ELICIT_UNAVAILABLE" };
+    // Distinct from FIRST_RUN_ELICIT_UNAVAILABLE: that means "the host has no
+    // elicitation capability so we couldn't even ask the user"; this means
+    // "we got user input but the DB/sqlite-vec/permissions side blew up".
+    // Same code would tell hosts to skip first-run and silently mask DB
+    // corruption indefinitely.
+    return {
+      code: "FIRST_RUN_PROVISION_FAILED",
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 
   ctx.log.info("scholar.corpus: first-run complete", { slug, pdfRoot: resolvedRoot });

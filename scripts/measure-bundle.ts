@@ -50,11 +50,13 @@ let html = await Bun.file(`${CHUNK_DIR}/${htmlChunk}`).text();
 
 // Replace each <script src="./chunk.js"></script> with <script>{contents}</script>.
 const SCRIPT_RE = /<script[^>]*\bsrc=["']\.?\/?([^"']+\.js)["'][^>]*>\s*<\/script>/g;
-html = html.replace(SCRIPT_RE, (match, srcPath: string) => {
+html = html.replace(SCRIPT_RE, (_match, srcPath: string) => {
   const fullPath = `${CHUNK_DIR}/${srcPath}`;
   if (!existsSync(fullPath)) {
-    console.warn(`Inline skip: chunk ${fullPath} not found`);
-    return match;
+    // Leaving the <script src> reference in place and then deleting CHUNK_DIR
+    // would ship a single-file HTML that 404s at runtime — fail loudly instead.
+    console.error(`SCHOLAR_BUILD_CHUNK_MISSING: chunk referenced by HTML not found: ${fullPath}`);
+    process.exit(1);
   }
   // Use Bun.file().text() synchronously is not possible; we resolve below.
   // For this regex.replace, return a placeholder + collect paths.

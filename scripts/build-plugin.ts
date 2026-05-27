@@ -20,7 +20,7 @@ import {
 import path, { join } from "node:path"
 import { compileVec0FromSource, probeVec0Abi } from "./build-vec0"
 import { getVec0Extension } from "^src/server/db/sqlite-vec"
-import util, { OUTPUT } from "./util"
+import util, { OUTPUT, FIXTURE } from "./util"
 import env from "./util/env"
 
 const VEC0 = `vec0.${getVec0Extension()}`
@@ -63,23 +63,25 @@ function assertVersionInvariant(): void {
 // Exported and parameterised so the sibling-copy branch can be unit-tested in
 // isolation. fixture=true skips the shell-out but still performs the copy.
 
-export async function step1_buildServer(root?: string): Promise<void> {
+export async function step1_buildServer(
+  root?: string,
+  fixture: boolean = FIXTURE,
+): Promise<void> {
   function dynResolve(name: string) {
     return root ? path.join(root, "build", name) : util.subpath("build", name)
   }
-  await util
-    .onfixture(util.noop, {
-      async default() {
-        return void util.sh`bun run build:server`
-      },
-    })
-    .then(() => {
-      let binaries = {
-        src: dynResolve("scholar.exe"),
-        dst: dynResolve("scholar"),
-      } as const
-      if (existsSync(binaries.src)) copyFileSync(binaries.src, binaries.dst)
-    })
+  // Explicit `fixture` parameter (default: env-derived FIXTURE) lets the
+  // sibling-copy branch be unit-tested without spawning the real build:server.
+  // Don't use the util.onfixture combinator here — sync-defaults-around-async
+  // is the same footgun that produced the prior step5 incident.
+  if (!fixture) {
+    await util.sh`bun run build:server`
+  }
+  const binaries = {
+    src: dynResolve("scholar.exe"),
+    dst: dynResolve("scholar"),
+  } as const
+  if (existsSync(binaries.src)) copyFileSync(binaries.src, binaries.dst)
 }
 
 // ── Step 2: Build UI bundle ───────────────────────────────────────────────────
@@ -184,7 +186,7 @@ async function step5_copyVec(): Promise<void> {
 // ── Step 6: Copy nu module ────────────────────────────────────────────────────
 
 async function step6_copyNu(): Promise<void> {
-  util.onfixture(util.noop, {
+  await util.onfixture(util.noop, {
     default() {
       const src = util.subpath("nu/scholar.nu")
       const dest = util.subpath("build/nu/scholar.nu")
