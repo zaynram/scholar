@@ -16,16 +16,18 @@
 
 ## Showstopper batch (S1–S3) — must land first
 
-### S1 — pdf-viewer interop rewrite + §13 spec amendment
+### S1 — pdf-viewer interop rewrite + §13 spec amendment ✅ landed 2026-05-27
 
-- [ ] **Spec edit** `docs/superpowers/specs/2026-05-22-scholar-plugin-design.md` §13: drop inbound reconciliation phase. Document the one-way push contract. Remove every `list_annotations` reference (6+ sites).
-- [ ] **Spec edit** §7.6 `PdfChild` contract: change `interact(commands: PdfCommand[])` → `interact(cmd: PdfCommand)`. Wire envelope translates `{type, ...rest}` → `{action: type, ...rest}` at transport boundary. Cite `src/vendor/pdf-server/dist/src/commands.d.ts` as source of truth for the `PdfCommand` union.
-- [ ] **Spec add** §16 vendor-tool truth invariant: every command name in the spec must be exported by `src/vendor/pdf-server/dist/server.js`. The spec MAY NOT invent vendor capabilities.
-- [ ] **Code** `src/server/pdf/lifecycle.ts` `interact()`: rewrite to take a single `PdfCommand`, translate `type` → `action`, always call `callTool({ name: "interact", arguments: {...} })`. Drop the per-command tool-name routing at `lifecycle.ts:208`.
-- [ ] **Code** `src/server/tools/pdf.ts:244` envelope: route through `lifecycle.interact()`. Delete the `{tool, args}` envelope.
-- [ ] **Code** `src/server/tools/annotations.ts`: rewrite reconciler against the chosen §13 path. Drop the `list_annotations` enumeration phase. Treat DB as source of truth; push-only outbound.
-- [ ] **Test** add a contract-level test that spawns the actual vendor process and exercises at least one real `interact` call. Pick `navigate` as the smoke target (simplest payload).
-- [ ] **Test** rewrite `annotations.test.ts` injections to mock at the `lifecycle.interact()` boundary, not at the handler's `ctx.pdf.interact` injection point — that gap is what hid the bug.
+Branch: `worktree-s1-pdf-interop-and-13-amendment` (5 commits a2659b9 → 31d5692).
+
+- [x] **Spec edit** §13 v1.1 — inbound reconciliation removed; one-way push contract documented; all 6+ `list_annotations` references purged (commit a2659b9).
+- [x] **Spec edit** §7.6 PdfChild contract — `interact(cmd, {viewUUID, ...})`; envelope `{type, ...rest}` → `{viewUUID, action: type, ...rest}` translation pinned. `displayPdf()` added as a sibling vendor tool (commits a2659b9, 31d5692).
+- [x] **Spec add** §16 vendor-tool truth invariant — vendor commands.d.ts pinned as source of truth (commit a2659b9).
+- [x] **Code** `src/server/pdf/lifecycle.ts` `interact()` rewrite + `getText()` routed through interact + `displayPdf()` added (commit f97007d).
+- [x] **Code** `src/server/tools/pdf.ts` `refreshExtraction` viewUUID lookup via `ctx.pdfViews`; new `scholar.pdf.open` tool registers viewUUIDs; broken v1.0 proxies dropped (commit a832876).
+- [x] **Code** `src/server/tools/annotations.ts` push-only rewrite + serializeForViewer maps scholar rows → vendor's NoteAnnotation shape (commit a832876).
+- [x] **Test** real-vendor contract test `src/server/pdf/lifecycle.contract.test.ts` — navigate + add/remove_annotations envelopes, gated by `SCHOLAR_PDF_E2E=1` (commit 93bfca5; both fixtures pass against the real vendor process).
+- [x] **Test** `annotations.test.ts` rewritten — 22 tests covering NO_OPEN_VIEWER, write-then-push, idempotency, vendor note shape; v1.0 reconciler tests (Red-4/5/7b/7c/8b/9) retired with the reconciler (commit a832876).
 
 ### S2 — CLI mode argv + SIGINT ✅ landed 2026-05-27
 
