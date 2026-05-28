@@ -1,49 +1,41 @@
-// src/server/tools/annotations.ts — annotations plan cycle 6.7 (Green)
+// src/server/tools/annotations.ts — annotations plan cycle 6.7 (§13 v1.1)
 //
 // Three MCP tools: scholar.annotations.{list, upsert, delete}.
-// Implements §13's bidirectional reconciliation against the vendored pdf MCP
-// child, plus the spec-amendment-34871f2 tombstone-resurrection fix.
+// Implements the push-only annotation contract per spec §13 v1.1 (2026-05-27
+// amendment). The bidirectional reconciler from v1.0 was retired when the
+// production-readiness audit found that it depended on `list_annotations` —
+// a vendor command that @modelcontextprotocol/server-pdf@1.7.2 does not expose.
 //
-// LOAD-BEARING INVARIANTS (preserved verbatim from the plan-md):
-//   1. §13 phase ordering — phase-1 reads → phase-2 MCP I/O → phase-3
-//      db.transaction with NO awaits inside the closure. The transaction
-//      callback is typed `(tx) => void` so async returns are compile-time
-//      rejected (constraint #1).
-//   2. Write-then-push — handlers commit the synchronous DB write BEFORE
-//      forwarding to the pdf child. Failure-safe: a viewer crash after DB
-//      write leaves a dirty row that the next reconcile pushes (constraint #2).
-//   3. §12.0 sanitizeText — applied to body and anchor on both outbound
-//      (user-supplied) and inbound (viewer-originated) paths (constraint #3).
-//   4. source hardcoded — upsert input schema excludes source; handler writes
-//      "scholar"; only phase-3 step-3 writes "pdf-viewer" (constraint #4).
-//   5. NO_ACTIVE_CORPUS guard fires before any DB or pdf-child call
-//      (constraint #5).
-//   6. deriveRectFromAnchor returns the fixed [20,20,120,60] sticky — geometry-
-//      aware anchor resolution is v2 (constraint #6).
-//   7. scholar_deleted_ids Set — captured in phase 1 alongside tombstoned_ids;
-//      filters phase-3 INSERT to prevent resurrection of any soft-deleted id,
-//      not just the tombstone-audit subset (constraint #7).
-//   8. ctx.db snapshot-at-entry; ctx.pdf snapshotted alongside (constraint #8 + #15).
-//   9. corpus_id from ctx.config.activeCorpusId(); never from tool input
-//      (constraint #9).
-//  13. Phase-2 step-2 throws propagate — no try/catch in the per-row loop
-//      (constraint #13). Self-healing depends on phase-3 NOT running after a
-//      partial push.
-//  14. Post-tx delete-recovery — after db.transaction(...) returns and before
-//      reconcile() resolves, re-assert remove_annotations for any viewer rows
-//      whose id is in scholar_deleted_ids. Cures perpetual viewer-side staleness
-//      when the cursor has advanced past deleted_at (constraint #14).
-//  16. Phase-3 step-3 INSERT uses .onConflictDoNothing() so concurrent same-
-//      paper reconciles serialize without throwing PK constraint errors
-//      (constraint #16).
+// LOAD-BEARING INVARIANTS (push-only):
+//   1. Write-then-push — handlers commit the synchronous DB write BEFORE
+//      forwarding to the pdf child. Failure-safe: a viewer crash after the
+//      write leaves a dirty row that the user can re-push by re-invoking
+//      upsert with the same id.
+//   2. §12.0 sanitizeText — applied to user-supplied body and anchor on the
+//      outbound (upsert) path. Throws before any DB write or pdf-child call.
+//      Inbound sanitization is moot — there is no inbound path under v1.1.
+//   3. source hardcoded — upsert input schema excludes source; handler always
+//      writes "scholar". The "pdf-viewer" enum value persists in the §8.2
+//      CHECK constraint to keep older v0.x corpora validating; new writes
+//      never use it.
+//   4. NO_ACTIVE_CORPUS guard fires before any DB or pdf-child call.
+//   5. NO_OPEN_VIEWER guard fires when ctx.pdfViews has no entry for the
+//      target paper_id. upsert/delete throw; list does NOT — list is a pure
+//      DB read and works against closed-viewer papers.
+//   6. ctx.db snapshot-at-entry; ctx.pdf snapshotted alongside; ctx.pdfViews
+//      read at viewUUID-resolution time.
+//   7. corpus_id from ctx.config.activeCorpusId(); never from tool input.
+//   8. deriveRectFromAnchor returns the fixed [20,20,120,60] sticky — geometry-
+//      aware anchor resolution is v2.
 
 import { z } from "zod";
-import { and, eq, gt, isNull, or, isNotNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { annotations, annotation_tombstones, reconcile_state } from "../db/schema.ts";
+import { annotations } from "../db/schema.ts";
 import { sanitizeText } from "../ingest/primitives.ts";
 import { ulid, nowIso } from "../db/nowIso.ts";
 import type { PdfChild, RegisterTools, ServerContext } from "./registry.ts";
+import type { NoteAnnotation } from "../../vendor/pdf-server/dist/src/pdf-annotations.js";
 
 // ─── error ────────────────────────────────────────────────────────────────────
 
@@ -60,53 +52,43 @@ class AnnotationsToolError extends Error {
 
 export type AnnotationRow = typeof annotations.$inferSelect;
 
-type ViewerRow = {
-  id: string;
-  page?: number | null;
-  anchor?: string | null;
-  rect?: number[] | null;
-  body: string;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-type ViewerAnnotation = {
-  id: string;
-  page: number | null;
-  rect: [number, number, number, number];
-  body: string;
-  created_at: string;
-  updated_at: string;
-};
-
-// ─── helpers (file-private) ───────────────────────────────────────────────────
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * v1 fixed margin sticky-note rect. Anchor-geometry-aware resolution is v2
- * (requires PDF geometry from extraction; out-of-scope cross-plan coupling).
- * Constraint #6.
+ * Default sticky-note origin when no rect was supplied. v1 ships a fixed
+ * top-left margin position; geometry-aware anchor resolution is v2.
  */
-function deriveRectFromAnchor(
-  _anchor: string | null | undefined,
-): [number, number, number, number] {
-  return [20, 20, 120, 60];
-}
+const DEFAULT_NOTE_ORIGIN: { x: number; y: number } = { x: 20, y: 20 };
 
 /**
- * §13 pinned shape. id rides through unchanged (direct ULID — wrap-and-strip
- * branch deferred unless a future probe of pdf@1.7.2 reveals viewer-side id
- * mutation; constraint #12).
+ * Map a scholar annotation row to the vendor's `note` annotation shape
+ * (single source of truth: src/vendor/pdf-server/dist/src/pdf-annotations.d.ts).
+ *
+ * Mapping rationale (§13 v1.1 + §16 vendor-truth invariant):
+ *   - scholar's rect [x,y,w,h] is collapsed to vendor's (x, y); vendor's
+ *     `note` doesn't carry width/height — the sticky icon is fixed-size.
+ *   - scholar's anchor metadata (if any) is prefixed onto content so the
+ *     viewer's sticky text box shows it.
+ *   - page defaults to 1 because vendor requires `number` and scholar
+ *     persists `page: number | null` (paper-level notes carry no page).
+ *
+ * The discriminator type="note" is hard-coded — scholar v1 only emits
+ * sticky notes. Highlight/underline/etc. are out of scope until v2.
  */
-function serializeForViewer(row: AnnotationRow): ViewerAnnotation {
+function serializeForViewer(row: AnnotationRow): NoteAnnotation {
+  const rect = row.rect
+    ? (JSON.parse(row.rect) as [number, number, number, number])
+    : null;
+  const x = rect ? rect[0] : DEFAULT_NOTE_ORIGIN.x;
+  const y = rect ? rect[1] : DEFAULT_NOTE_ORIGIN.y;
+  const content = row.anchor ? `${row.anchor}\n\n${row.body}` : row.body;
   return {
     id: row.id,
-    page: row.page,
-    rect: row.rect
-      ? (JSON.parse(row.rect) as [number, number, number, number])
-      : deriveRectFromAnchor(row.anchor),
-    body: row.body,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    type: "note",
+    page: row.page ?? 1,
+    x,
+    y,
+    content,
   };
 }
 
@@ -138,7 +120,7 @@ function parseRect(rectStr: string): [number, number, number, number] {
   return parsed as [number, number, number, number];
 }
 
-/** Require an active corpus; throw structured error otherwise. Constraint #5. */
+/** Require an active corpus; throw structured error otherwise. */
 function requireDb(ctx: ServerContext, op: string): BunSQLiteDatabase {
   if (!ctx.db) {
     throw new AnnotationsToolError(
@@ -149,209 +131,20 @@ function requireDb(ctx: ServerContext, op: string): BunSQLiteDatabase {
   return ctx.db;
 }
 
-// ─── §13 reconciler ───────────────────────────────────────────────────────────
-
 /**
- * Bidirectional reconciler. Runs synchronously before every annotations.list
- * to eliminate the model-facing stale window. The three-phase structure keeps
- * SQLite write-lock holding decoupled from pdf-child network I/O — concurrent
- * lists on different papers do NOT serialize behind each other's interact()
- * round-trip.
- *
- * Phase 1 (reads, no tx) → Phase 2 (MCP I/O, no tx) → Phase 3 (write-back,
- * sync tx, no awaits) → Post-tx (re-assert removes for ghosts).
+ * Resolve viewUUID for a paper_id from the in-process map populated by
+ * scholar.pdf.open. Throws NO_OPEN_VIEWER on miss — the user re-opens the
+ * viewer to refresh the entry (§13 viewUUID propagation).
  */
-export async function reconcile(
-  corpus_id: string,
-  paper_id: string,
-  db: BunSQLiteDatabase,
-  pdf: PdfChild,
-): Promise<void> {
-  // --- Phase 1: read-only state capture (no tx; no SQLite write lock held). ---
-
-  const cursor = db
-    .select({ at: reconcile_state.last_reconciled_at })
-    .from(reconcile_state)
-    .where(
-      and(
-        eq(reconcile_state.corpus_id, corpus_id),
-        eq(reconcile_state.paper_id, paper_id),
-      ),
-    )
-    .get()?.at ?? "1970-01-01T00:00:00.000Z";
-
-  const scholar_dirty = db
-    .select()
-    .from(annotations)
-    .where(
-      and(
-        eq(annotations.paper_id, paper_id),
-        or(gt(annotations.updated_at, cursor), gt(annotations.deleted_at, cursor)),
-      ),
-    )
-    .all();
-
-  const scholar_all_live = db
-    .select()
-    .from(annotations)
-    .where(
-      and(
-        eq(annotations.paper_id, paper_id),
-        isNull(annotations.deleted_at),
-      ),
-    )
-    .all();
-  const scholar_by_id = new Map(scholar_all_live.map((r) => [r.id, r]));
-
-  // Constraint #7: every currently soft-deleted id for this paper — stricter
-  // than tombstoned_ids (which only includes explicit .delete-tool inserts).
-  // Used in phase-3 step-3 INSERT filter and in the post-tx delete-recovery loop.
-  const scholar_deleted_ids = new Set(
-    db
-      .select({ id: annotations.id })
-      .from(annotations)
-      .where(
-        and(
-          eq(annotations.paper_id, paper_id),
-          isNotNull(annotations.deleted_at),
-        ),
-      )
-      .all()
-      .map((r) => r.id),
-  );
-
-  // Spec §13 tombstoned_ids — drives the phase-2 resurrection-cure call.
-  const tombstoned_ids = new Set(
-    db
-      .select({ id: annotation_tombstones.annotation_id })
-      .from(annotation_tombstones)
-      .where(eq(annotation_tombstones.paper_id, paper_id))
-      .all()
-      .map((r) => r.id),
-  );
-
-  // --- Phase 2: MCP round-trips (await on network; no SQLite tx open). ---
-
-  const viewer_rows = (await pdf.interact([
-    { type: "list_annotations", paper_id },
-  ])) as ViewerRow[];
-  const viewer_by_id = new Map(viewer_rows.map((r) => [r.id, r]));
-
-  // Step 1: tombstone-push + resurrection cure. Folds (a) freshly-deleted
-  // dirty rows and (b) any tombstoned id the viewer is still reporting live
-  // into a single remove_annotations call. The (b) leg is the cure for
-  // amendment 34871f2 — without it, the phase-3 suppression masks the bug
-  // but never actually cleans up the viewer-side row.
-  const fresh_tombstone_ids = scholar_dirty
-    .filter((r) => r.deleted_at !== null)
-    .map((r) => r.id);
-  const resurrected_ids = viewer_rows
-    .filter((v) => tombstoned_ids.has(v.id))
-    .map((v) => v.id);
-  const ids_to_remove = Array.from(
-    new Set([...fresh_tombstone_ids, ...resurrected_ids]),
-  );
-  if (ids_to_remove.length > 0) {
-    await pdf.interact([{ type: "remove_annotations", ids: ids_to_remove }]);
+function requireViewUUID(ctx: ServerContext, paper_id: string, op: string): string {
+  const viewUUID = ctx.pdfViews.get(paper_id);
+  if (!viewUUID) {
+    throw new AnnotationsToolError(
+      "NO_OPEN_VIEWER",
+      `NO_OPEN_VIEWER: scholar.annotations.${op} requires scholar.pdf.open(paper_id=${paper_id}) to be called first so the viewUUID is registered in ctx.pdfViews.`,
+    );
   }
-
-  // Step 2: per-row push of live add/update. Per spec §13, mixed add+update
-  // batch semantics are unverified against pdf@1.7.2; we issue one call per
-  // dirty row. If a probe later confirms mixed batching is supported, this
-  // loop collapses to one call.
-  //
-  // Constraint #13: throws here propagate. Do NOT wrap in try/catch — the
-  // self-healing property depends on phase-3 NOT running after a partial push.
-  const live_changes = scholar_dirty.filter((r) => r.deleted_at === null);
-  for (const row of live_changes) {
-    const op = viewer_by_id.has(row.id) ? "update_annotations" : "add_annotations";
-    await pdf.interact([{ type: op, annotations: [serializeForViewer(row)] }]);
-  }
-
-  // --- Phase 3: local write-back inside a single Drizzle transaction. No awaits. ---
-  //
-  // Callback typed `(tx) => void` so a future maintainer who writes
-  // `db.transaction(async (tx) => ...)` fails compilation rather than
-  // silently degrading the §13 invariant.
-  const now = nowIso();
-  db.transaction((tx): void => {
-    // Step 3: viewer-only rows → pull. Tombstoned/soft-deleted ids skipped
-    // (resurrection prevention; spec amendment 34871f2 + constraint #7).
-    // INSERT uses .onConflictDoNothing() so concurrent same-paper reconciles
-    // serialize without throwing PK constraint errors (constraint #16).
-    for (const vrow of viewer_rows) {
-      if (tombstoned_ids.has(vrow.id)) continue;
-      if (scholar_deleted_ids.has(vrow.id)) continue;
-      const srow = scholar_by_id.get(vrow.id);
-      if (!srow) {
-        // Inbound sanitization: viewer text is untrusted (§12.0 constraint #3).
-        const safeBody = sanitizeText(vrow.body);
-        const safeAnchor = vrow.anchor != null ? sanitizeText(vrow.anchor) : null;
-        tx.insert(annotations)
-          .values({
-            id: vrow.id,
-            paper_id,
-            page: vrow.page ?? null,
-            anchor: safeAnchor,
-            rect: vrow.rect ? JSON.stringify(vrow.rect) : null,
-            body: safeBody,
-            source: "pdf-viewer",
-            created_at: vrow.created_at ?? now,
-            updated_at: vrow.updated_at ?? now,
-            deleted_at: null,
-          })
-          .onConflictDoNothing()
-          .run();
-      } else if (vrow.updated_at && vrow.updated_at > srow.updated_at) {
-        // LWW with strict-greater tie-break (constraint #11: scholar wins on ==).
-        const safeBody = sanitizeText(vrow.body);
-        tx.update(annotations)
-          .set({
-            body: safeBody,
-            rect: vrow.rect ? JSON.stringify(vrow.rect) : null,
-            source: "pdf-viewer",
-            updated_at: vrow.updated_at,
-          })
-          .where(eq(annotations.id, vrow.id))
-          .run();
-      }
-    }
-
-    // Step 4: scholar-only rows OLDER than cursor and missing from the viewer
-    // → treat as viewer-side deletions and tombstone in scholar.
-    for (const srow of scholar_all_live) {
-      if (srow.updated_at <= cursor && !viewer_by_id.has(srow.id)) {
-        tx.update(annotations)
-          .set({ deleted_at: now })
-          .where(eq(annotations.id, srow.id))
-          .run();
-      }
-    }
-
-    // Step 5: advance cursor.
-    tx.insert(reconcile_state)
-      .values({ corpus_id, paper_id, last_reconciled_at: now })
-      .onConflictDoUpdate({
-        target: [reconcile_state.corpus_id, reconcile_state.paper_id],
-        set: { last_reconciled_at: now },
-      })
-      .run();
-  });
-
-  // --- Post-tx phase: re-assert removes for viewer rows blocked by the F7 filter. ---
-  //
-  // Constraint #14: once the cursor has advanced past deleted_at, the
-  // tombstone no longer appears in scholar_dirty so the phase-2 cure (which
-  // depends on tombstoned_ids) might still fire for tool-deleted rows, but a
-  // reconciler-set soft-delete (phase-3 step-4) is NOT in annotation_tombstones
-  // and would never re-push. This loop fills that gap by issuing remove_annotations
-  // for ANY soft-deleted id the viewer is still reporting. Throws propagate
-  // (same reasoning as constraint #13).
-  for (const vrow of viewer_rows) {
-    if (scholar_deleted_ids.has(vrow.id)) {
-      await pdf.interact([{ type: "remove_annotations", ids: [vrow.id] }]);
-    }
-  }
+  return viewUUID;
 }
 
 // ─── handlers ─────────────────────────────────────────────────────────────────
@@ -369,18 +162,10 @@ type ListArgs = { paper_id: string };
 type DeleteArgs = { id: string };
 
 async function handleList(args: unknown, ctx: ServerContext): Promise<unknown> {
+  // §13 v1.1: pure DB read. Does NOT require an open viewer — closed-viewer
+  // papers still return their persisted rows.
   const db = requireDb(ctx, "list");
-  const pdf = ctx.pdf;
   const { paper_id } = args as ListArgs;
-  const corpus_id = ctx.config.activeCorpusId();
-  if (!corpus_id) {
-    // Shouldn't happen if ctx.db is set, but guard defensively.
-    throw new AnnotationsToolError(
-      "NO_ACTIVE_CORPUS",
-      "NO_ACTIVE_CORPUS: scholar.annotations.list could not resolve active corpus id.",
-    );
-  }
-  await reconcile(corpus_id, paper_id, db, pdf);
   const rows = db
     .select()
     .from(annotations)
@@ -396,7 +181,7 @@ async function handleList(args: unknown, ctx: ServerContext): Promise<unknown> {
 
 async function handleUpsert(args: unknown, ctx: ServerContext): Promise<unknown> {
   const db = requireDb(ctx, "upsert");
-  const pdf = ctx.pdf;
+  const pdf: PdfChild = ctx.pdf;
   const input = args as UpsertArgs;
   if (!input || typeof input.body !== "string" || typeof input.paper_id !== "string") {
     throw new AnnotationsToolError(
@@ -404,9 +189,11 @@ async function handleUpsert(args: unknown, ctx: ServerContext): Promise<unknown>
       "INVALID_ARGS: paper_id and body are required.",
     );
   }
+  // viewUUID resolved BEFORE sanitization so a missing-viewer error fires
+  // before any string parsing — keeps the error ordering predictable.
+  const viewUUID = requireViewUUID(ctx, input.paper_id, "upsert");
 
-  // Outbound sanitization (§12.0 constraint #3 outbound). Throws SanitizeError
-  // before any DB write or pdf-child call.
+  // §12.0 sanitization (constraint #2). Throws SanitizeError before DB or push.
   const safeBody = sanitizeText(input.body);
   const safeAnchor = input.anchor != null ? sanitizeText(input.anchor) : null;
   const rectArr = input.rect != null ? parseRect(input.rect) : null;
@@ -476,18 +263,21 @@ async function handleUpsert(args: unknown, ctx: ServerContext): Promise<unknown>
     };
   }
 
-  // Write-then-push (constraint #2): the DB write above committed synchronously
-  // before this await. A viewer crash here leaves a dirty row that the next
-  // reconcile will pick up via scholar_dirty (updated_at > cursor).
-  const op = existing ? "update_annotations" : "add_annotations";
-  await pdf.interact([{ type: op, annotations: [serializeForViewer(savedRow)] }]);
+  // Write-then-push (constraint #1): the DB write above committed synchronously
+  // before this await. A throw here leaves a dirty row that the user can
+  // re-push by re-invoking upsert with the same id (idempotent on existing id).
+  const action = existing ? "update_annotations" : "add_annotations";
+  await pdf.interact(
+    { type: action, annotations: [serializeForViewer(savedRow)] },
+    { viewUUID },
+  );
 
   return savedRow;
 }
 
 async function handleDelete(args: unknown, ctx: ServerContext): Promise<unknown> {
   const db = requireDb(ctx, "delete");
-  const pdf = ctx.pdf;
+  const pdf: PdfChild = ctx.pdf;
   const { id } = args as DeleteArgs;
   if (typeof id !== "string") {
     throw new AnnotationsToolError("INVALID_ARGS", "INVALID_ARGS: id is required.");
@@ -498,37 +288,33 @@ async function handleDelete(args: unknown, ctx: ServerContext): Promise<unknown>
     .where(eq(annotations.id, id))
     .get();
   if (!existing) {
-    // No row to delete — silent success keeps the surface idempotent for stale
-    // viewer pushes; treat as a no-op (no row to tombstone).
+    // Idempotent on missing id — keeps the surface resilient to stale viewer
+    // pushes; treat as a no-op (no row to tombstone, no push to send).
     return { id, deleted: false, reason: "not_found" };
   }
-  // Constraint #3b: idempotent on already-tombstoned rows. No second
-  // deleted_at write, no second tombstone insert, no second pdf.interact.
+  // Idempotent on already-tombstoned rows — no second deleted_at write, no
+  // second pdf.interact.
   if (existing.deleted_at !== null) {
-    return { id, deleted: false, reason: "already_tombstoned", deleted_at: existing.deleted_at };
+    return {
+      id,
+      deleted: false,
+      reason: "already_tombstoned",
+      deleted_at: existing.deleted_at,
+    };
   }
+  // viewUUID resolved AFTER existence + idempotency checks so a delete on an
+  // already-tombstoned row is a clean no-op even when no viewer is open.
+  const viewUUID = requireViewUUID(ctx, existing.paper_id, "delete");
 
   const now = nowIso();
-  // Constraint #8 atomicity: deleted_at + annotation_tombstones in a single tx.
-  db.transaction((tx): void => {
-    tx.update(annotations)
-      .set({ deleted_at: now })
-      .where(eq(annotations.id, id))
-      .run();
-    tx.insert(annotation_tombstones)
-      .values({
-        annotation_id: id,
-        paper_id: existing.paper_id,
-        deleted_at: now,
-        deleted_by: "scholar",
-        deletion_reason: null,
-      })
-      .onConflictDoNothing()
-      .run();
-  });
+  // Single-statement update — under v1.1 the atomic tombstones pair retired.
+  db.update(annotations)
+    .set({ deleted_at: now })
+    .where(eq(annotations.id, id))
+    .run();
 
   // Write-then-push.
-  await pdf.interact([{ type: "remove_annotations", ids: [id] }]);
+  await pdf.interact({ type: "remove_annotations", ids: [id] }, { viewUUID });
   return { id, deleted: true, deleted_at: now };
 }
 
@@ -539,9 +325,8 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
     "scholar.annotations.list",
     {
       description:
-        "List live annotations for a paper. Runs §13's bidirectional reconciler " +
-        "(scholar ↔ vendored pdf MCP child) before returning, so the model never " +
-        "observes an annotation set that disagrees with the viewer.",
+        "List live annotations for a paper. Pure DB read under §13 v1.1 push-only; " +
+        "does NOT require an open viewer.",
       inputSchema: z.object({ paper_id: z.string().min(1) }),
     },
     handleList,
@@ -552,17 +337,15 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
       description:
         "Create or update an annotation. id is optional on insert (a ULID is " +
         "generated). On update, created_at is preserved; source is hardcoded " +
-        "to 'scholar'. Pushes add_annotations/update_annotations to the pdf " +
-        "child AFTER the DB write commits (write-then-push, §13).",
+        "to 'scholar'. Pushes add/update_annotations to the pdf child via " +
+        "ctx.pdfViews[paper_id] AFTER the DB write commits (write-then-push, §13).",
       inputSchema: z.object({
         id: z.string().optional(),
         paper_id: z.string().min(1),
         page: z.number().int().nullable().optional(),
         anchor: z.string().nullable().optional(),
-        // 4-element JSON string of finite numbers; validated before persist.
         rect: z.string().nullable().optional(),
         body: z.string().min(1),
-        // source intentionally excluded (constraint #4).
       }),
     },
     handleUpsert,
@@ -571,10 +354,9 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
     "scholar.annotations.delete",
     {
       description:
-        "Soft-delete an annotation. Sets annotations.deleted_at AND inserts an " +
-        "annotation_tombstones row atomically (§13 propagation model), then " +
-        "pushes remove_annotations to the pdf child. Idempotent on already-" +
-        "tombstoned ids.",
+        "Soft-delete an annotation. Sets annotations.deleted_at and pushes " +
+        "remove_annotations to the pdf child via ctx.pdfViews[paper_id]. " +
+        "Idempotent on already-tombstoned ids (no-op).",
       inputSchema: z.object({ id: z.string().min(1) }),
     },
     handleDelete,

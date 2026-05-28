@@ -33,6 +33,7 @@ beforeEach(() => {
     },
     currentRoots: () => [],
     setRoots: async () => {},
+    displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
     isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
   }
 

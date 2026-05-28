@@ -29,6 +29,7 @@ beforeEach(async () => {
     getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
     currentRoots: () => [],
     setRoots: setRootsMock as unknown as (roots: string[]) => Promise<void>,
+    displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
     isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
   };
 

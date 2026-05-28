@@ -16,6 +16,7 @@ function makeDeps(overrides: Partial<BuildServerDeps> = {}): BuildServerDeps {
       getText: async () => "",
       currentRoots: () => [],
       setRoots: async () => {},
+      displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
       isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
     }),
     ...overrides,
