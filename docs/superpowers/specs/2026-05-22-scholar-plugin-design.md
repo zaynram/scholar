@@ -597,6 +597,12 @@ interface PdfChild {
   // hood. Default timeoutMs = 120_000 (text extraction can be slow on large
   // papers). viewUUID required.
   getText(opts: { viewUUID: string; timeoutMs?: number }): Promise<string>;
+  // Opens a PDF in the vendor's interactive viewer by calling the vendor's
+  // `display_pdf` tool (a separate vendor tool, NOT an interact action).
+  // Returns the viewUUID that subsequent interact/getText calls must carry.
+  // Consumed by scholar.pdf.open to populate ServerContext.pdfViews
+  // (§13 viewUUID propagation). Default timeoutMs = 30_000.
+  displayPdf(source: string, opts?: { timeoutMs?: number }): Promise<{ viewUUID: string }>;
   currentRoots(): string[];
   // Structured health snapshot. `alive` reflects whether the child responded to the
   // most recent ping; `lastOkAt` is epoch-ms of the most recent successful interaction
