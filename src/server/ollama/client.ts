@@ -50,6 +50,12 @@ export class OllamaUnavailableError extends Error {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
+// S3 roadmap batch (2026-05-27): per-call timeouts so a hung Ollama process
+// can't stall callers indefinitely. Defaults align with the audit's budgets
+// (embed: 60s, chat: 120s). Env-overridable to keep tests fast.
+const DEFAULT_EMBED_TIMEOUT_MS = 60_000;
+const DEFAULT_CHAT_TIMEOUT_MS = 120_000;
+
 class OllamaClientImpl implements OllamaClient {
   // baseUrl() is a method (not a stored property) so env-var changes made by
   // tests via `process.env.SCHOLAR_OLLAMA_URL = ...` take effect at call time.
@@ -57,7 +63,17 @@ class OllamaClientImpl implements OllamaClient {
     return process.env.SCHOLAR_OLLAMA_URL ?? "http://127.0.0.1:11434";
   }
 
-  private async postJson<T>(path: string, body: unknown): Promise<T> {
+  private embedTimeoutMs(): number {
+    const v = process.env.SCHOLAR_OLLAMA_EMBED_TIMEOUT_MS;
+    return v ? Number(v) : DEFAULT_EMBED_TIMEOUT_MS;
+  }
+
+  private chatTimeoutMs(): number {
+    const v = process.env.SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS;
+    return v ? Number(v) : DEFAULT_CHAT_TIMEOUT_MS;
+  }
+
+  private async postJson<T>(path: string, body: unknown, timeoutMs: number): Promise<T> {
     const url = this.baseUrl();
     let res: Response;
     try {
@@ -65,10 +81,17 @@ class OllamaClientImpl implements OllamaClient {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
+      const e = err as Error;
+      if (e.name === "TimeoutError") {
+        throw new OllamaUnavailableError(
+          `Ollama timed out after ${timeoutMs}ms at ${url}${path}`,
+        );
+      }
       throw new OllamaUnavailableError(
-        `cannot reach Ollama at ${url}: ${(err as Error).message}`,
+        `cannot reach Ollama at ${url}: ${e.message}`,
       );
     }
     if (!res.ok) {
@@ -87,6 +110,7 @@ class OllamaClientImpl implements OllamaClient {
     const res = await this.postJson<{ embedding?: number[]; embeddings?: number[][] }>(
       "/api/embeddings",
       body,
+      this.embedTimeoutMs(),
     );
     const vec = res.embedding ?? res.embeddings?.[0];
     if (!vec || vec.length === 0) {
@@ -109,6 +133,7 @@ class OllamaClientImpl implements OllamaClient {
     const res = await this.postJson<{ message?: { content: string }; response?: string }>(
       "/api/chat",
       body,
+      this.chatTimeoutMs(),
     );
     const content = res.message?.content ?? res.response ?? "";
     if (!content) {
