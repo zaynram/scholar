@@ -34,7 +34,7 @@ The plugin is explicitly **not** a port of the Daisy artifact. It is a clean rei
     - arXiv abstract API ingest (no auth, free).
     Manual entry (single-paper form) is the fallback.
 7. **Semantic search** — `sqlite-vec` index over paper title + abstract + extracted text chunks; embeddings produced via local Ollama (`nomic-embed-text:v1.5` default tag; user-pluggable).
-8. **Annotation surface** — schema-compatible with the Daisy round-trip (`{ id, page?, anchor?, body, created_at, updated_at, source }`); round-trips with the child pdf MCP (scholar→viewer push, viewer→scholar reconcile-on-read — see §13).
+8. **Annotation surface** — schema-compatible with the Daisy round-trip (`{ id, page?, anchor?, body, created_at, updated_at, source }`); v1.1 push-only: scholar→viewer push on upsert/delete, with `viewUUID` resolved from a process-local `paper_id → viewUUID` map populated by `scholar.pdf.open` (see §13).
 9. **Synthesis / digest / reading prompts** — local Ollama by default (Qwen-class chat model, user-pluggable). Escape hatch to `cowork.askClaude` for high-stakes synthesis where the user explicitly opts in.
 10. **Reading queue** — simple priority queue (manual `priority` integer + computed staleness signals); no FSRS in v1.
 11. **MCP App view surfaces (5)** — corpus dashboard, paper detail, digest panel, reading prompts pane, reader progress (charts).
@@ -223,7 +223,7 @@ Loader for the `sqlite-vec` extension; handles platform-specific dll/dylib resol
 `scholar.ingest.bibtex / doi / arxiv / manual`.
 
 ### 5.12 src/server/tools/pdf.ts
-`scholar.pdf.open / search-text / extract-anchors / refresh-extraction`; proxies into the child pdf MCP.
+`scholar.pdf.open / refresh-extraction`. `scholar.pdf.open(paper_id, source)` calls the vendor's `display_pdf` tool and registers the returned `viewUUID` under `paper_id` in `ctx.pdfViews` (§7.6) — the population point for the §13 push-only annotation model. `scholar.pdf.refresh-extraction` re-extracts text, chunks, and embeds (resolves `viewUUID` via the same map). The v1.0 proxy stubs `search-text` and `extract-anchors` were never wired to real vendor tools and are removed in the 2026-05-27 §13 amendment.
 
 ### 5.13 src/server/tools/snapshot.ts
 `scholar.snapshot.take` and the change-since-last-open delta logic.
@@ -570,20 +570,33 @@ Each stub compiles immediately, so `registry.ts`, `index.ts`, and `migrations.ts
 
 ```typescript
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import type { PdfCommand } from "../../vendor/pdf-server/dist/src/commands.js";
 // SQLite driver swap: better-sqlite3 → bun:sqlite + drizzle-orm/bun-sqlite.
 // See Session 4 for the corresponding .mcp.json `command` swap to the compiled exe.
 
 // The pdf child-process handle. Produced by src/server/pdf/lifecycle.ts
 // (foundation); consumed by pdf.ts (extraction) and annotations.ts (annotations).
+//
+// Wire-envelope contract (2026-05-27 amendment, §13 v1.1):
+//   - The vendor exposes ONE tool named "interact" whose input schema is
+//     {viewUUID, action, ...sibling-fields-per-action} (or {viewUUID, commands:[...]}
+//     for batching). scholar passes single commands only.
+//   - PdfCommand is the vendor's source of truth: src/vendor/pdf-server/dist/src/commands.d.ts.
+//     The spec MAY NOT invent vendor capabilities (§16 vendor-tool truth invariant).
+//   - lifecycle.ts's interact() translates {type: "navigate", page: 5} →
+//     callTool({name: "interact", arguments: {viewUUID, action: "navigate", page: 5}}).
+//   - viewUUID is REQUIRED on every call; see §13 "viewUUID propagation".
 interface PdfChild {
-  // Drives add/update/remove_annotations, get_text, .... Caller-supplied AbortSignal
-  // and timeoutMs both honoured; whichever fires first wins. Default timeoutMs = 30_000.
+  // Single-command interact. Caller-supplied AbortSignal and timeoutMs both
+  // honoured; whichever fires first wins. Default timeoutMs = 30_000.
   interact(
-    commands: unknown[],
-    opts?: { signal?: AbortSignal; timeoutMs?: number },
+    cmd: PdfCommand,
+    opts: { viewUUID: string; signal?: AbortSignal; timeoutMs?: number },
   ): Promise<unknown>;
-  // Default timeoutMs = 120_000 (text extraction can be slow on large papers).
-  getText(viewUUID: string, opts?: { timeoutMs?: number }): Promise<string>;
+  // Calls the vendor's get_text via interact (action: "get_text") under the
+  // hood. Default timeoutMs = 120_000 (text extraction can be slow on large
+  // papers). viewUUID required.
+  getText(opts: { viewUUID: string; timeoutMs?: number }): Promise<string>;
   currentRoots(): string[];
   // Structured health snapshot. `alive` reflects whether the child responded to the
   // most recent ping; `lastOkAt` is epoch-ms of the most recent successful interaction
@@ -616,6 +629,16 @@ interface ServerContext {
   db: BunSQLiteDatabase | undefined;  // active per-corpus Drizzle db; undefined until a corpus is active
   configDb: BunSQLiteDatabase;        // scholar-config.db
   pdf: PdfChild;
+  // Process-local paper_id → viewUUID map. Populated by scholar.pdf.open
+  // (which calls vendor display_pdf and registers the returned viewUUID
+  // under the paper_id key). Consumed by annotations.{upsert,delete} and
+  // pdf.refresh-extraction to look up viewUUID before issuing interact()
+  // calls. Not persisted: scholar restart drops the map, and a child crash
+  // + supervisor respawn (§5.19) renders cached entries stale (the respawn
+  // produces fresh viewUUIDs). v1 surfaces the resulting vendor error to
+  // the caller; v1.1+ may add a respawn callback that clears the map.
+  // See §13 "viewUUID propagation."
+  pdfViews: Map<string, string>;
   config: ConfigAccessor;
   log: Logger;                        // foundation-provided singleton
 }
@@ -781,61 +804,36 @@ export const annotations = sqliteTable("annotations", {
   paper_id:   text("paper_id").notNull().references(() => papers.id, { onDelete: "cascade" }),
   page:       integer("page"),
   anchor:     text("anchor"),
-  // JSON-encoded [x1, y1, x2, y2] page-coordinate rectangle. Persisted on inbound
-  // reconcile from the pdf MCP so geometry survives the round-trip; on outbound push
-  // (scholar → viewer) the §13 reconciler prefers this over the anchor-derived rect.
-  // Null when the annotation has no associated rectangle (e.g., a paper-level note).
+  // JSON-encoded [x1, y1, x2, y2] page-coordinate rectangle. Set on upsert when the
+  // caller supplies geometry; otherwise the outbound push falls back to a derived
+  // rect (deriveRectFromAnchor → fixed margin sticky). Null is valid (paper-level note).
   rect:       text("rect"),
   body:       text("body").notNull(),
-  source:     text("source").notNull(),        // "scholar" | "pdf-viewer"
+  // Always "scholar" under v1.1 push-only (§13). The CHECK retains "pdf-viewer" as
+  // a permitted value to keep older corpora (predating the 2026-05-27 amendment)
+  // validating without a forced data migration; new writes always use "scholar".
+  source:     text("source").notNull(),
   created_at: text("created_at").notNull(),
   updated_at: text("updated_at").notNull(),
-  deleted_at: text("deleted_at"),              // null = live; non-null = soft-deleted tombstone marker on the row. The companion annotation_tombstones table below is the *canonical* resurrection-prevention record; this column is the cheap "is this row alive?" filter used by reconciler phase-1 reads (see §13).
+  // null = live; non-null = soft-deleted (timestamp of the delete). v1.1 uses this
+  // column as the only delete record — the companion `annotation_tombstones` audit
+  // table was retired 2026-05-27 (see §13, §17). `WHERE deleted_at IS NULL` is the
+  // "live row" filter used by `annotations.list`.
+  deleted_at: text("deleted_at"),
 }, (t) => ({
   paper_idx:       index("annotations_paper_idx").on(t.paper_id),
-  // Composite covers the §13 reconciler's "what changed since last reconcile for this paper"
-  // scan, which orders by updated_at within paper_id.
-  paper_dirty_idx: index("annotations_paper_dirty_idx").on(t.paper_id, t.updated_at),
   source_ck:       check("annotations_source_ck", sql`source IN ('scholar','pdf-viewer')`),
 }));
 
-// Resurrection-prevention audit log for annotation deletes. Inserted in the same
-// db.transaction(...) as the soft-delete in annotations.deleted_at (see §13 propagation
-// model and reconciler). The §13 reconciler loads the per-paper tombstone-id set in
-// phase 1 and uses it as an in-memory filter in phase 3 step 3, preventing a viewer-side
-// re-emergence of a deleted annotation from re-inserting. v1 keeps tombstones forever —
-// no TTL, no background sweep, no lazy prune (see §13 "Tombstone retention"); the
-// per-corpus DB stays small because tombstones are bounded by user delete actions, not
-// by paper count, and any TTL would re-introduce the resurrection bug for tombstones
-// older than the window.
-//
-// No FK to annotations(id): the tombstone is canonical and must survive a hypothetical
-// hard-delete of the annotations row (e.g., a future schema migration that compacts
-// soft-deleted rows). annotation_id is treated as an opaque ULID label here. The
-// timestamp is TEXT/ISO to match annotations.deleted_at and reconcile_state
-// .last_reconciled_at — uniform timestamp typing across §8.2 overrides the chore's
-// integer-millis suggestion (decision logged here for §13 amendment 2026-05-25).
-export const annotation_tombstones = sqliteTable("annotation_tombstones", {
-  annotation_id:   text("annotation_id").primaryKey(),  // matches the deleted annotations.id (ULID)
-  paper_id:        text("paper_id").notNull(),          // denormalized for fast per-paper SELECT in §13 phase 1
-  deleted_at:      text("deleted_at").notNull(),        // ISO; mirrors the annotations.deleted_at value at delete time
-  deleted_by:      text("deleted_by"),                  // optional audit: 'scholar' | tool name | user identity
-  deletion_reason: text("deletion_reason"),             // optional free-form audit string
-}, (t) => ({
-  paper_idx: index("annotation_tombstones_paper_idx").on(t.paper_id),
-}));
-
-// Per-paper reconciler bookkeeping. One row per (corpus_id, paper_id) that scholar
-// has ever reconciled with the child pdf MCP. Lets the algorithm detect "this side
-// has never seen that paper" vs "this side deleted it" without ambiguity. Algorithm
-// body in §13 is filled in Session 3; the schema shape is pinned here.
-export const reconcile_state = sqliteTable("reconcile_state", {
-  corpus_id:           text("corpus_id").notNull(),
-  paper_id:            text("paper_id").notNull(),
-  last_reconciled_at:  text("last_reconciled_at").notNull(),
-}, (t) => ({
-  pk: primaryKey({ columns: [t.corpus_id, t.paper_id] }),
-}));
+// `annotation_tombstones` and `reconcile_state` — RETIRED 2026-05-27 (§13 v1.1
+// push-only amendment, §17 decision log "drop inbound reconciliation"). Both tables
+// served bidirectional reconciliation which the vendored pdf MCP does not support
+// (no full-enumeration command; `get_viewer_state` returns selected-annotation IDs
+// only). Their definitions are deliberately absent: the foundation migration script
+// (§7.3) creates only the surviving §8.2 tables. Older corpora that may carry these
+// tables from a v0.x run keep the rows on disk (no DROP TABLE migration); scholar
+// stops reading from / writing to them. Hard-delete forensics and resurrection-prevention
+// are out of scope for v1; see §13 "Out-of-scope" for the rationale.
 
 export const anchor_cache = sqliteTable("anchor_cache", {
   paper_id:     text("paper_id").primaryKey().references(() => papers.id, { onDelete: "cascade" }),
@@ -944,7 +942,7 @@ Differences from Daisy: search is **semantic** (sqlite-vec) when Ollama is avail
 
 Two-column layout. Left: an in-panel PDF render produced by **bundled pdf.js** (the library, bundled into the single-file UI — *not* a nested MCP App iframe). Right: paper metadata, annotations list (with CRUD), reading prompts, and a "similar papers" panel populated by `chunk_vec` k-NN search. An "open in pdf-viewer" action hands off to the full pdf-viewer plugin for heavyweight viewing.
 
-The annotation list uses the **same schema and IDs as the child pdf MCP's annotation store**. Edits in scholar's panel call `app.callServerTool("annotations.upsert", ...)`, which writes scholar's row and forwards the change to the child pdf MCP. Edits made in an external pdf-viewer are reconciled when the paper detail view is (re)opened or explicitly refreshed — see §13 for the reconciliation model.
+The annotation list uses the **same schema and IDs as the child pdf MCP's annotation store**. Edits in scholar's panel call `app.callServerTool("annotations.upsert", ...)`, which writes scholar's row and forwards the change to the child pdf MCP (via the `paper_id → viewUUID` lookup populated by `scholar.pdf.open`). Edits made externally in the pdf-viewer (without going through scholar's tools) are NOT synced into scholar in v1 — the vendored pdf MCP exposes no enumeration command, so a viewer→scholar pull is not implementable against `server-pdf@1.7.2`. See §13 for the push-only propagation model and its v2+ candidates.
 
 ### 9.3 Digest panel (`view: "digest", scope_key: ...`)
 
@@ -1001,10 +999,8 @@ All scholar tools are namespaced `scholar.<verb>`. Visibility annotations are ex
 | `scholar.prompts.generate` | both | Generate / refresh reading prompts for a paper. | — |
 | `scholar.digest.generate` | both | Generate / refresh a scoped digest. | — |
 | `scholar.digest.change-since-last-open` | app | Compute and render the delta digest. | — |
-| `scholar.pdf.open` | both | Open a paper in the pdf-viewer (proxies to child pdf MCP). | — |
-| `scholar.pdf.search-text` | app | Highlight a query in the active viewer. | — |
-| `scholar.pdf.extract-anchors` | app | Run the anchor extractor on a paper (replaces the PowerShell + uv + pypdf chain). | — |
-| `scholar.pdf.refresh-extraction` | model | Re-extract text + chunks + embeddings. | — |
+| `scholar.pdf.open` | both | Open a paper in the pdf-viewer. Calls vendor `display_pdf`; registers the returned `viewUUID` under `paper_id` in `ctx.pdfViews` (§7.6) so subsequent annotation pushes and text extraction can resolve it. | — |
+| `scholar.pdf.refresh-extraction` | model | Re-extract text + chunks + embeddings. Requires that `scholar.pdf.open` has been called for the paper this session (`viewUUID` comes from the map). | — |
 | `scholar.snapshot.take` | model | Snapshot status_overrides + selection (used by the change-since-last-open digest). | — |
 
 ## 11. Ollama Integration
@@ -1181,159 +1177,128 @@ A no-op metadata path: the form lets the user supply title/authors/year/venue/pd
 
 ## 13. Annotation Round-trip
 
-The vendored pdf MCP supports `add_annotations` / `update_annotations` / `remove_annotations` with the type catalogue listed in the pdf-viewer plugin's `view-pdf` skill. Scholar's annotation table mirrors that schema (`{id, page?, anchor?, body, source, created_at, updated_at, deleted_at}`); `id`s are stable across both stores. The schema additions in §8.2 — `annotations.deleted_at` (soft-delete marker on live rows), `annotations.rect` (persisted geometry), the `reconcile_state` table (per-paper bookkeeping), and the `annotation_tombstones` table (resurrection-prevention audit log; see "Tombstone-resurrection edge case" below) — are pinned. This section pins the reconciler algorithm body that consumes them.
+> **Amendment 2026-05-27 (v1.1).** This section was rewritten when the audit found that the v1.0 reconciler depended on a vendor command (`list_annotations`) that `@modelcontextprotocol/server-pdf@1.7.2` does not expose — the entire `PdfCommand` union (`src/vendor/pdf-server/dist/src/commands.d.ts`) contains no enumeration verb, and `get_viewer_state` returns `selectedAnnotationIds` only. Bidirectional reconciliation is therefore retired; v1 is push-only. See §17 decision log "drop inbound reconciliation" for the option weighing.
 
-**Propagation model.** v1 does **not** assume the child pdf MCP emits annotation-change notifications — that behaviour is unverified against `server-pdf@1.7.2`. Propagation is therefore poll/reconcile, not event-push:
+The vendored pdf MCP exposes annotation operations as `action` discriminants on its single `interact` tool: `add_annotations`, `update_annotations`, `remove_annotations`. The full `PdfCommand` union (these three plus eleven other actions — navigate, search, zoom, highlight_text, fill_form, get_pages, get_text, get_screenshot, get_viewer_state, save_as, search_navigate, find, file_changed) is declared in `src/vendor/pdf-server/dist/src/commands.d.ts`; the vendor file is the sole source of truth (§16 vendor-tool truth invariant). Scholar's annotation table mirrors the geometric schema (`{id, page?, anchor?, body, source, created_at, updated_at, deleted_at}`); `id`s are stable across both stores. The schema additions in §8.2 — `annotations.deleted_at` (soft-delete marker) and `annotations.rect` (persisted geometry) — are pinned. The earlier `reconcile_state` and `annotation_tombstones` tables are retired (§8.2 note).
 
-1. *scholar → viewer (push).* A `scholar.annotations.upsert` / `.delete` writes scholar's row, then immediately forwards the change to the child pdf MCP via `ctx.pdf.interact([{ type: "add_annotations" | "update_annotations" | "remove_annotations", ... }])` with a derived rectangle (the persisted `annotations.rect` if present, else the anchor-derived rect, else a margin sticky-note). A `.delete` performs a soft-delete by setting `annotations.deleted_at` *and*, in the same `db.transaction(...)`, inserts an `annotation_tombstones` row (annotation_id + deleted_at; optional deleted_by / deletion_reason for audit) — the tombstone is the canonical resurrection-prevention record and outlives the annotations row even under a hypothetical future hard-delete migration. Both writes commit atomically so the §13 reconciler never observes a partial state where the row is tombstoned but the audit record is missing.
-2. *viewer → scholar (reconcile-before-read).* Per Open Q4, every call to `scholar.annotations.list(paper_id)` synchronously invokes the reconciler below before returning rows. Latency cost (one viewer round-trip per list) is accepted in exchange for eliminating the model-facing stale window — the model never observes an annotation set that disagrees with what the user sees in the viewer.
+**Propagation model — push only.** Scholar's DB is the source of truth. Every `scholar.annotations.upsert` / `.delete` writes the row synchronously, commits, then forwards the change to the child pdf MCP via `ctx.pdf.interact(cmd, {viewUUID})`. Annotations created externally in the pdf-viewer (without going through scholar's tools) are NOT synced into scholar — the vendor exposes no full-enumeration command, so a viewer→scholar pull is not implementable against `server-pdf@1.7.2` without forking the vendor (which would violate §7.2's no-source-patch invariant).
 
-**Tombstone-resurrection edge case.** The vendored pdf MCP has no knowledge of scholar's soft-delete state — its `list_annotations` reply enumerates whatever the viewer currently considers live. A `remove_annotations` pushed by scholar in phase 2 of an earlier reconcile may fail to durably remove the annotation viewer-side (transient I/O loss between the call and the viewer's persistence layer, a viewer-side persistence quirk that re-hydrates from the underlying PDF on next list, or a future re-vendor that changes remove-semantics), causing the deleted annotation to reappear in a subsequent `list_annotations` reply. Without explicit handling, phase-3 step 3 of the algorithm below would observe the id as "viewer-only" — `scholar_by_id` contains only *live* rows via `isNull(deleted_at)`, so the lookup misses — and re-insert the row, resurrecting an annotation the user explicitly deleted. To distinguish "new annotation never seen" from "tombstoned annotation, do not resurrect", scholar consults the `annotation_tombstones` table (§8.2): the reconciler loads the per-paper tombstone-id set in phase 1, re-pushes `remove_annotations` in phase 2 for any tombstoned id that reappears viewer-side (resurrection *cure*, not just symptom suppression), and filters tombstoned ids out of the phase-3 insert branch as a pre-transaction in-memory `Set.has()` check. The Set lookup is canonical — a `SELECT` inside the phase-3 transaction would be equivalent semantically but breaks the no-await / minimum-tx-window discipline pinned below.
+The v1.0 "reconcile on every list" guarantee — *"the model never observes an annotation set that disagrees with what the user sees"* — was always conditional on enumerate-capability the vendor doesn't expose. The amendment makes the actual contract honest: push-only, scholar-authoritative.
 
-**Reconciler algorithm (cycle 6.7, `annotations` plan).** `reconcile(corpus_id, paper_id, db)` is structured to keep every MCP round-trip *outside* the SQLite write transaction — under Open Q4 this function runs on every `annotations.list` call, so a transaction that held the write lock across network I/O would serialize all readers behind in-flight pdf-child traffic. Reads and pushes happen first against `db` (no transaction); only the final write-back wraps the local SQL in `db.transaction(...)`. The §7.6 cross-plan helper convention still applies to the write-back closure (`tx`-as-first-arg), but the outer signature takes `db` rather than `tx`.
+**Out-of-scope (v1, candidates for v2+):**
+- Annotations created in the pdf-viewer without going through scholar (no enumeration capability available — would require vendor fork or upstream change).
+- Bidirectional reconciliation, tombstone-resurrection prevention, `reconcile_state` cursor, LWW on `updated_at` (all dropped — depend on inbound capability that doesn't exist).
+- `viewUUID` map persistence across scholar restarts (in-memory only).
+- `viewUUID` map invalidation on child respawn (v1 surfaces vendor errors; v1.1+ may add a respawn callback).
+
+### viewUUID propagation
+
+The vendor `interact` tool requires `viewUUID` as a sibling of `action` (per the input schema in `src/vendor/pdf-server/dist/server.js`). Scholar maintains a process-local `paper_id → viewUUID` map at `ctx.pdfViews` (§7.6), populated by `scholar.pdf.open(paper_id, source)` and consumed by `annotations.{upsert,delete}` and `pdf.refresh-extraction`. A map miss throws `NO_OPEN_VIEWER` — the user must call `scholar.pdf.open` before pushing annotations or extracting text.
+
+The map is process-local:
+- **Scholar restart drops it.** The user must re-`scholar.pdf.open` each paper they want to push annotations to. Acceptable for personal-use v1.
+- **Child crash + supervisor respawn (§5.19 / `lifecycle.ts:160-184`) renders cached entries stale.** The respawned vendor child issues fresh UUIDs; the old ones become invalid. v1 surfaces the vendor's "unknown viewUUID" error on the next interact call (the model sees a structured failure and asks the user to re-open). v1.1+ may register a `transport.onclose` callback that clears the map automatically.
+
+### Algorithm
+
+All three annotation handlers are synchronous DB-write-then-push. The v1.0 "Phase 1 → Phase 2 → Phase 3 transaction" discipline collapses to a single phase (no reconciler exists to need phasing):
 
 ```typescript
-async function reconcile(
-  corpus_id: string,
-  paper_id: string,
-  db: BunSQLiteDatabase,
-): Promise<void> {
-  // --- Phase 1: read-only state capture (no tx; no SQLite write lock held). ---
-
-  const cursor = db.select({ at: reconcile_state.last_reconciled_at })
-    .from(reconcile_state)
-    .where(and(eq(reconcile_state.corpus_id, corpus_id),
-               eq(reconcile_state.paper_id, paper_id)))
-    .get()?.at ?? "1970-01-01T00:00:00.000Z";  // epoch sentinel for never-reconciled
-
-  const scholar_dirty = db.select().from(annotations)
-    .where(and(
-      eq(annotations.paper_id, paper_id),
-      or(gt(annotations.updated_at, cursor), gt(annotations.deleted_at, cursor)),
-    ))
-    .all();
-
-  const scholar_all_live = db.select().from(annotations)
-    .where(and(
-      eq(annotations.paper_id, paper_id),
-      isNull(annotations.deleted_at),
-    ))
-    .all();
-  const scholar_by_id = new Map(scholar_all_live.map(r => [r.id, r]));
-
-  // Tombstones — explicit "do-not-resurrect" id set, loaded once as a Set for O(1)
-  // phase-3 lookup. This SELECT is *required* by the tombstone-resurrection narrative
-  // above; omitting it re-introduces the bug where a viewer-side re-emergence of a
-  // deleted annotation re-inserts it scholar-side. Loading pre-transaction is canonical:
-  // it lets the phase-3 filter remain a synchronous in-memory check, preserving the
-  // CLAUDE.md no-await invariant on the transaction closure.
-  const tombstoned_ids = new Set(
-    db.select({ id: annotation_tombstones.annotation_id })
-      .from(annotation_tombstones)
-      .where(eq(annotation_tombstones.paper_id, paper_id))
-      .all()
-      .map(r => r.id),
-  );
-
-  // --- Phase 2: MCP round-trips (await on network; no SQLite tx open). ---
-
-  const viewer_rows = await ctx.pdf.interact([{ type: "list_annotations", paper_id }]);
-  const viewer_by_id = new Map(viewer_rows.map(r => [r.id, r]));
-
-  // 1. Tombstones — push deletes to viewer for (a) scholar rows soft-deleted since the
-  //    cursor and (b) any tombstoned id that the viewer is still reporting live
-  //    (resurrection *cure*: re-asserts the delete viewer-side when a previous push
-  //    didn't durably stick). Both sets fold into a single remove_annotations call.
-  //    Without the (b) leg, the phase-3 filter would silently skip the resurrected
-  //    annotation every reconcile and never actually clean up the viewer-side row.
-  const fresh_tombstone_ids = scholar_dirty
-    .filter(r => r.deleted_at !== null)
-    .map(r => r.id);
-  const resurrected_ids = viewer_rows
-    .filter(v => tombstoned_ids.has(v.id))
-    .map(v => v.id);
-  const ids_to_remove = Array.from(new Set([...fresh_tombstone_ids, ...resurrected_ids]));
-  if (ids_to_remove.length > 0) {
-    await ctx.pdf.interact([{
-      type: "remove_annotations",
-      ids: ids_to_remove,
-    }]);
+async function upsert(ctx: ServerContext, input: UpsertArgs): Promise<AnnotationRow> {
+  const db = ctx.db;
+  if (!db) throw new AnnotationsToolError("NO_ACTIVE_CORPUS", "...");
+  const viewUUID = ctx.pdfViews.get(input.paper_id);
+  if (!viewUUID) {
+    throw new AnnotationsToolError(
+      "NO_OPEN_VIEWER",
+      `NO_OPEN_VIEWER: call scholar.pdf.open(paper_id=${input.paper_id}) before upserting annotations.`,
+    );
   }
 
-  // 2. Live scholar-side changes — push add/update to viewer. Concurrent push is safe
-  //    against the child: each interact() call serializes on the child's stdio pipe.
-  const live_changes = scholar_dirty.filter(r => r.deleted_at === null);
-  for (const row of live_changes) {
-    const op = viewer_by_id.has(row.id) ? "update_annotations" : "add_annotations";
-    await ctx.pdf.interact([{ type: op, annotations: [serializeForViewer(row)] }]);
-  }
+  // §12.0 sanitization on user-supplied body and anchor — throws before any DB or push.
+  const safeBody = sanitizeText(input.body);
+  const safeAnchor = input.anchor != null ? sanitizeText(input.anchor) : null;
+  const rectJson = input.rect != null ? JSON.stringify(parseRect(input.rect)) : null;
 
-  // --- Phase 3: local write-back inside a single Drizzle transaction. No awaits. ---
+  // Read existing row (if id supplied) to choose insert-vs-update + preserve created_at.
+  const existing = input.id
+    ? db.select().from(annotations).where(eq(annotations.id, input.id)).get()
+    : undefined;
 
   const now = nowIso();
-  db.transaction((tx) => {
-    // 3. Viewer-only rows (new on the viewer side OR newer than scholar's copy) — pull.
-    //    Tombstoned ids are skipped here (resurrection prevention) — the tombstoned_ids
-    //    Set was captured in phase 1 and serves as a pre-transaction in-memory filter,
-    //    keeping this branch synchronous (no SELECT inside tx, no await — preserves
-    //    the CLAUDE.md "no awaits inside the transaction closure" invariant).
-    for (const vrow of viewer_rows) {
-      if (tombstoned_ids.has(vrow.id)) continue;  // do-not-resurrect
-      const srow = scholar_by_id.get(vrow.id);
-      if (!srow) {
-        tx.insert(annotations).values({
-          id: vrow.id,
-          paper_id,
-          page: vrow.page,
-          anchor: vrow.anchor,
-          rect: JSON.stringify(vrow.rect),
-          body: vrow.body,
-          source: "pdf-viewer",
-          created_at: vrow.created_at ?? now,
-          updated_at: vrow.updated_at ?? now,
-          deleted_at: null,
+  const savedRow: AnnotationRow = existing
+    ? (db.update(annotations)
+        .set({ page: input.page ?? null, anchor: safeAnchor, rect: rectJson, body: safeBody,
+               source: "scholar", updated_at: now })
+        .where(eq(annotations.id, existing.id)).run(),
+       { ...existing, page: input.page ?? null, anchor: safeAnchor, rect: rectJson,
+         body: safeBody, source: "scholar", updated_at: now })
+    : (() => {
+        const id = input.id ?? ulid();
+        db.insert(annotations).values({
+          id, paper_id: input.paper_id, page: input.page ?? null, anchor: safeAnchor,
+          rect: rectJson, body: safeBody, source: "scholar",
+          created_at: now, updated_at: now, deleted_at: null,
         }).run();
-      } else if (vrow.updated_at && vrow.updated_at > srow.updated_at) {
-        tx.update(annotations).set({
-          body: vrow.body,
-          rect: JSON.stringify(vrow.rect),
-          source: "pdf-viewer",
-          updated_at: vrow.updated_at,
-        }).where(eq(annotations.id, vrow.id)).run();
-      }
-      // Else: scholar's copy is at least as new — keep it.
-    }
+        return { id, paper_id: input.paper_id, page: input.page ?? null, anchor: safeAnchor,
+                 rect: rectJson, body: safeBody, source: "scholar",
+                 created_at: now, updated_at: now, deleted_at: null };
+      })();
 
-    // 4. Scholar-only rows OLDER than the cursor and missing from the viewer:
-    //    treat as viewer-side deletions and tombstone in scholar.
-    for (const srow of scholar_all_live) {
-      if (srow.updated_at <= cursor && !viewer_by_id.has(srow.id)) {
-        tx.update(annotations).set({ deleted_at: now })
-          .where(eq(annotations.id, srow.id)).run();
-      }
-    }
+  // Write-then-push: the DB write above committed synchronously before this await.
+  // A throw here leaves a dirty row (in scholar, missing from viewer). The user can
+  // re-invoke upsert with the same id to retry.
+  const action = existing ? "update_annotations" : "add_annotations";
+  await ctx.pdf.interact(
+    { type: action, annotations: [serializeForViewer(savedRow)] },
+    { viewUUID },
+  );
+  return savedRow;
+}
 
-    // 5. Advance the cursor. UPSERT — first reconcile inserts, later ones update.
-    tx.insert(reconcile_state).values({
-      corpus_id, paper_id, last_reconciled_at: now,
-    }).onConflictDoUpdate({
-      target: [reconcile_state.corpus_id, reconcile_state.paper_id],
-      set: { last_reconciled_at: now },
-    }).run();
-  });
+async function delete_(ctx: ServerContext, { id }: DeleteArgs): Promise<DeleteResult> {
+  const db = ctx.db;
+  if (!db) throw new AnnotationsToolError("NO_ACTIVE_CORPUS", "...");
+  const existing = db.select().from(annotations).where(eq(annotations.id, id)).get();
+  if (!existing) return { id, deleted: false, reason: "not_found" };
+  if (existing.deleted_at !== null) {
+    return { id, deleted: false, reason: "already_tombstoned", deleted_at: existing.deleted_at };
+  }
+  const viewUUID = ctx.pdfViews.get(existing.paper_id);
+  if (!viewUUID) {
+    throw new AnnotationsToolError(
+      "NO_OPEN_VIEWER",
+      `NO_OPEN_VIEWER: call scholar.pdf.open(paper_id=${existing.paper_id}) before deleting annotations on that paper.`,
+    );
+  }
+
+  // Soft-delete only — annotation_tombstones is retired (§8.2 note).
+  const now = nowIso();
+  db.update(annotations).set({ deleted_at: now }).where(eq(annotations.id, id)).run();
+
+  // Write-then-push.
+  await ctx.pdf.interact({ type: "remove_annotations", ids: [id] }, { viewUUID });
+  return { id, deleted: true, deleted_at: now };
+}
+
+async function list(ctx: ServerContext, { paper_id }: ListArgs): Promise<{ rows: AnnotationRow[] }> {
+  // Pure DB read — no reconcile, no viewer round-trip. Does NOT require an open
+  // viewer; closed-viewer papers still return DB rows.
+  const db = ctx.db;
+  if (!db) throw new AnnotationsToolError("NO_ACTIVE_CORPUS", "...");
+  const rows = db.select().from(annotations)
+    .where(and(eq(annotations.paper_id, paper_id), isNull(annotations.deleted_at)))
+    .all();
+  return { rows };
 }
 ```
 
-**Transaction discipline (advisor-flagged).** No `await` appears inside `db.transaction(...)`. The phase-3 closure runs synchronously over data captured in phase 1 (including the `tombstoned_ids` Set used by the resurrection-prevention filter — captured pre-transaction precisely so the filter is an in-memory `Set.has()` call rather than a `SELECT` inside `tx`) and the viewer rows fetched in phase 2 — the SQLite write lock is held only for the duration of the local SQL, never across network I/O. This keeps `annotations.list` parallelizable in v1 even though every call reconciles; without this split, two concurrent list calls on different papers would serialize behind each other's pdf-child traffic. The CLAUDE.md "Load-bearing invariants" rule — *"Phase 1 reads → phase 2 MCP I/O → phase 3 db.transaction(...) with no awaits inside the transaction closure"* — applies verbatim to the amended algorithm: the tombstone read joins phase 1, the resurrection cure joins phase 2, the tombstone filter is a synchronous Set lookup in phase 3.
-
-**Phase-2 race window (documented, accepted).** Between phase 1's `scholar_all_live` snapshot and phase 3's tombstone scan, a separate `annotations.upsert` may insert a new scholar row. That row's `updated_at` is necessarily after `cursor` (it was just written), so the phase-3 tombstone rule (`srow.updated_at <= cursor`) skips it correctly — the new row is not misclassified as a viewer-side deletion. The reverse case (a separate `annotations.upsert` modifies a row that phase 1 read) is resolved by SQLite's transaction semantics: phase 3's UPDATE on that row reflects the concurrent writer's commit, since `db.transaction` reads the latest committed state when it opens.
-
-**`serializeForViewer(row)` helper.** Owned by the `annotations` plan; lives in `src/server/tools/annotations.ts`. Pinned shape:
+**`serializeForViewer(row)` helper.** Owned by the `annotations` plan; lives in `src/server/tools/annotations.ts`. Pinned shape (unchanged from v1.0):
 
 ```typescript
 function serializeForViewer(row: AnnotationRow): ViewerAnnotation {
   return {
-    id: row.id,                                          // ULID; viewer-side prefix wrap deferred to cycle 6.7 round-trip test
+    id: row.id,                                          // ULID; viewer-side prefix wrap deferred to the cycle-6.7 round-trip test
     page: row.page,
     rect: row.rect ? JSON.parse(row.rect) : deriveRectFromAnchor(row.anchor),
     body: row.body,
@@ -1342,22 +1307,25 @@ function serializeForViewer(row: AnnotationRow): ViewerAnnotation {
   };
 }
 ```
-If the cycle-6.7 ID round-trip test reveals the viewer mutates ULID-shaped IDs, `serializeForViewer` switches to the `scholar-<ulid>` wrap-and-strip pattern and the consumer-side `viewer_rows` parser inverts it. The branch is taken on test evidence, not pre-committed.
 
-**Tie-breaking on identical `updated_at`.** When `vrow.updated_at === srow.updated_at` to the millisecond, scholar's row is preserved — the algorithm only overwrites on strict `>`. This matters when a single user action triggers near-simultaneous writes on both sides (the millisecond-precision `nowIso()` from §8 plus serial transaction commits make exact equality rare but possible). The asymmetry is documented and intentional: scholar's row carries the source-of-truth metadata (`paper_id`, `source`) which the viewer's reply may have lost or transformed.
+If the cycle-6.7 ID round-trip test reveals the viewer mutates ULID-shaped IDs, `serializeForViewer` switches to the `scholar-<ulid>` wrap-and-strip pattern. The branch is taken on test evidence, not pre-committed.
 
-**Tombstone retention (v1).** `annotation_tombstones` rows live forever in v1 — there is no background sweep on `corpus.activate`, no lazy prune on next reconcile, and no admin tool to clear them. Rationale: tombstones are bounded by user delete actions (not by paper count), the per-corpus DB stays small in absolute terms, and any TTL would re-introduce the resurrection bug for tombstones older than the window — a viewer-side persistence quirk that re-hydrates a 90-day-old deleted annotation would silently re-insert it the moment its tombstone aged out. v1.1+ may add an explicit admin tool (`scholar.annotations.prune-tombstones` or similar) gated on a user-confirmed time window; until that ships, every intentional deletion is permanent on scholar's side. This decision is logged here, in §17 (Decisions Log), and at the `annotation_tombstones` table definition in §8.2 so future readers see consistent rationale.
+**Transaction discipline.** The §13 v1.0 "no awaits inside `db.transaction(...)`" rule still applies wherever a transaction is opened. Under v1.1 push-only, the writes in upsert/delete are single statements and don't need explicit `db.transaction(...)` wrappers — the v1.0 atomic-write-tombstone pair retired with `annotation_tombstones`.
 
-**Batching.** The algorithm issues at most three MCP round-trips per call: one `list_annotations`, one batched `remove_annotations`, and one `add_annotations` / `update_annotations` per non-tombstoned dirty row. The per-row loop in step 2 is unbatched because the viewer's batch semantics for mixed add+update calls are unverified against 1.7.2 — cycle 6.7 verifies and, if the viewer accepts a single mixed batch, the loop collapses to one call. Step 3's writes are local SQL inside `tx`; no MCP traffic.
+**Failure semantics.**
+- *DB write succeeds, push throws.* Caller gets the push error. The row is in scholar's DB but not in the viewer. The user retries by re-invoking the same tool with the same id; if the viewer crashed and was respawned, the user must first call `scholar.pdf.open` again (the original NO_OPEN_VIEWER fires on the stale map entry).
+- *DB write throws.* No push attempted; row not persisted; caller gets the DB error.
+- *Push succeeds, caller never receives the response (network partition between caller and scholar).* The row IS in both stores; a retry inserts a fresh ULID if the original was server-generated, or no-ops on the existing id if the caller supplied one. Idempotency is the caller's responsibility on retry.
 
-**Cycle 6.7 verification requirements (Integration F1 / F9).**
+### Cycle 6.7 verification requirements (S1 contract test + handler tests)
 
-- **`list_annotations` `updated_at` availability.** Verify upstream returns a comparable `updated_at` field. If it does not, the algorithm degenerates gracefully to *scholar-authoritative* — step 3's `vrow.updated_at > srow.updated_at` branch becomes unreachable, but step 3's "never-seen-by-scholar" branch still catches viewer-only adds and step 4 still detects viewer-side deletes through membership. The reconciler test in cycle 6.7 includes both branches and a parameterized fixture for each return shape.
-- **Annotation ID round-trip.** Test that an annotation written by scholar (ULID id) survives a `list_annotations` reply unchanged. If the viewer mutates the id (prefix, length cap, character class), scholar's `serializeForViewer` wraps the ULID as `scholar-<ulid>` on push and strips on pull; the test pins the chosen format.
-- **Mixed-batch acceptance.** Test whether `interact([{type:"add_annotations",...}, {type:"update_annotations",...}])` is accepted as one call; if yes, simplify step 2 accordingly.
-- **Tombstone-resurrection contract.** Internal test (no upstream variation needed): seed `annotations` with a row X plus a matching `annotation_tombstones` entry, mount a stub `ctx.pdf` whose `list_annotations` reply still contains X (simulating a viewer that ignored the prior `remove_annotations`), then call `reconcile(...)`. Assert (i) phase-3 does NOT insert or re-vivify X in `annotations` — `scholar_all_live` for the paper is unchanged across the reconcile, (ii) the stub observed a `remove_annotations` call carrying X's id in phase 2 (resurrection-cure exercised), and (iii) `annotation_tombstones` is unchanged in shape and content across the reconcile (tombstones are durable; no implicit prune). This pins the resurrection-prevention contract independent of any upstream behavior the F1/F9 items vary.
-
-If a future re-vendor of the pdf MCP is confirmed to emit `resources/updated` for annotations, scholar may additionally `subscribeResource` to make reconciliation eager — a v2 optimization, not a v1 dependency.
+- **Vendor wire envelope (S1 contract test).** Spawn the real vendored pdf-server process via the same `StdioClientTransport` path that production uses. Call `display_pdf` to get a viewUUID. Call `interact` with `{action: "navigate", page: 1, viewUUID}` (simplest payload) and assert the response is non-error. This is the canary that catches `{name, arguments}` envelope mistakes — the v1.0 reconciler bug (sending the action name as the tool name) was hidden because every test mocked at `ctx.pdf.interact`, never at the actual MCP wire.
+- **viewUUID lookup.** Test that upsert/delete throw `NO_OPEN_VIEWER` when `ctx.pdfViews` has no entry for the paper.
+- **Map population.** Test that `scholar.pdf.open(paper_id, source)` populates `ctx.pdfViews[paper_id]` with the viewUUID returned by vendor `display_pdf`.
+- **Write-then-push ordering.** Test that the DB row exists at the moment `pdf.interact` is first awaited from upsert (proves the write committed before the push).
+- **Sanitization (unchanged from v1.0).** §12.0 `sanitizeText` applied to user-supplied body and anchor; reject before any DB write or push.
+- **`scholar.annotations.list` does NOT require an open viewer.** Test that list returns rows when `ctx.pdfViews` is empty (list is a pure DB read).
+- **`scholar.pdf.refresh-extraction` requires an open viewer.** Test that refresh-extraction throws `NO_OPEN_VIEWER` when the paper has no map entry, and succeeds when it does.
 
 ID stability is preserved across both paths.
 
@@ -1393,7 +1361,8 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 | Latent upstream `useClientRoots` propagation bug (the env-var-derived `roots` value computed at `dist/index.js:34386–34391` is not threaded through to `createServer` on line 34392 — the call uses the original CLI flag instead). | Scholar passes `--use-client-roots` on the command line, so `useClientRoots` is already `true` at the createServer call and the bug never bites. No source patch needed; the workaround is purely in the spawn invocation. A future upstream fix would be a no-op for scholar. |
 | Drop vendored copy entirely (v2 simplification candidate). | Spawn via `bunx @modelcontextprotocol/server-pdf` when a sufficient network and bun runtime are present, removing `src/vendor/pdf-server/` from the bundle. Trade-off: removes the offline-distribution guarantee. Not pursued in v1 because the plugin must remain installable in air-gapped Cowork hosts. (Distinct from the v1-adopted protocol-based roots approach in §7.2.) |
 | Native FFI for the Windows Job Object orphan-reaping path. | Single FFI surface in `src/server/pdf/lifecycle.ts` via `koffi` (preferred) or `win32-api`. Falls back to a startup-sweep + `prctl(PR_SET_PDEATHSIG)` posture on non-Windows. The dependency is pinned and the failure mode is "no orphan reaping on Windows" — supervised respawn still works inside a live scholar session. |
-| Annotation reconciliation conflicts (user edits in both panes concurrently). | Last-write-wins keyed by `updated_at`; scholar reconciles on paper-detail open/refresh (§13). Test with a deliberate concurrent-edit race. |
+| Annotation pushed by scholar fails to land in the viewer (network partition, viewer crash, stale viewUUID after supervisor respawn). | Failure surfaces to the caller as a structured error: `NO_OPEN_VIEWER` (`ctx.pdfViews` has no entry) or the vendor error directly. The DB row is already committed (write-then-push), so the user retries by re-invoking the same annotation tool with the same id; if the viewer was respawned, the user calls `scholar.pdf.open` first to refresh the map entry. v1 does not auto-retry; v1.1+ may add a retry queue. (The v1.0 LWW + reconcile-on-read mitigation is retired — see §13 v1.1 amendment + §17 "drop inbound reconciliation".) |
+| Spec invents vendor capabilities that don't exist (root cause of the 2026-05-27 audit finding — `list_annotations` was referenced 6+ times in §13 and `server-pdf@1.7.2` exposes no such verb). | **Vendor-tool truth invariant.** Every command name referenced in the scholar spec or codebase MUST be either (a) a member of the `PdfCommand` union in `src/vendor/pdf-server/dist/src/commands.d.ts`, or (b) a tool name exported by `src/vendor/pdf-server/dist/server.js`. New spec entries that reference a vendor capability MUST cite the source file + line. The cycle-6.7 contract test (§13 verification requirements) exercises the full annotation push path against the real vendor process, providing wire-level evidence that the chosen action names round-trip. Future re-vendor PRs run the same fixture suite (§16 "Upstream pdf server changes its MCP protocol shape" row). |
 | Embedding production blocks tool responses on big papers. | Embedding pipeline runs on an in-process async queue with a small concurrency limit (a worker thread is deferred to v2 if profiling shows main-thread starvation); tools that need embeddings (`scholar.papers.search` with semantic mode) check readiness and degrade to lexical with a "still indexing" pill. |
 | User installs the plugin without the global `bun.exe`. | v1 ships scholar as a single self-contained executable produced by `bun build --compile` (promoted from earlier "v2 considers"); `.mcp.json`'s `command` points at the compiled binary, so the runtime host does not need `bun` on PATH for scholar's own process. The Bun runtime itself is **also** bundled into `build/runtime/bun(.exe)` because scholar spawns the unmodified Node-style pdf-child script (`src/vendor/pdf-server/dist/index.js`) and a `bun build --compile` artifact cannot re-exec arbitrary scripts under its embedded runtime (§7.2). The compiled scholar artifact and the bundled runtime are both produced by the §14.1 build pipeline; the `.mcp.json` command swap to the compiled exe and the runtime bundling decision were finalized in Session 4. |
 | The Cowork outputs folder isn't where the user installs from. | The build script writes a copy to both `%USERPROFILE%\Documents\Cowork\System\` and (best-effort) the user's Cowork plugin-import staging directory; surfaces a chat link. |
@@ -1414,17 +1383,18 @@ Cycles are enumerated in §6 (Implementation Cycles) with per-cycle `Touches` / 
 - Vendored pdf MCP license → **MIT** (`@modelcontextprotocol/server-pdf@1.7.2`, confirmed via `bun pm view` on 2026-05-24). License text preserved at `src/vendor/pdf-server/UPSTREAM-LICENSE`. MIT permits vendoring and redistribution under scholar's MIT license.
 - Query / backup / inspect surfaces → **native** (`scholar.query`, `scholar.backup`, `scholar.inspect`; cycle 6.14). sqlite3-mcp **not used** — its upstream is a Python/uv FastMCP server and is unvendorable for the scholar plugin's `bun build --compile` single-file distribution (user ruling 2026-05-24).
 - Tool wiring → **registry barrel + foundation-scaffolded stubs** (§7.6) so the seven plans' blast-radii stay file-disjoint.
-- Annotation tombstones → **separate `annotation_tombstones` table, ISO-timestamp, no TTL in v1** (chore amend-spec-tombstone-resurrection-fix, 2026-05-25). The table is canonical for resurrection-prevention and outlives the annotations row; deletes write both `annotations.deleted_at` and a tombstone row atomically in the same `db.transaction(...)`. v1 keeps tombstones forever (no sweep, no lazy prune) — a TTL would re-introduce the resurrection bug for tombstones older than the window. Pruning is a v1.1+ admin-gated decision. See §8.2 (schema), §13 ("Tombstone-resurrection edge case", "Tombstone retention").
+- ~~Annotation tombstones → **separate `annotation_tombstones` table, ISO-timestamp, no TTL in v1** (chore amend-spec-tombstone-resurrection-fix, 2026-05-25). The table is canonical for resurrection-prevention and outlives the annotations row; deletes write both `annotations.deleted_at` and a tombstone row atomically in the same `db.transaction(...)`. v1 keeps tombstones forever (no sweep, no lazy prune) — a TTL would re-introduce the resurrection bug for tombstones older than the window.~~ **Superseded 2026-05-27 (§13 v1.1 amendment, "drop inbound reconciliation" entry below):** the resurrection scenario depends on viewer enumeration which the vendor doesn't expose, so the tombstone table has no consumer. Deletes use `annotations.deleted_at` only; the `annotation_tombstones` table is retired (§8.2 note).
 - First-run wizard → **server-side `elicitInput`, invoked lazily by the corpus tool**; not a standalone script.
 - nu transport → **MCP client CLI** (named-pipe alternative dropped).
-- Annotation propagation → **scholar→viewer push + viewer→scholar reconcile-on-read**, LWW on `updated_at`; no dependency on pdf-MCP push notifications.
+- ~~Annotation propagation → **scholar→viewer push + viewer→scholar reconcile-on-read**, LWW on `updated_at`; no dependency on pdf-MCP push notifications.~~ **Superseded 2026-05-27 (§13 v1.1 amendment):** push-only — see "drop inbound reconciliation" entry below.
 - Paper-detail PDF render → **bundled pdf.js in scholar's own iframe**; not a nested MCP App iframe.
 - Chart.js and pdf.js → **bundled** into the single-file UI; no runtime CDN dependency.
 - Cross-plan contracts (`ServerContext`, `PdfChild`, `ConfigAccessor`, `registerTools`, `runRawDdl`) → **pinned in §7.6 and frozen for v1**; no downstream plan edits `registry.ts`.
 - `chunk_vec` embedding width → **probed from the embed model at corpus creation**, not hard-coded; an embed-model swap requires re-creating `chunk_vec` and re-embedding.
 - Frozen contract widened during S1 — `PdfChild.interact` opts (additive), `isHealthy` struct (object replacing boolean), `ServerContext.log` (added `Logger` surface). Resolved 2026-05-22.
-- Schema additions resolved S1+S2 — `annotations.deleted_at` (tombstones), `annotations.rect` (persisted geometry), `reconcile_state` table (per-paper bookkeeping), `paper_chunks.embedded_at` (extraction-progress sentinel), `corpora.last_opened_at` (snapshot ordering). Resolved 2026-05-22.
-- Annotation reconciler algorithm — **tombstone + cursor + LWW-with-fallback-to-scholar-authoritative**; reads + viewer round-trips run *outside* the SQLite write transaction (§13). Resolved 2026-05-22 (S3).
+- Schema additions resolved S1+S2 — `annotations.deleted_at` (soft-delete marker), `annotations.rect` (persisted geometry), ~~`reconcile_state` table (per-paper bookkeeping)~~ *(retired 2026-05-27 — see "drop inbound reconciliation" below)*, `paper_chunks.embedded_at` (extraction-progress sentinel), `corpora.last_opened_at` (snapshot ordering). Resolved 2026-05-22.
+- ~~Annotation reconciler algorithm — **tombstone + cursor + LWW-with-fallback-to-scholar-authoritative**; reads + viewer round-trips run *outside* the SQLite write transaction (§13). Resolved 2026-05-22 (S3).~~ **Superseded 2026-05-27 (§13 v1.1 amendment):** reconciler retired; see "drop inbound reconciliation" entry below.
+- **§13 reconciler — push-only (option A: drop inbound reconciliation).** Resolved 2026-05-27 after the production-readiness audit found that the v1.0 reconciler referenced `list_annotations` 6+ times despite `@modelcontextprotocol/server-pdf@1.7.2` exposing no such verb (the full `PdfCommand` union has no enumeration capability, and `get_viewer_state` returns only `selectedAnnotationIds`). Options weighed: (A) drop inbound reconciliation — chosen; (B) fork the vendor to add `list_annotations` — violates §7.2 "vendor is unmodified" invariant; (C) approximate via `get_viewer_state` — incomplete (selected-only, not full set). Personal-use v1 accepts the limitation that annotations created externally in the pdf-viewer are not synced to scholar. Knock-on effects, all resolved in this amendment: `PdfChild.interact` signature becomes `(cmd, {viewUUID, ...opts})` (single command, vendor wire envelope `{viewUUID, action, ...rest}`); `ServerContext.pdfViews` is added as a process-local `paper_id → viewUUID` map; `scholar.pdf.open(paper_id, source)` is introduced as a new MCP tool (real proxy to vendor `display_pdf`, populates the map); the three broken proxy tools (`scholar.pdf.open` in its v1.0 broken form, `scholar.pdf.search-text`, `scholar.pdf.extract-anchors`) are deleted; `annotation_tombstones` and `reconcile_state` tables are retired (§8.2 note); §16 gains a vendor-tool truth invariant row. Cycle 6.7 verification requirements rewritten — the most important new test is the S1 contract test that spawns the real vendor process and exercises one real `interact` call (catches wire-envelope mistakes that handler-level mocks hide).
 - PDF MCP patch-verification approach — vendor is **unmodified**, no `PATCH.md`; divergence detection is the cycle-6.2 fixture suite re-run on re-vendor (§16, §7.2). Resolved 2026-05-22 (S3).
 - UI bundler → **Bun's HTML bundler** (`bun build src/ui/index.html --target=browser --outfile build/ui/app.html`); `vite` and `vite-plugin-singlefile` are not in the dep set. Resolved 2026-05-22 (S4, Important #1).
 - Chat model default → **`qwen3:8b`** (`SCHOLAR_OLLAMA_CHAT_MODEL`). Generation chosen 2026-05-22 (S4, Important #2); user-pluggable per corpus.
