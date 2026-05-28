@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { resolve, join, isAbsolute } from "node:path";
 import pLimit from "../util/p-limit.ts";
 import type { PdfChild } from "../tools/registry.ts";
+import type { PdfCommand } from "../../vendor/pdf-server/dist/src/commands.js";
 
 export interface SpawnOpts {
   initialRoots: string[];
@@ -200,26 +201,42 @@ export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
   }
 
   const handle: PdfChildHandle = {
-    async interact(commands, opts) {
-      const [first] = commands as Array<{ type: string; [k: string]: unknown }>;
-      if (!first) return null;
-      // The "type" key is scholar's internal envelope; the upstream child knows
-      // tool names directly. Strip type before forwarding.
-      const { type, ...rest } = first;
-      const r = await activeClient!.callTool({ name: type, arguments: rest }, undefined, {
-        timeout: opts?.timeoutMs ?? 30_000,
-      });
+    async interact(cmd, opts) {
+      // Spec §13 v1.1 wire envelope: vendor exposes ONE tool named "interact"
+      // whose input schema is {viewUUID, action, ...sibling-fields-per-action}.
+      // Translate scholar's internal discriminated {type, ...rest} into the
+      // vendor's {viewUUID, action: type, ...rest} callTool argument shape.
+      // PdfCommand is the vendor's source of truth (§16 vendor-tool truth invariant).
+      const { type, ...rest } = cmd as PdfCommand & { [k: string]: unknown };
+      const r = await activeClient!.callTool(
+        {
+          name: "interact",
+          arguments: { viewUUID: opts.viewUUID, action: type, ...rest },
+        },
+        undefined,
+        {
+          timeout: opts.timeoutMs ?? 30_000,
+          signal: opts.signal,
+        },
+      );
       lastOkAt = Date.now();
       return r;
     },
-    async getText(viewUUID, opts) {
+    async getText(opts) {
+      // get_text is an `action` of the vendor's `interact` tool, NOT a
+      // separate vendor tool. The v1.0 code at this line called
+      // `callTool({name: "get_text", ...})`, a tool that does not exist in
+      // server-pdf@1.7.2. Fixed 2026-05-27.
       const r = await activeClient!.callTool(
-        { name: "get_text", arguments: { viewUUID } },
+        {
+          name: "interact",
+          arguments: { viewUUID: opts.viewUUID, action: "get_text" },
+        },
         undefined,
-        { timeout: opts?.timeoutMs ?? 120_000 },
+        { timeout: opts.timeoutMs ?? 120_000 },
       );
       lastOkAt = Date.now();
-      // The upstream `get_text` returns structured content; flatten to a string.
+      // The upstream get_text returns structured content; flatten to a string.
       if (typeof r === "string") return r;
       const content = (r as { content?: Array<{ type: string; text?: string }> }).content;
       if (Array.isArray(content)) {
@@ -229,6 +246,26 @@ export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
           .join("");
       }
       return JSON.stringify(r);
+    },
+    async displayPdf(source, opts) {
+      // Vendor `display_pdf` is a separate vendor tool (NOT an interact action).
+      // Accepts {source: string}; returns {content, structuredContent: {viewUUID, ...}}.
+      // viewUUID is the canonical handle for subsequent interact() calls — see
+      // spec §13 "viewUUID propagation."
+      const r = await activeClient!.callTool(
+        { name: "display_pdf", arguments: { source } },
+        undefined,
+        { timeout: opts?.timeoutMs ?? 30_000 },
+      );
+      lastOkAt = Date.now();
+      const structured = (r as { structuredContent?: { viewUUID?: unknown } }).structuredContent;
+      const viewUUID = structured?.viewUUID;
+      if (typeof viewUUID !== "string" || viewUUID.length === 0) {
+        throw new Error(
+          `PDF_DISPLAY_NO_VIEWUUID: vendor display_pdf returned no viewUUID for source=${source}`,
+        );
+      }
+      return { viewUUID };
     },
     currentRoots: () => [...currentRoots],
     isHealthy: () => ({

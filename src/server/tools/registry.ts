@@ -5,6 +5,7 @@
 // writer of this file. Schema/signature changes are foundation-only edits.
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { PdfCommand } from "../../vendor/pdf-server/dist/src/commands.js";
 
 // =========================================================================
 // FROZEN CROSS-PLAN CONTRACTS (spec §7.6)
@@ -15,15 +16,42 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 /**
  * pdf child-process handle. Produced by src/server/pdf/lifecycle.ts (foundation,
  * cycle 6.2); consumed by pdf.ts (extraction) and annotations.ts (annotations).
+ *
+ * Wire-envelope contract (spec §13 v1.1, 2026-05-27 amendment):
+ *   - Vendor exposes ONE tool named "interact" with input shape
+ *     {viewUUID, action, ...sibling-fields-per-action}.
+ *   - PdfCommand is the vendor's source of truth at
+ *     src/vendor/pdf-server/dist/src/commands.d.ts. The spec MAY NOT invent
+ *     vendor capabilities (§16 vendor-tool truth invariant).
+ *   - lifecycle.ts's interact() translates the discriminated {type, ...rest}
+ *     command shape into the vendor's {viewUUID, action: type, ...rest}
+ *     callTool argument shape.
  */
 export interface PdfChild {
-  /** Drives add/update/remove_annotations, get_text, .... Default timeoutMs = 30_000. */
+  /**
+   * Single-command interact. The viewUUID identifies which open viewer the
+   * call targets (vendor requires it as a sibling of `action`). Default
+   * timeoutMs = 30_000. AbortSignal and timeoutMs both honoured.
+   */
   interact(
-    commands: unknown[],
-    opts?: { signal?: AbortSignal; timeoutMs?: number },
+    cmd: PdfCommand,
+    opts: { viewUUID: string; signal?: AbortSignal; timeoutMs?: number },
   ): Promise<unknown>;
-  /** Default timeoutMs = 120_000 (text extraction can be slow on large papers). */
-  getText(viewUUID: string, opts?: { timeoutMs?: number }): Promise<string>;
+  /**
+   * Calls the vendor's `get_text` action via the `interact` tool under the
+   * hood. Default timeoutMs = 120_000 (text extraction can be slow on large
+   * papers).
+   */
+  getText(opts: { viewUUID: string; timeoutMs?: number }): Promise<string>;
+  /**
+   * Opens a PDF in the vendor's interactive viewer by calling the vendor's
+   * `display_pdf` tool (which is a separate vendor tool, NOT an `interact`
+   * action). Returns the viewUUID that subsequent `interact` calls must
+   * carry. `source` is either an absolute local path, a file:// URL, or an
+   * HTTPS URL. Consumed by `scholar.pdf.open` to populate
+   * `ServerContext.pdfViews`. Default timeoutMs = 30_000.
+   */
+  displayPdf(source: string, opts?: { timeoutMs?: number }): Promise<{ viewUUID: string }>;
   currentRoots(): string[];
   /**
    * Update the set of file:// roots scholar advertises to the pdf child via
@@ -103,6 +131,17 @@ export interface ServerContext {
   db: BunSQLiteDatabase | undefined;
   configDb: BunSQLiteDatabase;
   pdf: PdfChild;
+  /**
+   * Process-local paper_id → viewUUID map (spec §7.6 + §13 v1.1, 2026-05-27).
+   * Populated by `scholar.pdf.open(paper_id, source)` after the vendor's
+   * `display_pdf` returns a viewUUID; consumed by `scholar.annotations.{upsert,delete}`
+   * and `scholar.pdf.refresh-extraction` to resolve viewUUID for outbound
+   * `interact` calls. Not persisted across scholar restart. A pdf-child crash +
+   * supervisor respawn (§5.19) renders cached entries stale; v1 surfaces the
+   * resulting vendor error on the next interact call (the user re-opens to
+   * refresh the entry).
+   */
+  pdfViews: Map<string, string>;
   // sqlite3 field — REMOVED 2026-05-24 (foundation-007, user posture B). The §10
   // surface is reimplemented inline via bun:sqlite by extraction cycle 6.14.
   config: ConfigAccessor;
