@@ -38,11 +38,13 @@ Branch: `worktree-pre-v1-roadmap` (S2 commits 2454b4c → 8e204ec; precedes S1 o
 - [x] **Test** `tests/start-server.test.ts` — fixture stub `build/scholar` binary asserts `--help` reaches the child (stdout marker + exit 0).
 - [x] **Test** `tests/start-server.test.ts` — same fixture, `--block` mode installs a child SIGINT handler exiting 42; the test sends SIGINT to the parent and asserts exit 42 (not 0).
 
-### S3 — Ollama client timeouts
+### S3 — Ollama client timeouts ✅ landed 2026-05-27
 
-- [ ] **Code** `src/server/ollama/client.ts:60-83`: wrap embed fetch in `AbortSignal.timeout(60_000)`; surface `OllamaUnavailableError` on timeout.
-- [ ] **Code** `src/server/ollama/client.ts:85-96`: wrap chat fetch in `AbortSignal.timeout(120_000)`; same error shape.
-- [ ] **Test** add timeout tests using a fixture server that hangs past the timeout.
+Branch: `worktree-pre-v1-roadmap` (S3 commit 6dbd990).
+
+- [x] **Code** `src/server/ollama/client.ts` `postJson()` parameterized with `timeoutMs`; `AbortSignal.timeout` wired through; `TimeoutError` mapped to `OllamaUnavailableError`. Defaults: embed 60s, chat 120s. Env-overridable via `SCHOLAR_OLLAMA_{EMBED,CHAT}_TIMEOUT_MS` so tests can use short windows.
+- [x] **Code** `embed()` passes `embedTimeoutMs()`; `chat()` passes `chatTimeoutMs()` — both methods (not stored constants) so env-var overrides take effect at call time, mirroring `baseUrl()`.
+- [x] **Test** `src/server/ollama/client.test.ts` — two regression tests using a `Bun.serve` fixture whose fetch handler returns a never-resolving promise; env override sets a 250ms timeout; assertion: throws `OllamaUnavailableError` in well under 5s (would hang indefinitely without the fix). Pre-fix the tests deadlock the runner; post-fix they pass in ~0.5s.
 
 ---
 
