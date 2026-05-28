@@ -18,20 +18,20 @@
 
 ### S1 — pdf-viewer interop rewrite + §13 spec amendment ✅ landed 2026-05-27
 
-Branch: `worktree-s1-pdf-interop-and-13-amendment` (5 commits a2659b9 → 31d5692).
+Branch: `worktree-pre-v1-roadmap` (consolidated showstopper branch; S1 commits 04a39ed → 6dd56cf, cherry-picked from the now-deleted `worktree-s1-pdf-interop-and-13-amendment`).
 
-- [x] **Spec edit** §13 v1.1 — inbound reconciliation removed; one-way push contract documented; all 6+ `list_annotations` references purged (commit a2659b9).
-- [x] **Spec edit** §7.6 PdfChild contract — `interact(cmd, {viewUUID, ...})`; envelope `{type, ...rest}` → `{viewUUID, action: type, ...rest}` translation pinned. `displayPdf()` added as a sibling vendor tool (commits a2659b9, 31d5692).
-- [x] **Spec add** §16 vendor-tool truth invariant — vendor commands.d.ts pinned as source of truth (commit a2659b9).
-- [x] **Code** `src/server/pdf/lifecycle.ts` `interact()` rewrite + `getText()` routed through interact + `displayPdf()` added (commit f97007d).
-- [x] **Code** `src/server/tools/pdf.ts` `refreshExtraction` viewUUID lookup via `ctx.pdfViews`; new `scholar.pdf.open` tool registers viewUUIDs; broken v1.0 proxies dropped (commit a832876).
-- [x] **Code** `src/server/tools/annotations.ts` push-only rewrite + serializeForViewer maps scholar rows → vendor's NoteAnnotation shape (commit a832876).
-- [x] **Test** real-vendor contract test `src/server/pdf/lifecycle.contract.test.ts` — navigate + add/remove_annotations envelopes, gated by `SCHOLAR_PDF_E2E=1` (commit 93bfca5; both fixtures pass against the real vendor process).
-- [x] **Test** `annotations.test.ts` rewritten — 22 tests covering NO_OPEN_VIEWER, write-then-push, idempotency, vendor note shape; v1.0 reconciler tests (Red-4/5/7b/7c/8b/9) retired with the reconciler (commit a832876).
+- [x] **Spec edit** §13 v1.1 — inbound reconciliation removed; one-way push contract documented; all 6+ `list_annotations` references purged (commit 04a39ed).
+- [x] **Spec edit** §7.6 PdfChild contract — `interact(cmd, {viewUUID, ...})`; envelope `{type, ...rest}` → `{viewUUID, action: type, ...rest}` translation pinned. `displayPdf()` added as a sibling vendor tool (commits 04a39ed, 6dd56cf).
+- [x] **Spec add** §16 vendor-tool truth invariant — vendor commands.d.ts pinned as source of truth (commit 04a39ed).
+- [x] **Code** `src/server/pdf/lifecycle.ts` `interact()` rewrite + `getText()` routed through interact + `displayPdf()` added (commit 5500004).
+- [x] **Code** `src/server/tools/pdf.ts` `refreshExtraction` viewUUID lookup via `ctx.pdfViews`; new `scholar.pdf.open` tool registers viewUUIDs; broken v1.0 proxies dropped (commit d97f3cf).
+- [x] **Code** `src/server/tools/annotations.ts` push-only rewrite + serializeForViewer maps scholar rows → vendor's NoteAnnotation shape (commit d97f3cf).
+- [x] **Test** real-vendor contract test `src/server/pdf/lifecycle.contract.test.ts` — navigate + add/remove_annotations envelopes, gated by `SCHOLAR_PDF_E2E=1` (commit d47298e; both fixtures pass against the real vendor process).
+- [x] **Test** `annotations.test.ts` rewritten — 22 tests covering NO_OPEN_VIEWER, write-then-push, idempotency, vendor note shape; v1.0 reconciler tests (Red-4/5/7b/7c/8b/9) retired with the reconciler (commit d97f3cf).
 
 ### S2 — CLI mode argv + SIGINT ✅ landed 2026-05-27
 
-Branch: `worktree-s2-cli-argv-sigint` (off `main`, post-S1 audit batch).
+Branch: `worktree-pre-v1-roadmap` (S2 commits 2454b4c → 8e204ec; precedes S1 on the branch since S2 was authored first off `main`, then S1 cherry-picked atop).
 
 - [x] **Code** `scripts/start-server.ts`: replace `Bun.$` with `Bun.spawn`; forward `process.argv.slice(2)` to the child.
 - [x] **Code** `scripts/start-server.ts`: SIGINT handler forwards to the child; parent awaits `child.exited` and propagates its code instead of `process.exit(0)`.
