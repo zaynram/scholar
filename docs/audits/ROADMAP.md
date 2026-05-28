@@ -27,12 +27,14 @@
 - [ ] **Test** add a contract-level test that spawns the actual vendor process and exercises at least one real `interact` call. Pick `navigate` as the smoke target (simplest payload).
 - [ ] **Test** rewrite `annotations.test.ts` injections to mock at the `lifecycle.interact()` boundary, not at the handler's `ctx.pdf.interact` injection point — that gap is what hid the bug.
 
-### S2 — CLI mode argv + SIGINT
+### S2 — CLI mode argv + SIGINT ✅ landed 2026-05-27
 
-- [ ] **Code** `scripts/start-server.ts:6-10`: forward `process.argv.slice(2)` into `Bun.spawn`.
-- [ ] **Code** `scripts/start-server.ts:5`: SIGINT forwards to child; await child exit; propagate child's exit code instead of `process.exit(0)`.
-- [ ] **Test** add a test that launches `scholar --help` and asserts non-empty stdout + exit 0.
-- [ ] **Test** add a test that SIGINT-during-child-running propagates the child's exit code.
+Branch: `worktree-s2-cli-argv-sigint` (off `main`, post-S1 audit batch).
+
+- [x] **Code** `scripts/start-server.ts`: replace `Bun.$` with `Bun.spawn`; forward `process.argv.slice(2)` to the child.
+- [x] **Code** `scripts/start-server.ts`: SIGINT handler forwards to the child; parent awaits `child.exited` and propagates its code instead of `process.exit(0)`.
+- [x] **Test** `tests/start-server.test.ts` — fixture stub `build/scholar` binary asserts `--help` reaches the child (stdout marker + exit 0).
+- [x] **Test** `tests/start-server.test.ts` — same fixture, `--block` mode installs a child SIGINT handler exiting 42; the test sends SIGINT to the parent and asserts exit 42 (not 0).
 
 ### S3 — Ollama client timeouts
 
