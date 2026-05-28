@@ -116,21 +116,17 @@ test.skipIf(!E2E)("FIXTURE 3 — list_changed round-trip: setRoots mutates witho
 test.skipIf(!E2E)("FIXTURE 4 — viewUUID survives across a root mutation", async () => {
   tmpRoot = makeTempPdfRoot();
   handle = await spawnPdfChild({ initialRoots: [tmpRoot] });
-  const openResp = (await handle.interact([
-    { type: "display_pdf", path: join(tmpRoot, "papers", "fixture.pdf") },
-  ])) as { viewUUID?: string };
-  expect(typeof openResp).toBe("object");
-  // Heavy assertion deferred — exact response shape depends on upstream version
-  // and is exercised by extraction cycle 6.5's pdf.ts tool wiring tests.
-  if (openResp.viewUUID) {
-    const secondRoot = mkdtempSync(join(tmpdir(), "scholar-pdf-root3-"));
-    try {
-      await handle.setRoots([tmpRoot, secondRoot]);
-      const text = await handle.getText(openResp.viewUUID);
-      expect(typeof text).toBe("string");
-    } finally {
-      rmSync(secondRoot, { recursive: true, force: true });
-    }
+  // §13 v1.1 wire envelope: display_pdf is a separate vendor tool, NOT an
+  // interact action. Use handle.displayPdf() — the dedicated method.
+  const openResp = await handle.displayPdf(join(tmpRoot, "papers", "fixture.pdf"));
+  expect(typeof openResp.viewUUID).toBe("string");
+  const secondRoot = mkdtempSync(join(tmpdir(), "scholar-pdf-root3-"));
+  try {
+    await handle.setRoots([tmpRoot, secondRoot]);
+    const text = await handle.getText({ viewUUID: openResp.viewUUID });
+    expect(typeof text).toBe("string");
+  } finally {
+    rmSync(secondRoot, { recursive: true, force: true });
   }
 });
 

@@ -135,6 +135,9 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
     getText: async () => {
       throw new Error("PDF_CHILD_UNAVAILABLE");
     },
+    displayPdf: async () => {
+      throw new Error("PDF_CHILD_UNAVAILABLE");
+    },
     currentRoots: () => [],
     setRoots: async () => {
       throw new Error("PDF_CHILD_UNAVAILABLE");
@@ -146,6 +149,10 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
     db: undefined,
     configDb,
     pdf,
+    // §13 v1.1: process-local paper_id → viewUUID map. Populated by
+    // scholar.pdf.open; consumed by annotations.{upsert,delete} and
+    // pdf.refresh-extraction. Never persisted (in-memory only).
+    pdfViews: new Map<string, string>(),
     config: buildConfigAccessor(configDb),
     log: makeStdoutLogger(deps.quiet ?? false),
     async withCorpus<T>(fn: (db: BunSQLiteDatabase) => Promise<T> | T): Promise<T> {
