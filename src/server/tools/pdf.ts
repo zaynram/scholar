@@ -1,11 +1,16 @@
-// src/server/tools/pdf.ts — extraction cycle 6.5 (Green)
+// src/server/tools/pdf.ts — extraction cycle 6.5 (Green) + §13 v1.1 amendment
 //
-// Implements scholar.pdf.refresh-extraction per spec §5.12 + §11. Foundation
-// scaffolded this module as a no-op stub at cycle 6.1; this cycle fills the
-// body for the extraction pipeline. The thin proxy tools (scholar.pdf.open,
-// scholar.pdf.search-text, scholar.pdf.extract-anchors) forward into the
-// child pdf MCP via ctx.pdf.interact — registered minimally so the
-// MCP-side surface advertises them; payload shapes are pdf-child verbatim.
+// Implements scholar.pdf.refresh-extraction per spec §5.12 + §11, plus the
+// new scholar.pdf.open tool added by the 2026-05-27 §13 amendment.
+//
+// scholar.pdf.open(paper_id, source) wraps vendor display_pdf and registers
+// the returned viewUUID in ctx.pdfViews under the paper_id key. This is the
+// population point for the §13 v1.1 push-only annotation propagation model:
+// scholar.annotations.{upsert,delete} and scholar.pdf.refresh-extraction
+// resolve viewUUID from ctx.pdfViews and throw NO_OPEN_VIEWER on miss.
+//
+// The v1.0 proxy stubs `scholar.pdf.search-text` and `scholar.pdf.extract-anchors`
+// were deleted in the same amendment — they never mapped to real vendor tools.
 //
 // §11 contract:
 //   1. extract via pdf-child get_text
@@ -128,8 +133,18 @@ export async function refreshExtraction(
     );
   }
 
-  // (1) Extract text via the child pdf MCP. viewUUID === paper_id in v1.
-  const text = await ctx.pdf.getText(args.paper_id);
+  // (1) Extract text via the child pdf MCP. viewUUID is resolved from the
+  // ctx.pdfViews map populated by scholar.pdf.open (§13 v1.1 amendment —
+  // the v1.0 "viewUUID === paper_id" identity assumption was a bug because
+  // the vendor issues fresh UUIDs at display_pdf time, not by paper_id).
+  const viewUUID = ctx.pdfViews.get(args.paper_id);
+  if (!viewUUID) {
+    throw new PdfToolError(
+      "NO_OPEN_VIEWER",
+      `NO_OPEN_VIEWER: scholar.pdf.refresh-extraction requires scholar.pdf.open(paper_id=${args.paper_id}) to be called first so the viewUUID is registered in ctx.pdfViews.`,
+    );
+  }
+  const text = await ctx.pdf.getText({ viewUUID });
 
   // (2) Lazy materialization if chunk_vec hasn't been created yet.
   if (!chunkVecReady(db)) {
@@ -231,20 +246,35 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
     },
   );
 
-  // Thin proxies into the pdf child MCP — payload shapes are pdf-child verbatim.
-  // Registered so the MCP surface advertises them; the child handles validation.
-  const proxy = (toolName: string, description: string) =>
-    _register(
-      toolName,
-      {
-        description,
-        inputSchema: z.object({}).passthrough(),
-      },
-      async (args) => {
-        return await ctx.pdf.interact([{ tool: toolName.replace(/^scholar\./, ""), args }]);
-      },
-    );
-  proxy("scholar.pdf.open", "Open a PDF in the child pdf MCP and return its viewUUID.");
-  proxy("scholar.pdf.search-text", "Search the PDF for a string and return matched anchors.");
-  proxy("scholar.pdf.extract-anchors", "Extract anchor metadata from the PDF for annotation reconciliation.");
+  // scholar.pdf.open — real proxy to vendor `display_pdf` (§13 v1.1 amendment).
+  // Calls ctx.pdf.displayPdf, captures the returned viewUUID, and registers it
+  // under paper_id in ctx.pdfViews so scholar.annotations.{upsert,delete} and
+  // scholar.pdf.refresh-extraction can resolve viewUUID without the caller
+  // re-passing it on every tool invocation.
+  _register(
+    "scholar.pdf.open",
+    {
+      description:
+        "Open a paper in the child pdf MCP and register its viewUUID under " +
+        "paper_id in ctx.pdfViews. Required before scholar.annotations.{upsert,delete} " +
+        "or scholar.pdf.refresh-extraction on the same paper. `source` is an absolute " +
+        "local path, a file:// URL, or an HTTPS URL — passed through to the vendor.",
+      inputSchema: z.object({
+        paper_id: z.string().min(1).describe("Scholar's paper id (ULID)."),
+        source: z.string().min(1).describe("Path or URL the vendor display_pdf will open."),
+      }),
+    },
+    async (args) => {
+      const parsed = (args ?? {}) as { paper_id?: string; source?: string };
+      if (typeof parsed.paper_id !== "string" || typeof parsed.source !== "string") {
+        throw new PdfToolError(
+          "INVALID_ARGS",
+          "INVALID_ARGS: paper_id and source are required.",
+        );
+      }
+      const { viewUUID } = await ctx.pdf.displayPdf(parsed.source);
+      ctx.pdfViews.set(parsed.paper_id, viewUUID);
+      return { paper_id: parsed.paper_id, viewUUID };
+    },
+  );
 };

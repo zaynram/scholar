@@ -31,6 +31,7 @@ beforeEach(async () => {
     getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
     currentRoots: () => [],
     setRoots: async () => {},
+    displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
     isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
   };
 
