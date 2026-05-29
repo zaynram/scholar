@@ -4,7 +4,7 @@
 // caller's responsibility — see loadVecAndProbeDim in primitives.ts.
 import { test, expect } from "bun:test"
 import { tmpdir } from "node:os"
-import { resolveVec0Path } from "./sqlite-vec.ts"
+import { resolveVec0Path, toTightFloat32 } from "./sqlite-vec.ts"
 
 test("resolveVec0Path returns absolute path with platform-correct extension", () => {
   const p = resolveVec0Path()
@@ -41,4 +41,26 @@ test("resolveVec0Path is independent of process.cwd() in dev mode", () => {
     process.chdir(origCwd)
     if (origPluginRoot !== undefined) process.env.CLAUDE_PLUGIN_ROOT = origPluginRoot
   }
+})
+
+test("toTightFloat32 returns tightly-packed input as-is (no copy) (M3)", () => {
+  const tight = new Float32Array(4)
+  tight[0] = 1
+  expect(toTightFloat32(tight)).toBe(tight) // identity — no copy
+})
+
+test("toTightFloat32 copies view-over-larger-buffer into a fresh array (M3)", () => {
+  // Audit M3: bun:sqlite binds the underlying ArrayBuffer for typed-array blobs,
+  // so a view that's a slice of a larger buffer would otherwise bind the wrong
+  // bytes. Verify the helper detects this and rebuilds a tight view.
+  const big = new ArrayBuffer(16 * 4) // 16 floats backing
+  const view = new Float32Array(big, 4 * 4, 4) // 4 floats starting at offset 16 bytes
+  view[0] = 9
+  view[1] = 8
+  view[2] = 7
+  view[3] = 6
+  const tight = toTightFloat32(view)
+  expect(tight).not.toBe(view)
+  expect(tight.buffer.byteLength).toBe(tight.byteLength) // tightly packed now
+  expect(Array.from(tight)).toEqual([9, 8, 7, 6])
 })

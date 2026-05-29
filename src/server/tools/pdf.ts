@@ -41,6 +41,7 @@ import { z } from "zod";
 import { rawClient } from "../db/raw-client.ts";
 import { nowIso, ulid } from "../db/nowIso.ts";
 import { runRawDdl } from "../db/raw-ddl.ts";
+import { toTightFloat32 } from "../db/sqlite-vec.ts";
 import { chunkText } from "../extraction/chunker.ts";
 import {
   ollama,
@@ -207,7 +208,8 @@ export async function refreshExtraction(
           `paper_chunks UPSERT returned no row for ordinal ${chunk.ordinal}`,
         );
       }
-      upsertVec.run(row.id, embeddings[i]!);
+      // Audit M3: defense-in-depth — see toTightFloat32 docstring.
+      upsertVec.run(row.id, toTightFloat32(embeddings[i]!));
       written += 1;
       embeddingsPersisted += 1;
     }

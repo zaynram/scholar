@@ -108,6 +108,44 @@ test("hybrid search: returns lexical + semantic hits ranked via RRF (k=60)", asy
   expect(result.hits.map((h) => h.id)).toContain("p1")
 })
 
+test("hybrid search: tolerates an embed that returns a view-over-larger-buffer (M3)", async () => {
+  // Audit M3: ctx.embed is test-injectable, so future embed providers may
+  // return Float32Array views over a larger backing buffer. searchPapers
+  // wraps qvec in toTightFloat32 at the bind site; verify the search still
+  // converges on the correct paper. (Today's bun:sqlite respects byteOffset
+  // + byteLength, so this test is defense-in-depth evidence of the contract.)
+  const sqlite = seededDb()
+  sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
+    ('p1','smith2024','Scaling laws','2026-01-01T00:00:00.000Z'),
+    ('p2','jones2024','Architecture search','2026-01-01T00:00:00.000Z')`)
+  sqlite.run(`INSERT INTO paper_chunks(id,paper_id,ordinal,text,embedded_at) VALUES
+    ('c1','p1',0,'Scaling laws describe model capacity','2026-01-01T00:00:00.000Z'),
+    ('c2','p2',0,'NAS finds good architectures','2026-01-01T00:00:00.000Z')`)
+  for (const [id, txt] of [
+    ["c1", "Scaling laws describe model capacity"],
+    ["c2", "NAS finds good architectures"],
+  ] as const) {
+    sqlite
+      .prepare(`INSERT INTO chunk_vec(chunk_id, embedding) VALUES (?, ?)`)
+      .run(id, deterministicEmbedding(768, txt))
+  }
+
+  // Inject an embed that returns a view positioned at a non-zero offset of a
+  // larger backing buffer.
+  const ctx = fakeCtx(sqlite) as unknown as { embed: (m: string, p: string) => Promise<Float32Array> }
+  ctx.embed = async (_m, p) => {
+    const dim = 768
+    const tight = deterministicEmbedding(dim, p)
+    const big = new ArrayBuffer((dim + 8) * 4)
+    const view = new Float32Array(big, 4 * 4, dim) // offset 16 bytes into a larger buffer
+    view.set(tight)
+    return view
+  }
+
+  const result = await searchPapers(ctx as unknown as Parameters<typeof searchPapers>[0], { q: "Scaling laws describe model capacity" })
+  expect(result.hits[0]!.id).toBe("p1")
+})
+
 test("hybrid search: degrades to lexical-only when chunk_vec is deferred (still_indexing=true)", async () => {
   const sqlite = seededDb({ deferred: true })
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
