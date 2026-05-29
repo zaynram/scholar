@@ -60,9 +60,19 @@ const noopLog = {
 }
 
 type FakePdfText = string | ((viewUUID: string) => Promise<string>)
-function fakeCtx(sqlite: Database, opts?: { text?: FakePdfText }) {
+// `paperId` opt seeds ctx.pdfViews with `<paperId> -> view-<paperId>` so
+// refreshExtraction's viewUUID lookup (pdf.ts:141, `ctx.pdfViews.get(...)`)
+// resolves. The S1 §13 v1.1 amendment introduced that map as the viewUUID
+// resolution surface; tests must simulate the scholar.pdf.open call that
+// populates it in production.
+function fakeCtx(
+  sqlite: Database,
+  opts?: { text?: FakePdfText; paperId?: string },
+) {
   const db = drizzle(sqlite)
   const textFactory = opts?.text ?? "Hello scholar. " + "word ".repeat(500)
+  const pdfViews = new Map<string, string>()
+  if (opts?.paperId) pdfViews.set(opts.paperId, `view-${opts.paperId}`)
   return {
     db,
     configDb: db,
@@ -76,6 +86,7 @@ function fakeCtx(sqlite: Database, opts?: { text?: FakePdfText }) {
       setRoots: async () => {},
       isHealthy: () => ({ alive: true, lastOkAt: Date.now(), stdioOpen: true }),
     },
+    pdfViews,
     config: {
       get: <T,>(_key: string): T | undefined => undefined,
       set: (_k: string, _v: unknown) => {},
@@ -101,7 +112,7 @@ test("refresh-extraction: writes paper_chunks AND chunk_vec rows for a fixture p
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at)
               VALUES ('p1','fake2026','Fake paper','2026-05-22T00:00:00.000Z')`)
 
-  await refreshExtraction(fakeCtx(sqlite), { paper_id: "p1" })
+  await refreshExtraction(fakeCtx(sqlite, { paperId: "p1" }), { paper_id: "p1" })
 
   const n = (
     sqlite
@@ -151,7 +162,7 @@ test("refresh-extraction: lazily materializes chunk_vec when deferred (via _test
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at)
               VALUES ('p2','lazy','Lazy paper','2026-05-22T00:00:00.000Z')`)
 
-  await refreshExtraction(fakeCtx(sqlite), {
+  await refreshExtraction(fakeCtx(sqlite, { paperId: "p2" }), {
     paper_id: "p2",
     _testProbeDim: async () => ({
       dim: 768,
@@ -180,7 +191,7 @@ test("refresh-extraction: idempotent — re-run yields equal counts (Ruling B co
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at)
               VALUES ('p3','idem','Idem paper','2026-05-22T00:00:00.000Z')`)
 
-  await refreshExtraction(fakeCtx(sqlite), { paper_id: "p3" })
+  await refreshExtraction(fakeCtx(sqlite, { paperId: "p3" }), { paper_id: "p3" })
   const n1 = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p3'")
@@ -195,7 +206,7 @@ test("refresh-extraction: idempotent — re-run yields equal counts (Ruling B co
       .get() as { n: number }
   ).n
 
-  await refreshExtraction(fakeCtx(sqlite), { paper_id: "p3" })
+  await refreshExtraction(fakeCtx(sqlite, { paperId: "p3" }), { paper_id: "p3" })
   const n2 = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p3'")
@@ -226,9 +237,10 @@ test("refresh-extraction: ordinal shrinkage — fewer chunks on re-run trims sta
               VALUES ('p4','shrink','Shrinking paper','2026-05-22T00:00:00.000Z')`)
 
   // First run: long text → many chunks.
-  await refreshExtraction(fakeCtx(sqlite, { text: "word ".repeat(1000) }), {
-    paper_id: "p4",
-  })
+  await refreshExtraction(
+    fakeCtx(sqlite, { text: "word ".repeat(1000), paperId: "p4" }),
+    { paper_id: "p4" },
+  )
   const longCount = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p4'")
@@ -237,9 +249,10 @@ test("refresh-extraction: ordinal shrinkage — fewer chunks on re-run trims sta
   expect(longCount).toBeGreaterThan(1)
 
   // Second run: tiny text → 1 chunk.
-  await refreshExtraction(fakeCtx(sqlite, { text: "Tiny." }), {
-    paper_id: "p4",
-  })
+  await refreshExtraction(
+    fakeCtx(sqlite, { text: "Tiny.", paperId: "p4" }),
+    { paper_id: "p4" },
+  )
   const shortCount = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p4'")
@@ -267,9 +280,10 @@ test("refresh-extraction: ordinal growth — more chunks on re-run leaves contig
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at)
               VALUES ('p5','grow','Growing paper','2026-05-22T00:00:00.000Z')`)
 
-  await refreshExtraction(fakeCtx(sqlite, { text: "Tiny." }), {
-    paper_id: "p5",
-  })
+  await refreshExtraction(
+    fakeCtx(sqlite, { text: "Tiny.", paperId: "p5" }),
+    { paper_id: "p5" },
+  )
   const tiny = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p5'")
@@ -277,9 +291,10 @@ test("refresh-extraction: ordinal growth — more chunks on re-run leaves contig
   ).n
   expect(tiny).toBe(1)
 
-  await refreshExtraction(fakeCtx(sqlite, { text: "word ".repeat(1000) }), {
-    paper_id: "p5",
-  })
+  await refreshExtraction(
+    fakeCtx(sqlite, { text: "word ".repeat(1000), paperId: "p5" }),
+    { paper_id: "p5" },
+  )
   const long = (
     sqlite
       .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='p5'")
