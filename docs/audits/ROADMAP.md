@@ -64,21 +64,23 @@ Each H-item shipped with a regression test that fails pre-fix and passes post-fi
 
 ---
 
-## Medium-priority batch (M1–M9) — optional defensive hardening
+## Medium-priority batch (M1–M9) — defensive hardening ✅ landed 2026-05-29
 
-Land as a single follow-up plan or skip until first real-world bug bites.
+Branch: `worktree-pre-v1-roadmap`. Eight items landed as Red→Green TDD cycles (M3, M8 as defense-in-depth pins). M2 is **documented acceptance**, not a code fix — closing the race needs a Win32 test rig.
 
-| ID | Defect | File:line | Why deferrable |
-|---|---|---|---|
-| M1 | `runtime-config.ts` no parent-dir fsync after rename | `runtime-config.ts:24-49` | App-crash bar met; OS-crash gap rare |
-| M2 | Win32 Job Object attach-after-spawn race | `lifecycle.ts:148-155` | Microsecond race window |
-| M3 | Float32Array view binding risk | `papers.ts:115-122` | Bun handles correctly; defensive |
-| M4 | Settings serialization mismatch (`pdf.ts` writer vs `raw-ddl.ts` reader) | `pdf.ts:105-112` / `raw-ddl.ts:42-47` | Single field |
-| M5 | RRF LIMIT 200 truncation bias | `papers.ts:115-122` | Acceptable at v1 corpus scale |
-| M6 | Chunker tail-chunk insufficient new content | `chunker.ts:31-39` | Low-impact edge |
-| M7 | `countBundledMigrations` swallows errors | `migrations.ts:68-77` | Defensive logging only |
-| M8 | Phase-2 throw timing in `annotations.ts` | `annotations.ts:254-256` | Self-healing per §13; add test only |
-| M9 | `resolveUnderRoot` doesn't wrap `realpathSync(root)` ENOENT | `primitives.ts:75-91` | Fires only on backup-dest path |
+| ID | Defect | File:line | Disposition | Commit |
+|---|---|---|---|---|
+| M1 | `runtime-config.ts` no parent-dir fsync after rename | `runtime-config.ts:24-49` | Linux/POSIX: post-rename `open(O_DIRECTORY).sync()`. Win32 unchanged (no equivalent) | `b31c7a1` |
+| M2 | Win32 Job Object attach-after-spawn race | `lifecycle.ts:148-155` | **Documented acceptance** — race window is µs-wide; closure needs `CREATE_SUSPENDED` + spawn-path rewrite, deferred until Win32 test rig | `691daa9` (docs-only) |
+| M3 | Float32Array view binding risk | `papers.ts:115-122`, `pdf.ts:210` | `toTightFloat32` helper wraps both vec0 bind sites. Bun currently honors `byteOffset`/`byteLength` so this is defense-in-depth | `e351c11` |
+| M4 | Settings serialization mismatch | `raw-ddl.ts:42-47` | `embedDim` reader switched `Number(raw)` → `JSON.parse + typeof guard` to align with the canonical convention; rejects non-JSON forms like `"0x300"` | `536ab98` |
+| M5 | RRF vec scan LIMIT 200 truncation bias | `papers.ts:121` | Raised to `LIMIT 1000` (covers personal-use 5k-chunk budget). KNN-per-paper subquery rewrite deferred — needs benchmark | `ed95d9c` |
+| M6 | Chunker tail-chunk insufficient new content | `chunker.ts:31-39` | Drop tail when `slice.length ≤ OVERLAP_WORDS + 1`. Boundary tests pin 385-word (drop) and 386-word (keep) | `00cc76c` |
+| M7 | `countBundledMigrations` swallows errors silently | `migrations.ts:79-88` | Narrowed catch to `existsSync(folder) ? scan() : 0`; let scan errors (permission, ENOTDIR) propagate. Function exported for direct testability | `1d4c294` |
+| M8 | Phase-2 throw timing in `annotations.ts` | `annotations.ts` (test-only) | Added regression pinning §13 v1.1 "write-then-push": push throw leaves a re-pushable dirty row; retry with same id is idempotent | `5973060` |
+| M9 | `resolveUnderRoot` doesn't wrap `realpathSync(root)` ENOENT | `primitives.ts:75-91` | Wrap root realpath in `try/catch` → `PathEscapeError`. Regression test uses real-leaf + missing-root to bypass the existing leaf-stat catch | `d101adb` |
+
+Full-suite verification: 285 pass / 8 skip / 8 unchanged pre-existing failures (the same UI bundle + pdf.test.ts pdfViews tests that pre-date the M-batch). +11 new tests vs. H-batch baseline. Typecheck clean. The M2 race remains technically open — track Win32 test-rig work separately before claiming it closed.
 
 ---
 
