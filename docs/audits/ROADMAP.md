@@ -48,17 +48,19 @@ Branch: `worktree-pre-v1-roadmap` (S3 commit 6dbd990).
 
 ---
 
-## High-priority batch (H1–H5) — land before personal-use ship
+## High-priority batch (H1–H5) — land before personal-use ship ✅ landed 2026-05-28
 
-| ID | Defect | File:line | Fix |
-|---|---|---|---|
-| H1 | `corpus.export` shells `sh -c` with interpolation | `corpus.ts:384-387` | Replace with `Bun.spawn([cp, src, dest])` direct argv |
-| H2 | View-opener tools wrap structured response into `text` block | `registry.ts:168-173` | Detect `result.openView` and emit `structuredContent` |
-| H3 | `papers.test.ts` divergent inline DDL hides schema drift | `papers.test.ts:43-49` | Use `applyMigrations` against in-memory DB; delete inline DDL |
-| H4 | `resolveVec0Path` uses `process.cwd()` | `sqlite-vec.ts:24-35` | Use `import.meta.dir` with relative traversal |
-| H5 | No PRAGMA assertion in `applyMigrations` | `migrations.ts:39-55` | Assert `PRAGMA foreign_keys` is on before migrate |
+Branch: `worktree-pre-v1-roadmap`. All five items landed in separate TDD cycles, one commit per H-item.
 
-Each H-item: one TDD cycle, regression test mocks at the layer above the bug (not the layer containing the bug).
+| ID | Defect | File:line | Fix | Commit |
+|---|---|---|---|---|
+| H1 | `corpus.export` shells `sh -c` with interpolation | `corpus.ts:384-387` | argv-form `Bun.spawn(["tar", "--zstd", ...])` neutralizes shell metachars in runtime root | `7fc166c` |
+| H2 | View-opener tools wrap structured response into `text` block | `registry.ts:168-173` | Detect `result.openView`; emit both `content` (text) and `structuredContent` envelope | `6bbb85d` |
+| H3 | `papers.test.ts` divergent inline DDL hides schema drift | `papers.test.ts:43-49` | `seededDb()` uses `applyMigrations` + post-`settings` `runRawDdl` re-run for chunk_vec | `d6c5e23` |
+| H4 | `resolveVec0Path` uses `process.cwd()` | `sqlite-vec.ts:24-35` | Anchor dev fallback to `import.meta.dir` (CLAUDE_PLUGIN_ROOT still wins for packaged) | `c273a83` |
+| H5 | No PRAGMA assertion in `applyMigrations` | `migrations.ts:39-55` | Throw at top of `applyMigrations` if `PRAGMA foreign_keys` ≠ 1; names `openWithPragmas` in error | `d071bb3` |
+
+Each H-item shipped with a regression test that fails pre-fix and passes post-fix. H1's test pins against a hostile runtime root containing a `"` rather than asserting on argv[0] so the implementation can swap tar binaries later without retest. Suite: 274 pass / 8 skip / 8 unchanged pre-existing failures (UI bundles + pdf.test.ts pdfViews — out of H scope). Typecheck clean.
 
 ---
 
