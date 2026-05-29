@@ -4,10 +4,12 @@
 // distinct files map to distinct databases. The full applyMigrations end-to-end
 // path is exercised by schema.test.ts (Task 1.4).
 import { test, expect, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openWithPragmas } from "./migrations.ts";
+import { applyMigrations, openWithPragmas } from "./migrations.ts";
 import { rawClient } from "./raw-client.ts";
 
 let dir: string | undefined;
@@ -27,4 +29,16 @@ test("openWithPragmas opens distinct paths to distinct files", () => {
   rawClient(a).exec("CREATE TABLE t (k TEXT)");
   // b must not see the table — distinct files.
   expect(() => rawClient(b).query("SELECT * FROM t").all()).toThrow();
+});
+
+test("applyMigrations refuses to run when PRAGMA foreign_keys is OFF", () => {
+  // Audit H5: §8 onDelete: "cascade" clauses are load-bearing for data
+  // integrity. If a caller forgets to open through openWithPragmas (or otherwise
+  // forgets to set the pragma), migrate() silently runs and the cascades are
+  // inert. Pin the precondition explicitly so the mistake fails loud at migrate
+  // time, not at the first orphan-row bug in production.
+  const sqlite = new Database(":memory:");
+  // PRAGMA foreign_keys defaults to OFF on every fresh connection.
+  const db = drizzle(sqlite);
+  expect(() => applyMigrations(db)).toThrow(/foreign_keys/i);
 });
