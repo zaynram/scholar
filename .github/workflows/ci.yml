@@ -23,6 +23,13 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
+      - name: Build vec0 (runtime/vendor/sqlite-vec/vec0.so)
+        # Tests load vec0 via tests/util/vec0.ts → runtime/vendor/sqlite-vec/vec0.so.
+        # runtime/ is gitignored per CLAUDE.md (per-user state), so CI must build
+        # it before bun test. The cache check inside build-vec0 makes this a no-op
+        # if the file already exists from a prior step.
+        run: bun run build:vec
+
       - name: Test
         run: bun test
 
