@@ -146,6 +146,72 @@ test("hybrid search: tolerates an embed that returns a view-over-larger-buffer (
   expect(result.hits[0]!.id).toBe("p1")
 })
 
+test("hybrid search: vec scan LIMIT keeps per-paper diversity under chunk saturation (M5)", async () => {
+  // Audit M5: per-paper aggregation downstream picks MIN(d) per paper_id.
+  // With the old LIMIT 200, a corpus where any single paper had >=200 chunks
+  // closer to the query than other papers' best chunks would starve those
+  // other papers out of vec_rank entirely. LIMIT 1000 covers the personal-use
+  // 5k-chunk budget without exposing diversity starvation.
+  //
+  // Construction: paper A saturates ranks 1..250 with cosine distances near
+  // zero; paper B's best chunks land near rank 251; paper C's near rank 256.
+  // Under LIMIT 200 the SQL scan only returns A's chunks — B and C end up
+  // with no vec_rank entry. Under LIMIT 1000 all three papers surface.
+  const sqlite = seededDb();
+  sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
+    ('pA','kA','alpha','2026-01-01T00:00:00.000Z'),
+    ('pB','kB','beta','2026-01-01T00:00:00.000Z'),
+    ('pC','kC','gamma','2026-01-01T00:00:00.000Z')`);
+
+  const insChunk = sqlite.prepare(
+    `INSERT INTO paper_chunks(id,paper_id,ordinal,text,embedded_at) VALUES (?,?,?,?,'2026-01-01T00:00:00.000Z')`,
+  );
+  const insVec = sqlite.prepare(
+    `INSERT INTO chunk_vec(chunk_id, embedding) VALUES (?, ?)`,
+  );
+  const dim = 768;
+  function vec(a: number, b: number): Float32Array {
+    const v = new Float32Array(dim);
+    v[0] = a; v[1] = b;
+    return v;
+  }
+  for (let i = 0; i < 250; i++) {
+    const id = `a${i}`;
+    insChunk.run(id, "pA", i, `a${i}`);
+    insVec.run(id, vec(1, 0.001 * (i + 1)));
+  }
+  for (let i = 0; i < 5; i++) {
+    const id = `b${i}`;
+    insChunk.run(id, "pB", i, `b${i}`);
+    insVec.run(id, vec(1, 0.5));
+  }
+  for (let i = 0; i < 5; i++) {
+    const id = `c${i}`;
+    insChunk.run(id, "pC", i, `c${i}`);
+    insVec.run(id, vec(1, 1.0));
+  }
+
+  // Force the query embedding to match A's structure (b=0) so cosine-distance
+  // ordering is deterministic: A's 250 chunks dominate the closest 250 ranks,
+  // then B's 5, then C's 5. Use a query string that lex-matches NOTHING so
+  // result.hits is populated purely via vec_rank.
+  const ctx = fakeCtx(sqlite) as unknown as { embed: (m: string, p: string) => Promise<Float32Array> };
+  ctx.embed = async () => vec(1, 0);
+
+  const result = await searchPapers(
+    ctx as unknown as Parameters<typeof searchPapers>[0],
+    { q: "zzzz-no-lex-match", limit: 50 },
+  );
+
+  const ids = result.hits.map((h) => h.id);
+  expect(ids).toContain("pA");
+  expect(ids).toContain("pB");
+  expect(ids).toContain("pC");
+  expect(result.hits.find((h) => h.id === "pA")!.vec_rank).toBe(1);
+  expect(result.hits.find((h) => h.id === "pB")!.vec_rank).toBe(2);
+  expect(result.hits.find((h) => h.id === "pC")!.vec_rank).toBe(3);
+});
+
 test("hybrid search: degrades to lexical-only when chunk_vec is deferred (still_indexing=true)", async () => {
   const sqlite = seededDb({ deferred: true })
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
