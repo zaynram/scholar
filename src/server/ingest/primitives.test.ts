@@ -82,6 +82,31 @@ test("resolveUnderRoot wraps a missing root in PathEscapeError (M9)", () => {
   }
 });
 
+test("resolveUnderRoot preserves the underlying realpath error via Error.cause (A2)", () => {
+  // Audit A2 / silent-failure-hunter Finding A2: M9's PathEscapeError wrap
+  // discarded err.code (ENOENT vs EACCES vs ELOOP), err.message, and the
+  // original stack frame, making a genuine FS bug indistinguishable from
+  // "missing root" at the catch site. Bun/V8 supports Error.cause natively;
+  // pass it through so debuggers (and oncall log readers) keep the diagnostic.
+  const leafDir = mkdtempSync(join(tmpdir(), "scholar-rur-cause-"));
+  const leaf = join(leafDir, "ok.txt");
+  writeFileSync(leaf, "x");
+  const missingRoot = join(tmpdir(), `scholar-rur-cause-missing-${process.pid}-${Date.now()}`);
+  try {
+    try {
+      resolveUnderRoot(leaf, missingRoot);
+      throw new Error("expected PathEscapeError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(PathEscapeError);
+      const cause = (err as Error).cause as NodeJS.ErrnoException | undefined;
+      expect(cause).toBeDefined();
+      expect(cause?.code).toBe("ENOENT");
+    }
+  } finally {
+    rmSync(leafDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveUnderRoot throws PathEscapeError on symlink leaf", () => {
   if (process.platform === "win32") return; // symlinks require admin on Windows
   const root = mkdtempSync(join(tmpdir(), "scholar-rur-"));

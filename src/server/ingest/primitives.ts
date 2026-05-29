@@ -84,11 +84,14 @@ export function resolveUnderRoot(p: string, root: string): string {
   const real = realpathSync(resolved);
   // Audit M9: realpathSync(root) was unguarded, so a missing or unreadable
   // root leaked a raw ENOENT to callers that only catch PathEscapeError.
+  // Audit A2: preserve the original error via Error.cause so callers can
+  // still distinguish ENOENT/EACCES/ELOOP — the typed boundary doesn't
+  // mean diagnostic loss.
   let realRoot;
   try {
     realRoot = realpathSync(root);
-  } catch {
-    throw new PathEscapeError(`root unresolvable: ${root}`);
+  } catch (err) {
+    throw new PathEscapeError(`root unresolvable: ${root}`, { cause: err });
   }
   if (!real.startsWith(realRoot + pathSep) || real === realRoot) {
     throw new PathEscapeError(`escapes root ${realRoot}: ${real}`);
