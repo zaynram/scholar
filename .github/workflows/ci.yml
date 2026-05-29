@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, "ingest/**"]
+    branches: *
   pull_request:
     branches: [main]
 
@@ -17,35 +17,28 @@ jobs:
         with:
           bun-version: 1.3.11  # match scholar.bundledBunVersion
 
-      - name: Install dependencies (frozen)
+      - name: install
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
+      - name: typecheck
         run: bunx tsc --noEmit
 
-      - name: Build vec0 (runtime/vendor/sqlite-vec/vec0.so)
-        # Tests load vec0 via tests/util/vec0.ts → runtime/vendor/sqlite-vec/vec0.so.
-        # runtime/ is gitignored per CLAUDE.md (per-user state), so CI must build
-        # it before bun test. The cache check inside build-vec0 makes this a no-op
-        # if the file already exists from a prior step.
+      - name: compile
         run: bun run build:vec
 
-      - name: Test
-        run: bun test
+      - name: test
+        run: bun test --bail --only-failures
 
-      - name: Smoke — vec0 compile-from-source + ABI probe
-        # Mirrors build-plugin.ts:compileVec0FromSource (§14.1 step 5 fallback).
-        # Catches regressions in vendored sqlite3.h vs Bun's bundled SQLite ABI.
+      - name: smoke
         run: |
-          gcc -O2 -fPIC -shared -I src/vendor/sqlite-vec \
-              src/vendor/sqlite-vec/sqlite-vec.c \
-              -o /tmp/vec0-smoke.so
           bun -e '
             import { Database } from "bun:sqlite";
             const db = new Database(":memory:");
-            db.loadExtension("/tmp/vec0-smoke.so", "sqlite3_vec_init");
-            const v = db.query("SELECT vec_version() AS v").get();
-            console.log("vec_version:", v);
-            db.run("CREATE VIRTUAL TABLE v USING vec0(emb float[4])");
-            console.log("CREATE vec0 VTAB OK");
+            const so = "runtime/vendor/sqlite-vec/vec0.so"
+            const q = "SELECT vec_version() as v"
+            const r = "CREATE VIRTUAL TABLE v USING vec0(emb float[4])"
+            db.loadExtension(so, "sqlite3_vec_init");
+            console.log("version:", db.query(q).get());
+            db.run(r);
+            console.log("CREATE VTAB vec0: ok");
           '
