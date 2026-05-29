@@ -6,6 +6,7 @@
 import { Database } from "bun:sqlite";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { runRawDdl } from "./raw-ddl.ts";
 import { rawClient } from "./raw-client.ts";
@@ -76,13 +77,18 @@ function readMaxAppliedId(db: BunSQLiteDatabase): number | null {
   }
 }
 
-function countBundledMigrations(folder: string): number {
-  // Count files matching NNNN_*.sql in folder. Foundation ships an empty journal
-  // initially (no migrations until schema lands in Task 1.4); count returns 0.
-  // Drizzle migrate() handles the empty-journal case without error.
-  try {
-    return Array.from(new Bun.Glob("*.sql").scanSync({ cwd: folder })).length;
-  } catch {
-    return 0;
-  }
+/**
+ * Counts files matching NNNN_*.sql in `folder`. Foundation ships an empty
+ * journal initially (no migrations until schema lands in Task 1.4); count
+ * returns 0. Drizzle migrate() handles the empty-journal case without error.
+ *
+ * Audit M7: the previous broad catch silently turned ANY scan error into 0,
+ * which would defeat the newer-plugin guard on permission/ENOTDIR failures.
+ * The only "expected" zero case is folder-absent; let everything else throw.
+ *
+ * Exported for direct testability of the M7 narrowing.
+ */
+export function countBundledMigrations(folder: string): number {
+  if (!existsSync(folder)) return 0;
+  return Array.from(new Bun.Glob("*.sql").scanSync({ cwd: folder })).length;
 }
