@@ -574,7 +574,8 @@ WHAT IS OUT OF SCOPE
   -->
 
   <chore id="pdf-test-fakectx-pdfviews-fixture"
-         status="open"
+         status="closed"
+         fulfillment="24309eb"
          blast-radius="src/server/tools/pdf.test.ts"
          blocks-plans="">
     <synopsis>Post-S1 §13 v1.1 amendment introduced `ctx.pdfViews: Map&lt;paper_id, viewUUID&gt;` as the viewUUID resolution surface (refreshExtraction at src/server/tools/pdf.ts:141 calls `ctx.pdfViews.get(args.paper_id)`). The `fakeCtx` helper in src/server/tools/pdf.test.ts:63-92 was never updated to populate this map, so the 5 refresh-extraction tests fail at TypeError "undefined is not an object (evaluating 'ctx.pdfViews.get')". Production path is fine — real `scholar.pdf.open` populates the map — but the tests give zero green-suite assertion that refresh-extraction works end-to-end.
@@ -583,7 +584,8 @@ Fix: extend `fakeCtx` to accept an optional `pdfViews` arg (default `new Map()`)
   </chore>
 
   <chore id="fix-build-ui-script-cwd-paths"
-         status="open"
+         status="closed"
+         fulfillment="609749d"
          blast-radius="package.json scripts/build-ui.ts scripts/measure-bundle.ts"
          blocks-plans="">
     <synopsis>`bun run build:ui` fails with `FileNotFound: failed to open root directory: src/ui` because package.json declares `bun --cwd=scripts build-ui`, which sets cwd to `scripts/` before invoking `bun build-ui` (resolves to `scripts/build-ui.ts`). The script then passes `"src/ui/index.html"` as entrypoint and `"build/ui"` as outdir — both relative to the cwd, so they resolve to `scripts/src/ui/index.html` and `scripts/build/ui` (neither exists). The same failure mode hits `bun run measure-bundle` (`bun --cwd=scripts measure-bundle`). Consequently `src/ui/bundle.test.ts` beforeAll silently swallows the build error, and the 3 bundle-budget tests fail on missing `build/ui/app.html` and `build/ui/bundle-budget.json`.
