@@ -7,7 +7,7 @@
 // new one. Implementation: write to a tmp file, fdatasync the tmp's contents,
 // rename over the target (POSIX rename is atomic for same-filesystem targets).
 import { open, mkdir, rename, readFile, unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, constants as fsConstants } from "node:fs";
 import { join } from "node:path";
 
 export interface RuntimeConfig {
@@ -45,6 +45,18 @@ export async function writeRuntimeConfig(data: RuntimeConfig, runtimeRoot: strin
       // tmp may already be gone; swallow.
     }
     throw err;
+  }
+  // Audit M1: rename atomicity guarantees content-on-target, but the new
+  // directory entry isn't durable until the parent dir is fsync'd. Without
+  // this, an OS-crash between rename and the next sync may leave the entry
+  // pointing at the prior inode. Linux only — Win32 has no directory fsync.
+  if (process.platform !== "win32") {
+    const dir = await open(runtimeRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY);
+    try {
+      await dir.sync();
+    } finally {
+      await dir.close();
+    }
   }
 }
 
