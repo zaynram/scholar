@@ -566,5 +566,33 @@ WHAT IS OUT OF SCOPE
 - Do NOT touch plans.xml, splits.xml, sequence.xml, chores.xml (lead owns those).
 - Do NOT edit package.json, bun.lock, tsconfig.json, drizzle.config.ts (foundation §6.1 froze the dep set).</synopsis>
   </chore>
+
+  <!--
+    Post-audit gap chores opened 2026-05-29 (followup PR off main after the
+    33-commit audit-hardening sweep merged at d544ea7). Both close the
+    8 unchanged pre-existing test failures called out in the audit PR.
+  -->
+
+  <chore id="pdf-test-fakectx-pdfviews-fixture"
+         status="open"
+         blast-radius="src/server/tools/pdf.test.ts"
+         blocks-plans="">
+    <synopsis>Post-S1 §13 v1.1 amendment introduced `ctx.pdfViews: Map&lt;paper_id, viewUUID&gt;` as the viewUUID resolution surface (refreshExtraction at src/server/tools/pdf.ts:141 calls `ctx.pdfViews.get(args.paper_id)`). The `fakeCtx` helper in src/server/tools/pdf.test.ts:63-92 was never updated to populate this map, so the 5 refresh-extraction tests fail at TypeError "undefined is not an object (evaluating 'ctx.pdfViews.get')". Production path is fine — real `scholar.pdf.open` populates the map — but the tests give zero green-suite assertion that refresh-extraction works end-to-end.
+
+Fix: extend `fakeCtx` to accept an optional `pdfViews` arg (default `new Map()`), then have each test that calls refreshExtraction with paper_id "pN" pre-populate the map with a synthetic viewUUID. Cleanest pattern: synthesize viewUUID as `view-${paper_id}` and let each test do `fakeCtx(sqlite, { pdfViews: new Map([["p1", "view-p1"]]) })`. Tier: mechanical (haiku → sonnet depending on whether all 5 tests can use a shared helper). Acceptance: 5 refresh-extraction tests go green; the rest of the suite stays at 289 pass; typecheck clean. Single commit: `test(pdf): seed ctx.pdfViews fixture so refresh-extraction tests pass`.</synopsis>
+  </chore>
+
+  <chore id="fix-build-ui-script-cwd-paths"
+         status="open"
+         blast-radius="package.json scripts/build-ui.ts scripts/measure-bundle.ts"
+         blocks-plans="">
+    <synopsis>`bun run build:ui` fails with `FileNotFound: failed to open root directory: src/ui` because package.json declares `bun --cwd=scripts build-ui`, which sets cwd to `scripts/` before invoking `bun build-ui` (resolves to `scripts/build-ui.ts`). The script then passes `"src/ui/index.html"` as entrypoint and `"build/ui"` as outdir — both relative to the cwd, so they resolve to `scripts/src/ui/index.html` and `scripts/build/ui` (neither exists). The same failure mode hits `bun run measure-bundle` (`bun --cwd=scripts measure-bundle`). Consequently `src/ui/bundle.test.ts` beforeAll silently swallows the build error, and the 3 bundle-budget tests fail on missing `build/ui/app.html` and `build/ui/bundle-budget.json`.
+
+Fix options (pick A unless reason to keep --cwd=scripts):
+(A) Drop --cwd: change package.json to `"build:ui": "bun scripts/build-ui.ts"` and `"measure-bundle": "bun scripts/measure-bundle.ts"`. Both scripts already use repo-root-relative paths internally.
+(B) Anchor scripts to import.meta.dir: refactor build-ui.ts and measure-bundle.ts to resolve `src/ui/index.html` and `build/ui` via `path.join(import.meta.dir, "..", ...)` so cwd doesn't matter.
+
+Acceptance: `bun run build:ui` succeeds and produces `build/ui/app.html`; `bun run measure-bundle` produces `build/ui/bundle-budget.json` matching the shape `bundle.test.ts` asserts (total_kb / threshold_kb / over_budget / per_dep[]); the 3 bundle.test.ts tests go green; full suite reaches 297 pass / 8 skip / 0 fail; typecheck clean. Tier: mechanical-with-interpretation (sonnet) — picking A vs B is a 30-second judgment, the edit itself is ≤5 LOC. Single commit: `fix(build): resolve build:ui + measure-bundle without --cwd=scripts`.</synopsis>
+  </chore>
 </chores>
 </reference>
