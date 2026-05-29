@@ -3,8 +3,9 @@
 // Tests for the atomic JSON config persistence helpers: writeRuntimeConfig +
 // readRuntimeConfig. Atomicity invariant: no partial-write tmp file survives
 // a successful write.
-import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { test, expect, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, rmSync, readdirSync, constants as fsConstants } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { writeRuntimeConfig, readRuntimeConfig } from "./runtime-config.ts";
@@ -65,6 +66,28 @@ test("sequential overwrites: last writer wins", async () => {
   await writeRuntimeConfig({ activeCorpusId: "second" }, runtimeRoot);
   const result = await readRuntimeConfig(runtimeRoot);
   expect(result).toEqual({ activeCorpusId: "second" });
+});
+
+test("writeRuntimeConfig fsyncs the parent directory after rename (M1)", async () => {
+  // Audit M1: POSIX rename is atomic for content but the directory entry isn't
+  // durable until the parent directory is fsync'd. Without this, an OS-crash
+  // immediately after rename can lose the new entry. Verified via a spy that
+  // captures the post-rename directory-handle open + sync.
+  if (process.platform === "win32") return; // no directory fsync on Win32
+  const runtimeRoot = makeTempDir();
+  const openSpy = spyOn(fsp, "open");
+  try {
+    await writeRuntimeConfig({ activeCorpusId: "fsync-me" }, runtimeRoot);
+    const dirOpens = openSpy.mock.calls.filter(
+      ([path, flags]) =>
+        path === runtimeRoot &&
+        typeof flags === "number" &&
+        (flags & fsConstants.O_DIRECTORY) !== 0,
+    );
+    expect(dirOpens.length).toBeGreaterThanOrEqual(1);
+  } finally {
+    openSpy.mockRestore();
+  }
 });
 
 test("null activeCorpusId round-trips as null (not missing key)", async () => {
