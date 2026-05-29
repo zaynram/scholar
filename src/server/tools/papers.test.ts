@@ -8,6 +8,7 @@ import { test, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { searchPapers, updatePaper } from "./papers.ts"
+import { applyMigrations } from "#server/db/migrations.ts"
 import { runRawDdl } from "#server/db/raw-ddl.ts"
 import { ensureVec0Path } from "%/util"
 
@@ -25,12 +26,20 @@ function deterministicEmbedding(dim: number, input: string): Float32Array {
   return out
 }
 
+// H3 (2026-05-28): seededDb now runs the real Drizzle migrations instead of
+// hand-rolling DDL that drifted from production schema (the old inline `papers`
+// table was missing the `abstract` column, plus a few others). Schema drift
+// would silently mask breakage in the actual search/update paths under test.
+// chunk_vec lives in runRawDdl, which applyMigrations already invokes — but
+// only AFTER migrate() has populated the empty `settings` table. So we apply,
+// seed `settings.chunk_vec.created`, then re-run runRawDdl so chunk_vec
+// materializes for the non-deferred branch.
 function seededDb(opts?: { deferred?: boolean }) {
   const sqlite = new Database(":memory:")
   sqlite.loadExtension(ensureVec0Path())
-  sqlite.run(
-    `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-  )
+  sqlite.exec("PRAGMA foreign_keys = ON")
+  const db = drizzle(sqlite)
+  applyMigrations(db)
   if (opts?.deferred) {
     sqlite.run(
       `INSERT INTO settings(key,value) VALUES ('chunk_vec.created','false')`,
@@ -40,20 +49,7 @@ function seededDb(opts?: { deferred?: boolean }) {
       ('embed.dim','768'),
       ('chunk_vec.created','true')`)
   }
-  sqlite.run(`CREATE TABLE papers (
-    id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
-    authors TEXT, status TEXT NOT NULL DEFAULT 'pending',
-    priority INTEGER NOT NULL DEFAULT 0,
-    imported_at TEXT NOT NULL, status_touched_at TEXT,
-    role TEXT, depth TEXT, section TEXT
-  )`)
-  sqlite.run(`CREATE TABLE paper_chunks (
-    id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
-    text TEXT NOT NULL, embedded_at TEXT
-  )`)
-  sqlite.run(`CREATE UNIQUE INDEX paper_chunks_paper_ord_idx
-              ON paper_chunks(paper_id, ordinal)`)
-  runRawDdl(drizzle(sqlite))
+  runRawDdl(db)
   return sqlite
 }
 
