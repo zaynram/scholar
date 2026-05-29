@@ -34,3 +34,19 @@ export const resolveVec0Path = (): string =>
     "sqlite-vec",
     `vec0.${getVec0Extension()}`,
   )
+
+/**
+ * Normalize a Float32Array for safe bun:sqlite blob binding to vec0.
+ *
+ * Audit M3: bun:sqlite serializes the underlying ArrayBuffer for typed-array
+ * blob parameters. For a sliced Float32Array (`new Float32Array(buf, offset, n)`)
+ * the buffer includes bytes outside the view, silently corrupting the bound
+ * vector. The defensive contract is "always pass a tightly-packed view";
+ * this helper enforces it at the bind site without an unconditional copy.
+ *
+ * Fast path: byteLength matches the buffer's byteLength → no copy.
+ * Slow path: any view-over-larger-buffer → `Float32Array.from(...)` copies.
+ */
+export function toTightFloat32(arr: Float32Array): Float32Array {
+  return arr.buffer.byteLength === arr.byteLength ? arr : Float32Array.from(arr)
+}

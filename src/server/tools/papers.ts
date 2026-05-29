@@ -21,6 +21,7 @@ import { sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
 import { rawClient } from "../db/raw-client.ts";
+import { toTightFloat32 } from "../db/sqlite-vec.ts";
 import { nowIso } from "../db/nowIso.ts";
 import {
   ollama,
@@ -111,7 +112,11 @@ export async function searchPapers(
   if (semanticOn) {
     const embed = ctx.embed ?? ((m: string, p: string) => ollama.embed(m, p));
     try {
-      const qvec = await embed(DEFAULT_EMBED_MODEL, args.q);
+      // Audit M3: normalize a possibly-view embedding to a tightly-packed
+      // Float32Array at the bind site (defense-in-depth — bun:sqlite handles
+      // sliced views correctly today, but ctx.embed is test-injectable and
+      // future driver swaps may not).
+      const qvec = toTightFloat32(await embed(DEFAULT_EMBED_MODEL, args.q));
       const vecRows = raw.prepare(
         `SELECT pc.paper_id AS paper_id,
                 vec_distance_cosine(cv.embedding, ?) AS d
