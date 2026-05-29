@@ -283,6 +283,52 @@ test("upsert update: same id, different body → updates row + pushes update_ann
 });
 
 // =============================================================================
+// M8 — phase-2 (push) throw leaves a re-pushable dirty row
+// =============================================================================
+
+test("upsert: push failure leaves DB row intact; retry with same id is idempotent (M8)", async () => {
+  // Audit M8 / §13 v1.1 "write-then-push": the DB write commits synchronously
+  // before the await for pdf.interact resolves, so a push failure leaves a
+  // dirty-but-recoverable row. The user re-invokes upsert with the captured id
+  // and the operation is idempotent — the same id round-trips through the
+  // update branch and emits update_annotations (not a second add).
+  let interactCallsObserved = 0;
+  interactImpl = async () => {
+    interactCallsObserved += 1;
+    if (interactCallsObserved === 1) throw new Error("pdf viewer push failed");
+    return null;
+  };
+
+  await expect(
+    dispatch("scholar.annotations.upsert", {
+      paper_id: TEST_PAPER,
+      body: "first attempt",
+    }),
+  ).rejects.toThrow(/push failed/);
+
+  // Phase-1 write committed despite the phase-2 throw — DB row persists.
+  const dirty = rawClient(built.ctx.db!)
+    .query("SELECT id, body, source FROM annotations WHERE paper_id = ?")
+    .get(TEST_PAPER) as { id: string; body: string; source: string };
+  expect(dirty.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(dirty.body).toBe("first attempt");
+
+  // The first push call was attempted (and threw).
+  expect(findInteract("add_annotations")).toHaveLength(1);
+
+  // Retry with same id: idempotent on the existing-id path → emits update_annotations,
+  // not a second add_annotations.
+  const retried = await dispatch("scholar.annotations.upsert", {
+    id: dirty.id,
+    paper_id: TEST_PAPER,
+    body: "first attempt",
+  }) as { id: string };
+  expect(retried.id).toBe(dirty.id);
+  expect(findInteract("update_annotations")).toHaveLength(1);
+  expect(findInteract("add_annotations")).toHaveLength(1);
+});
+
+// =============================================================================
 // delete: soft-delete + remove_annotations push (no tombstone-table writes under v1.1)
 // =============================================================================
 
