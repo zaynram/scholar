@@ -69,22 +69,39 @@ test("sequential overwrites: last writer wins", async () => {
 });
 
 test("writeRuntimeConfig fsyncs the parent directory after rename (M1)", async () => {
-  // Audit M1: POSIX rename is atomic for content but the directory entry isn't
-  // durable until the parent directory is fsync'd. Without this, an OS-crash
-  // immediately after rename can lose the new entry. Verified via a spy that
-  // captures the post-rename directory-handle open + sync.
+  // Audit M1 + pr-test-analyzer follow-up: POSIX rename is atomic for content
+  // but the directory entry isn't durable until the parent directory is
+  // fsync'd. The original test only spied on fsp.open and asserted an
+  // O_DIRECTORY open occurred — removing the await dir.sync() call would
+  // have left it green (the open still happens). Pin the load-bearing op:
+  // wrap each FileHandle returned from a directory-flagged open and assert
+  // .sync() was invoked on at least one of them before the function returns.
   if (process.platform === "win32") return; // no directory fsync on Win32
   const runtimeRoot = makeTempDir();
-  const openSpy = spyOn(fsp, "open");
-  try {
-    await writeRuntimeConfig({ activeCorpusId: "fsync-me" }, runtimeRoot);
-    const dirOpens = openSpy.mock.calls.filter(
-      ([path, flags]) =>
+  const realOpen = fsp.open.bind(fsp) as typeof fsp.open;
+  const dirSyncSpies: Array<ReturnType<typeof spyOn>> = [];
+  const openSpy = spyOn(fsp, "open").mockImplementation(
+    (async (
+      path: Parameters<typeof realOpen>[0],
+      flags?: Parameters<typeof realOpen>[1],
+      mode?: Parameters<typeof realOpen>[2],
+    ) => {
+      const handle = await realOpen(path, flags, mode);
+      if (
         path === runtimeRoot &&
         typeof flags === "number" &&
-        (flags & fsConstants.O_DIRECTORY) !== 0,
-    );
-    expect(dirOpens.length).toBeGreaterThanOrEqual(1);
+        (flags & fsConstants.O_DIRECTORY) !== 0
+      ) {
+        dirSyncSpies.push(spyOn(handle, "sync"));
+      }
+      return handle;
+    }) as typeof fsp.open,
+  );
+  try {
+    await writeRuntimeConfig({ activeCorpusId: "fsync-me" }, runtimeRoot);
+    expect(dirSyncSpies.length).toBeGreaterThanOrEqual(1);
+    const synced = dirSyncSpies.some((s) => s.mock.calls.length >= 1);
+    expect(synced).toBe(true);
   } finally {
     openSpy.mockRestore();
   }
