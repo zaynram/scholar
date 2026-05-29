@@ -32,6 +32,11 @@ export function chunkText(text: string): Chunk[] {
   for (let start = 0; start < words.length; start += step) {
     const slice = words.slice(start, start + WINDOW_WORDS);
     if (slice.length === 0) break;
+    // Audit M6: drop tail chunks whose new-word content (slice.length minus
+    // OVERLAP_WORDS of prior overlap) is ≤ 1. These contribute one or zero
+    // net new words while costing an embedding round-trip and polluting
+    // vec_rank with a near-duplicate of the previous chunk.
+    if (start > 0 && slice.length <= OVERLAP_WORDS + 1) break;
     chunks.push({ ordinal, text: slice.join(" ") });
     ordinal += 1;
     if (start + WINDOW_WORDS >= words.length) break;

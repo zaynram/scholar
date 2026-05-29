@@ -54,3 +54,23 @@ test("chunker: Chunk shape exports ordinal + text fields", () => {
   expect(typeof sample.ordinal).toBe("number");
   expect(typeof sample.text).toBe("string");
 });
+
+test("chunker: drops a tail chunk whose new-word content is ≤ 1 word (M6)", () => {
+  // Audit M6 / finding #16: WINDOW_WORDS+1 = 385 words produces a 49-word
+  // tail chunk that's 48 words of overlap + 1 net new word — wastes an
+  // embedding budget and pollutes vec_rank with a near-duplicate. Drop
+  // such tails (slice.length ≤ OVERLAP_WORDS + 1).
+  const words = Array.from({ length: 385 }, (_, i) => `w${i}`).join(" ");
+  const chunks = chunkText(words);
+  expect(chunks).toHaveLength(1);
+  expect(chunks[0]!.text.split(/\s+/).length).toBe(384);
+});
+
+test("chunker: keeps a tail chunk with > 1 word of new content (M6 boundary)", () => {
+  // Boundary on the other side: 50 tail-words = 48 overlap + 2 net new
+  // words. Cheap to embed, contributes real new signal — must NOT be dropped.
+  const words = Array.from({ length: 386 }, (_, i) => `w${i}`).join(" ");
+  const chunks = chunkText(words);
+  expect(chunks).toHaveLength(2);
+  expect(chunks[1]!.text.split(/\s+/).length).toBe(50);
+});
