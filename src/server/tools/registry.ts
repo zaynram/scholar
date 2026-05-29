@@ -208,7 +208,16 @@ export function registerAll(server: McpServer, ctx: ServerContext): ToolRegistry
       registerTool: (n: string, d: unknown, h: (args: unknown) => Promise<unknown>) => void;
     }).registerTool(name, def, async (args: unknown) => {
       const result = await handler(args, ctx);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      // Audit H2: view-opener tools return `{ openView: { resource, route } }`
+      // (papers, digest, prompts, etc.). The MCP host can't recognize the
+      // open-view intent if we only emit the legacy text-JSON content block.
+      // Promote the payload to `structuredContent` while keeping `content` for
+      // hosts that don't read structuredContent.
+      const text = { content: [{ type: "text", text: JSON.stringify(result) }] };
+      if (result && typeof result === "object" && "openView" in result) {
+        return { ...text, structuredContent: result as Record<string, unknown> };
+      }
+      return text;
     });
   };
   registerCorpus(server, ctx, register);
