@@ -22,6 +22,10 @@ import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite"
 import { rawClient } from "./raw-client.ts"
 import type { RunRawDdl } from "../tools/registry.ts"
 
+export class RawDdlInvariantError extends Error {
+  override name = "RawDdlInvariantError"
+}
+
 function readSetting(db: BunSQLiteDatabase, key: string): string | null {
   try {
     const row = db.all(sql`SELECT value FROM settings WHERE key = ${key}`) as {
@@ -61,7 +65,20 @@ export const runRawDdl: RunRawDdl = (db) => {
   // flag has flipped to true. The vec0 module supports IF NOT EXISTS, so
   // re-invocation after the first materialization is a no-op.
   const dim = embedDim(db)
-  if (dim !== null && chunkVecCreated(db)) {
+  const created = chunkVecCreated(db)
+  // Audit A1: settings can desynchronize across the chunk_vec.created flag and
+  // the embed.dim row (manual edit, downgrade-then-upgrade, partial write).
+  // Pre-A1 the call silently no-op'd when created='true' and dim was missing,
+  // leaving the user with a permanent still_indexing=true and no diagnostic.
+  // Surface the inconsistency loudly so the bug is debuggable at first open.
+  if (created && dim === null) {
+    throw new RawDdlInvariantError(
+      "settings.chunk_vec.created='true' but embed.dim is missing or invalid — " +
+        "fix settings (clear chunk_vec.created or restore a numeric JSON embed.dim) " +
+        "before re-opening the corpus",
+    )
+  }
+  if (dim !== null && created) {
     rawClient(db).run(
       `CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
         chunk_id TEXT PRIMARY KEY,
