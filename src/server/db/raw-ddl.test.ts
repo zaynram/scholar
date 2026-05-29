@@ -74,6 +74,24 @@ test("runRawDdl: creates chunk_vec when settings.embed.dim is set and chunk_vec.
   expect(tables.map((t) => t.name)).toContain("chunk_vec")
 })
 
+test("runRawDdl: embed.dim is parsed as JSON (rejects hex/non-JSON forms) (M4)", () => {
+  // Audit M4 / finding #14: pdf.ts:materializeChunkVec writes embed.dim via
+  // JSON.stringify(number); the consuming reader in raw-ddl.ts:embedDim used
+  // Number(raw), which accepts non-JSON forms like "0x300" (Number = 768)
+  // and would silently honor a value that the canonical ConfigAccessor.get
+  // (JSON.parse) would reject. Pin the JSON-only contract: hex-formatted
+  // values must NOT trigger chunk_vec creation.
+  const { sqlite, db } = freshExtDb()
+  db.run(sql`INSERT INTO settings(key,value) VALUES
+    ('embed.dim','0x300'),
+    ('chunk_vec.created','true')`)
+  runRawDdl(db)
+  const has = sqlite
+    .query("SELECT 1 FROM sqlite_master WHERE name = 'chunk_vec'")
+    .get()
+  expect(has).toBeNull()
+})
+
 test("runRawDdl: skips chunk_vec when settings.chunk_vec.created='false' (deferred)", () => {
   const { sqlite, db } = freshExtDb()
   db.run(sql`INSERT INTO settings(key,value) VALUES
