@@ -40,10 +40,19 @@ function chunkVecCreated(db: BunSQLiteDatabase): boolean {
 }
 
 function embedDim(db: BunSQLiteDatabase): number | null {
+  // Audit M4: align with the canonical serialization convention — pdf.ts
+  // writes embed.dim via JSON.stringify(number) and ConfigAccessor.get
+  // reads via JSON.parse. The old Number(raw) coercion was too lenient,
+  // accepting non-JSON forms like "0x300" that the canonical reader rejects.
   const raw = readSetting(db, "embed.dim")
   if (raw === null) return null
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 export const runRawDdl: RunRawDdl = (db) => {
