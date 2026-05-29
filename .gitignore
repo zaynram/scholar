@@ -13,3 +13,6 @@ runtime/
 # so the packaging cycle can copy it verbatim into the .plugin archive.
 !src/vendor/pdf-server/dist/
 !src/vendor/pdf-server/dist/**
+
+.claude/scheduled_tasks.lock
+.claude/worktrees/**
