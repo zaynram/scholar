@@ -371,6 +371,53 @@ test("delete: soft-deletes annotation (deleted_at set) and pushes remove_annotat
 // delete idempotency (unchanged under v1.1)
 // =============================================================================
 
+test("delete: push failure tombstones the row; retry short-circuits and does NOT re-push (M8 delete)", async () => {
+  // Audit M8 + pr-test-analyzer follow-up: write-then-push semantics apply
+  // to delete too, but the recovery contract differs from upsert. Upsert
+  // commits a dirty row and the retry re-pushes via the update branch.
+  // Delete commits a tombstone and the retry short-circuits at
+  // `already_tombstoned` — there is NO redundant re-push. This is the v1.1
+  // "no inbound reconciliation" stance applied to outbound failure: the
+  // viewer's stale display reconciles on next paper open / refresh, not via
+  // a scholar-initiated catch-up. Pin the intentional asymmetry so any
+  // future change to make delete re-pushable is a deliberate spec edit.
+  const r1 = await dispatch("scholar.annotations.upsert", {
+    paper_id: TEST_PAPER,
+    body: "to delete (push will fail)",
+  }) as { id: string };
+
+  // First delete: phase-2 (remove_annotations) throws once, then succeed.
+  let removeCalls = 0;
+  interactImpl = async (cmd) => {
+    if (cmd.type === "remove_annotations") {
+      removeCalls += 1;
+      if (removeCalls === 1) throw new Error("pdf viewer push failed");
+    }
+    return null;
+  };
+
+  await expect(
+    dispatch("scholar.annotations.delete", { id: r1.id }),
+  ).rejects.toThrow(/push failed/);
+
+  // Phase-1 tombstone committed despite phase-2 throw.
+  const tombstoned = rawClient(built.ctx.db!)
+    .query("SELECT deleted_at FROM annotations WHERE id = ?")
+    .get(r1.id) as { deleted_at: string | null };
+  expect(tombstoned.deleted_at).not.toBeNull();
+  expect(removeCalls).toBe(1);
+
+  // Retry: short-circuits as already_tombstoned, NO new remove_annotations push.
+  // The viewer is expected to catch up on refresh — scholar does not re-push.
+  const retried = await dispatch("scholar.annotations.delete", { id: r1.id }) as {
+    deleted: boolean;
+    reason: string;
+  };
+  expect(retried.deleted).toBe(false);
+  expect(retried.reason).toBe("already_tombstoned");
+  expect(removeCalls).toBe(1);
+});
+
 test("delete on already-tombstoned annotation is no-op: no second pdf.interact, deleted_at unchanged", async () => {
   const r1 = await dispatch("scholar.annotations.upsert", {
     paper_id: TEST_PAPER,
