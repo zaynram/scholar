@@ -9,7 +9,8 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyMigrations, openWithPragmas } from "./migrations.ts";
+import { writeFileSync } from "node:fs";
+import { applyMigrations, openWithPragmas, countBundledMigrations } from "./migrations.ts";
 import { rawClient } from "./raw-client.ts";
 
 let dir: string | undefined;
@@ -29,6 +30,24 @@ test("openWithPragmas opens distinct paths to distinct files", () => {
   rawClient(a).exec("CREATE TABLE t (k TEXT)");
   // b must not see the table — distinct files.
   expect(() => rawClient(b).query("SELECT * FROM t").all()).toThrow();
+});
+
+test("countBundledMigrations returns 0 for a missing folder (M7)", () => {
+  // Empty-folder / first-open case must keep returning 0 — that's the
+  // load-bearing path the broad catch was protecting.
+  const missing = join(tmpdir(), `scholar-mig-missing-${process.pid}-${Date.now()}`);
+  expect(countBundledMigrations(missing)).toBe(0);
+});
+
+test("countBundledMigrations surfaces non-ENOENT errors instead of returning 0 (M7)", () => {
+  // Audit M7: the old broad catch silently turned any FS error (permission,
+  // ENOTDIR, etc.) into "0 bundled migrations", defeating the newer-plugin
+  // guard for any failure mode other than "folder absent". Verify a file
+  // path passed where a folder is expected throws rather than counting 0.
+  dir = mkdtempSync(join(tmpdir(), "scholar-mig-"));
+  const filePath = join(dir, "not-a-folder");
+  writeFileSync(filePath, "x");
+  expect(() => countBundledMigrations(filePath)).toThrow();
 });
 
 test("applyMigrations refuses to run when PRAGMA foreign_keys is OFF", () => {
