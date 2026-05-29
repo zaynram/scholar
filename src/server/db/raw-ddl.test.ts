@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openWithPragmas } from "./migrations.ts"
-import { runRawDdl } from "./raw-ddl.ts"
+import { runRawDdl, RawDdlInvariantError } from "./raw-ddl.ts"
 import { ensureVec0Path } from "%/util"
 // Ensure vec0 path is discoverable by `Database.loadExtension`. The build
 // pipeline (foundation's `bun run build:vec`) is expected to land a copy at
@@ -74,22 +74,34 @@ test("runRawDdl: creates chunk_vec when settings.embed.dim is set and chunk_vec.
   expect(tables.map((t) => t.name)).toContain("chunk_vec")
 })
 
-test("runRawDdl: embed.dim is parsed as JSON (rejects hex/non-JSON forms) (M4)", () => {
+test("runRawDdl: embed.dim is parsed as JSON; hex/non-JSON values trigger RawDdlInvariantError (M4 + A1)", () => {
   // Audit M4 / finding #14: pdf.ts:materializeChunkVec writes embed.dim via
   // JSON.stringify(number); the consuming reader in raw-ddl.ts:embedDim used
   // Number(raw), which accepts non-JSON forms like "0x300" (Number = 768)
   // and would silently honor a value that the canonical ConfigAccessor.get
-  // (JSON.parse) would reject. Pin the JSON-only contract: hex-formatted
-  // values must NOT trigger chunk_vec creation.
-  const { sqlite, db } = freshExtDb()
+  // (JSON.parse) would reject. Audit A1 strengthens M4: when chunk_vec.created
+  // says the table was materialized but embedDim() now returns null (corrupt
+  // JSON, downgrade artifact, partial settings write), the state is genuinely
+  // inconsistent — throw rather than silently skip, so the user sees the bug
+  // immediately instead of staring at a permanent still_indexing=true.
+  const { db } = freshExtDb()
   db.run(sql`INSERT INTO settings(key,value) VALUES
     ('embed.dim','0x300'),
     ('chunk_vec.created','true')`)
-  runRawDdl(db)
-  const has = sqlite
-    .query("SELECT 1 FROM sqlite_master WHERE name = 'chunk_vec'")
-    .get()
-  expect(has).toBeNull()
+  expect(() => runRawDdl(db)).toThrow(RawDdlInvariantError)
+})
+
+test("runRawDdl: throws RawDdlInvariantError when chunk_vec.created='true' but embed.dim row is absent (A1)", () => {
+  // Audit A1 / silent-failure-hunter Finding A1: settings says chunk_vec was
+  // materialized, but the embed.dim sibling row is gone. Materially
+  // impossible under the canonical pdf.ts writer (atomic) but possible after
+  // manual edit, downgrade-then-upgrade, or partial write. Without this
+  // check raw-ddl silently no-ops and the user sees still_indexing=true
+  // forever with no diagnostic. Surface the inconsistency.
+  const { db } = freshExtDb()
+  db.run(sql`INSERT INTO settings(key,value) VALUES
+    ('chunk_vec.created','true')`)
+  expect(() => runRawDdl(db)).toThrow(RawDdlInvariantError)
 })
 
 test("runRawDdl: skips chunk_vec when settings.chunk_vec.created='false' (deferred)", () => {
