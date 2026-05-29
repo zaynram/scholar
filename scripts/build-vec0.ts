@@ -1,7 +1,8 @@
 import { $ } from "bun"
 import { Database } from "bun:sqlite"
-import { join, basename } from "node:path"
+import { join, basename, dirname } from "node:path"
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
+import { getVec0Extension } from "../src/server/db/sqlite-vec.ts"
 import util, { ROOT } from "./util"
 import env from "./util/env"
 
@@ -119,6 +120,9 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
   const { bin, args: prefixArgs } = compiler
   console.log(`Compiling vec0 from source using ${bin}...`)
 
+  // Ensure the output directory exists — ld errors on missing parent dir.
+  mkdirSync(dirname(destPath), { recursive: true })
+
   // Use Bun.spawn (not $`...`) so multi-word CC commands (bin + prefixArgs)
   // are passed as a proper argv array — $`${cc} -flag` treats the whole
   // interpolated string as a single argument (no shell word-splitting).
@@ -152,7 +156,9 @@ export async function compileVec0FromSource(destPath: string): Promise<void> {
 }
 
 if (import.meta.main)
-  compileVec0FromSource(util.subpath("build/vendor/sqlite-vec")).catch((e) => {
+  compileVec0FromSource(
+    util.subpath("build/vendor/sqlite-vec", `vec0.${getVec0Extension()}`),
+  ).catch((e) => {
     const error =
       e instanceof Error ? `Unhandled compile error: ${e.message}\n` : String(e)
     process.stderr.write(error)
