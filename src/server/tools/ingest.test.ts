@@ -3,7 +3,7 @@
 // Uses buildServer + dispatch pattern (established in corpus.test.ts).
 // Mocks allPdfRoots/defaultPdfRoot so tests don't need real pdf_roots config rows.
 // ctx.db is set directly after buildServer() to inject an in-memory corpus DB.
-import { test, expect, describe, mock, beforeEach, afterEach } from "bun:test";
+import { test, expect, describe, mock, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import Database from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
@@ -14,14 +14,30 @@ import { openWithPragmas, applyMigrations } from "../db/migrations.ts";
 import type { PdfChild } from "./registry.ts";
 import { papers, citations } from "../db/schema.ts";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import * as defaultPdfRootMod from "../db/default-pdf-root.ts";
 
 // F1 test-isolation: mock the foundation helper so tests never hit the config DB pdf_roots table.
 // Use /tmp as the test root — it always exists, so realpathSync inside resolveUnderRoot won't throw ENOENT.
-mock.module("../db/default-pdf-root.ts", () => ({
-  allPdfRoots: (_tx: unknown, _corpusId: string) => ["/tmp"],
-  defaultPdfRoot: (_tx: unknown, _corpusId: string) => "/tmp",
-  ConfigurationIncompleteError: class extends Error { override name = "ConfigurationIncompleteError"; },
-}));
+//
+// bun:test mock.module() is process-global; if we don't restore on teardown,
+// later test files that import the same module receive the mock instead of
+// the real exports (bun 1.3.11 surfaced this clearly; later bun versions
+// happen to isolate it). Snapshot the real exports and re-mock with them in
+// afterAll so subsequent files (roots.test.ts, etc.) get the real DB-backed
+// allPdfRoots / defaultPdfRoot.
+const _realDefaultPdfRoot = { ...defaultPdfRootMod };
+
+beforeAll(() => {
+  mock.module("../db/default-pdf-root.ts", () => ({
+    allPdfRoots: (_tx: unknown, _corpusId: string) => ["/tmp"],
+    defaultPdfRoot: (_tx: unknown, _corpusId: string) => "/tmp",
+    ConfigurationIncompleteError: class extends Error { override name = "ConfigurationIncompleteError"; },
+  }));
+});
+
+afterAll(() => {
+  mock.module("../db/default-pdf-root.ts", () => _realDefaultPdfRoot);
+});
 
 const mockPdf: PdfChild = {
   interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
