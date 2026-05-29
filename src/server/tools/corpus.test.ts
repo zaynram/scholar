@@ -255,6 +255,50 @@ test("scholar.dashboard returns structuredContent with view: dashboard", async (
   expect(result).toMatchObject({ view: "dashboard" });
 });
 
+// ─── H1: corpus.export argv-only spawn (no shell interpolation) ─────────────
+
+test("corpus.export survives a runtime-root path containing shell metacharacters", async () => {
+  // Audit H1: handleExport previously built `sh -c "tar ... | zstd -o ${dest}"`
+  // with double-quoted interpolated paths. A path containing `"` unbalances
+  // the shell quoting, so the export either errors (best case) or executes
+  // injected fragments (worst case). After the fix, `tar --zstd` is invoked
+  // argv-form and the path is passed literally.
+  const dirtyRoot = mkdtempSync(join(tmpdir(), 'scholar-export-dir"ty'));
+  mkdirSync(join(dirtyRoot, "dbs"), { recursive: true });
+  const origRoot = process.env.SCHOLAR_RUNTIME_ROOT;
+  process.env.SCHOLAR_RUNTIME_ROOT = dirtyRoot;
+  try {
+    const dirtyConfigDb = openWithPragmas(join(dirtyRoot, "dbs", "scholar-config.db"));
+    applyMigrations(dirtyConfigDb);
+    const dirtyBuilt = buildServer({
+      runtimeRoot: dirtyRoot,
+      openConfigDb: () => dirtyConfigDb,
+      spawnPdfChild: () => ({
+        interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+        getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+        currentRoots: () => [],
+        setRoots: async () => {},
+        displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
+        isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
+      }),
+    });
+    await dirtyBuilt.dispatch("scholar.corpus.create", {
+      slug: "dirty-export",
+      display_name: "Dirty Export",
+      initial_pdf_root: dirtyRoot,
+    });
+    await dirtyBuilt.dispatch("scholar.corpus.activate", { slug: "dirty-export" });
+    const result = (await dirtyBuilt.dispatch("scholar.corpus.export", {
+      slug: "dirty-export",
+    })) as { exported_to: string };
+    expect(existsSync(result.exported_to)).toBe(true);
+  } finally {
+    rmSync(dirtyRoot, { recursive: true, force: true });
+    if (origRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
+    else process.env.SCHOLAR_RUNTIME_ROOT = origRoot;
+  }
+});
+
 // ─── posture-B regression guard ──────────────────────────────────────────────
 
 test("corpus handlers make no sqlite3-mcp calls (posture-B guard)", async () => {

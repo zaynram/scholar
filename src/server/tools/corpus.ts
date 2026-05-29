@@ -11,7 +11,7 @@
 //     allow subsequent creates for the same slug without server restart.
 //   - corpus.activate uses a retain-on-success slot (cleared only by reset-init)
 //     so re-activation of an already-open corpus is a fast-path idempotency return.
-import { join } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
@@ -379,12 +379,14 @@ async function handleExport(args: unknown, ctx: ServerContext): Promise<unknown>
   mkdirSync(exportDir, { recursive: true });
   const dest = join(exportDir, `${slug}-${ts}.tar.zst`);
 
-  // Use bun shell for tar | zstd (bun:sqlite backup API would require DB handle;
-  // shell approach handles the closed-corpus case without requiring the DB be open).
-  const { exited, stderr } = Bun.spawn(["sh", "-c", `tar -cf - -C "$(dirname "${src}")" "$(basename "${src}")" | zstd -o "${dest}"`], {
-    stdout: "ignore",
-    stderr: "pipe",
-  });
+  // Audit H1: argv-form spawn so paths can't be shell-interpolated. Uses
+  // `tar --zstd` (GNU tar ≥1.31; bsdtar on macOS) instead of a `tar | zstd`
+  // pipeline so we don't need a shell at all. The closed-corpus case still
+  // works — tar reads the DB file directly without needing an open handle.
+  const { exited, stderr } = Bun.spawn(
+    ["tar", "--zstd", "-cf", dest, "-C", dirname(src), basename(src)],
+    { stdout: "ignore", stderr: "pipe" },
+  );
   const code = await exited;
   if (code !== 0) {
     const errMsg = await new Response(stderr).text();
