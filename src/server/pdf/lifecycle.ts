@@ -150,6 +150,14 @@ export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
     // Try to recover the underlying child PID from the transport (private surface).
     activePid = (transport as unknown as { _process?: { pid?: number } })._process?.pid;
     if (activePid && process.platform === "win32") {
+      // Audit M2: attach-after-spawn leaves a microsecond race window where
+      // a child that exits between spawn and AssignProcessToJobObject escapes
+      // the job. Accepted at v1: the primary purpose of the job is parent-
+      // death cleanup of long-lived children, not coverage of the synchronous-
+      // crash case. Closing the race requires CreateProcess with
+      // CREATE_SUSPENDED + AssignProcessToJobObject before ResumeThread —
+      // which would mean reimplementing the StdioClientTransport spawn path.
+      // Deferred until a Win32 test rig exists; tracked in audits/ROADMAP.md.
       attachJobObject(activePid);
     } else if (activePid && process.platform === "linux") {
       setPdeathsig(activePid);
