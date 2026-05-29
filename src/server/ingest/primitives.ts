@@ -82,7 +82,14 @@ export function resolveUnderRoot(p: string, root: string): string {
   }
   if (leafStat.isSymbolicLink()) throw new PathEscapeError(`symlink leaf rejected: ${resolved}`);
   const real = realpathSync(resolved);
-  const realRoot = realpathSync(root);
+  // Audit M9: realpathSync(root) was unguarded, so a missing or unreadable
+  // root leaked a raw ENOENT to callers that only catch PathEscapeError.
+  let realRoot;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    throw new PathEscapeError(`root unresolvable: ${root}`);
+  }
   if (!real.startsWith(realRoot + pathSep) || real === realRoot) {
     throw new PathEscapeError(`escapes root ${realRoot}: ${real}`);
   }
