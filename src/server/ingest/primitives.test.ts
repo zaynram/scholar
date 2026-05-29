@@ -64,6 +64,24 @@ test("resolveUnderRoot throws PathEscapeError on parent traversal", () => {
   }
 });
 
+test("resolveUnderRoot wraps a missing root in PathEscapeError (M9)", () => {
+  // Audit M9: realpathSync(root) was unguarded, so a non-existent root path
+  // leaked a raw ENOENT past callers that expect to catch only PathEscapeError
+  // (the contract documented at the function header). Common trigger: backup
+  // destination resolved before the corpus root directory has been created.
+  // Construct a case the existing leaf-stat catch can't mask: real leaf,
+  // missing root.
+  const leafDir = mkdtempSync(join(tmpdir(), "scholar-rur-realleaf-"));
+  const leaf = join(leafDir, "ok.txt");
+  writeFileSync(leaf, "x");
+  const missingRoot = join(tmpdir(), `scholar-rur-missing-${process.pid}-${Date.now()}`);
+  try {
+    expect(() => resolveUnderRoot(leaf, missingRoot)).toThrow(PathEscapeError);
+  } finally {
+    rmSync(leafDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveUnderRoot throws PathEscapeError on symlink leaf", () => {
   if (process.platform === "win32") return; // symlinks require admin on Windows
   const root = mkdtempSync(join(tmpdir(), "scholar-rur-"));
