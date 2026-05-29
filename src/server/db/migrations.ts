@@ -40,6 +40,17 @@ export function applyMigrations(
   db: BunSQLiteDatabase,
   migrationsFolder: string = join(import.meta.dir, "migrations"),
 ): void {
+  // Audit H5: §8 cascade clauses are load-bearing for data integrity, and
+  // PRAGMA foreign_keys is per-connection (defaults to OFF on every fresh
+  // bun:sqlite Database). Fail loud here rather than silently letting orphans
+  // accumulate later.
+  const fk = rawClient(db).query("PRAGMA foreign_keys").get() as { foreign_keys: number };
+  if (fk.foreign_keys !== 1) {
+    throw new Error(
+      "applyMigrations: PRAGMA foreign_keys must be ON before migrate (got " +
+        `${fk.foreign_keys}); construct the DB via openWithPragmas().`,
+    );
+  }
   // Compatibility guard runs BEFORE migrate() so a newer-schema DB aborts
   // before any modification.
   const recorded = readMaxAppliedId(db);
