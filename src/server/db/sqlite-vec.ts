@@ -20,14 +20,15 @@ export function getVec0Extension() {
  *   1. SCHOLAR_VEC0_PATH env override (test/CI/operator escape hatch)
  *   2. ${CLAUDE_PLUGIN_ROOT}/build/vendor/sqlite-vec/vec0.{dll,dylib,so}  (packaged)
  *   3. <repo>/build/vendor/sqlite-vec/vec0.{dll,dylib,so}                  (dev)
+ *
+ * Audit H4: dev mode anchors to `import.meta.dir` (src/server/db/) so the
+ * path doesn't depend on where the process was launched from. CLAUDE_PLUGIN_ROOT
+ * is the production fallback the packaged binary sets; keep that branch.
  */
 export const resolveVec0Path = (): string =>
   process.env.SCHOLAR_VEC0_PATH ??
   join(
-    // `process.env.__dirname` was a CommonJS-ism never actually set by Bun or
-    // Node — it always fell through to cwd(). Drop it; rely on cwd() in dev
-    // and CLAUDE_PLUGIN_ROOT in the packaged binary.
-    process.env.CLAUDE_PLUGIN_ROOT ?? process.cwd(),
+    process.env.CLAUDE_PLUGIN_ROOT ?? join(import.meta.dir, "..", "..", ".."),
     "build",
     "vendor",
     "sqlite-vec",
