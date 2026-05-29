@@ -117,13 +117,20 @@ export async function searchPapers(
       // sliced views correctly today, but ctx.embed is test-injectable and
       // future driver swaps may not).
       const qvec = toTightFloat32(await embed(DEFAULT_EMBED_MODEL, args.q));
+      // Audit M5: per-paper aggregation downstream picks MIN(d) per paper_id,
+      // so the global LIMIT here must be large enough that several papers
+      // each get at least one chunk represented. The old LIMIT 200 starved
+      // diversity on corpora where any one paper had ≥200 close-ranking
+      // chunks. 1000 covers the personal-use scale (5k chunks budget per
+      // audit note). The deferred KNN-per-paper subquery rewrite would be
+      // structurally tighter but needs a benchmark; tracked separately.
       const vecRows = raw.prepare(
         `SELECT pc.paper_id AS paper_id,
                 vec_distance_cosine(cv.embedding, ?) AS d
            FROM chunk_vec cv
            JOIN paper_chunks pc ON pc.id = cv.chunk_id
            ORDER BY d ASC
-           LIMIT 200`,
+           LIMIT 1000`,
       ).all(qvec) as Array<{ paper_id: string; d: number }>;
       const best = new Map<string, number>();
       for (const r of vecRows) {
