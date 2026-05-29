@@ -4,12 +4,13 @@
 // "hybrid lexical + sqlite-vec" envelope. Degrades to lexical-only with
 // `still_indexing: true` when settings.chunk_vec.created='false' (§11 pill).
 // scholar.papers.update bumps status_touched_at so reading_queue reorders.
-import { test, expect } from "bun:test"
+import { test, expect, spyOn } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { searchPapers, updatePaper } from "./papers.ts"
 import { applyMigrations } from "#server/db/migrations.ts"
 import { runRawDdl } from "#server/db/raw-ddl.ts"
+import * as vecModule from "#server/db/sqlite-vec.ts"
 import { ensureVec0Path } from "%/util"
 
 function deterministicEmbedding(dim: number, input: string): Float32Array {
@@ -108,12 +109,13 @@ test("hybrid search: returns lexical + semantic hits ranked via RRF (k=60)", asy
   expect(result.hits.map((h) => h.id)).toContain("p1")
 })
 
-test("hybrid search: tolerates an embed that returns a view-over-larger-buffer (M3)", async () => {
-  // Audit M3: ctx.embed is test-injectable, so future embed providers may
-  // return Float32Array views over a larger backing buffer. searchPapers
-  // wraps qvec in toTightFloat32 at the bind site; verify the search still
-  // converges on the correct paper. (Today's bun:sqlite respects byteOffset
-  // + byteLength, so this test is defense-in-depth evidence of the contract.)
+test("hybrid search: invokes toTightFloat32 at the qvec bind site (M3)", async () => {
+  // Audit M3 + pr-test-analyzer follow-up: the unit tests in
+  // sqlite-vec.test.ts pin toTightFloat32's behavior; this test pins the
+  // CALL — that searchPapers actually routes ctx.embed's output through the
+  // wrap before binding it to vec_distance_cosine. Spying on the module
+  // export catches a regression where the wrap is removed from papers.ts
+  // even on a bun:sqlite version that happens to honor view bind directly.
   const sqlite = seededDb()
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
     ('p1','smith2024','Scaling laws','2026-01-01T00:00:00.000Z'),
@@ -131,19 +133,32 @@ test("hybrid search: tolerates an embed that returns a view-over-larger-buffer (
   }
 
   // Inject an embed that returns a view positioned at a non-zero offset of a
-  // larger backing buffer.
+  // larger backing buffer — to verify toTightFloat32 sees a non-tight input.
   const ctx = fakeCtx(sqlite) as unknown as { embed: (m: string, p: string) => Promise<Float32Array> }
   ctx.embed = async (_m, p) => {
     const dim = 768
     const tight = deterministicEmbedding(dim, p)
     const big = new ArrayBuffer((dim + 8) * 4)
-    const view = new Float32Array(big, 4 * 4, dim) // offset 16 bytes into a larger buffer
+    const view = new Float32Array(big, 4 * 4, dim)
     view.set(tight)
     return view
   }
 
-  const result = await searchPapers(ctx as unknown as Parameters<typeof searchPapers>[0], { q: "Scaling laws describe model capacity" })
-  expect(result.hits[0]!.id).toBe("p1")
+  const wrapSpy = spyOn(vecModule, "toTightFloat32")
+  try {
+    const result = await searchPapers(ctx as unknown as Parameters<typeof searchPapers>[0], { q: "Scaling laws describe model capacity" })
+    expect(result.hits[0]!.id).toBe("p1")
+    expect(wrapSpy).toHaveBeenCalled()
+    // Confirm the spy saw a non-tight input (the injected view), proving the
+    // wrap site is the qvec path rather than some unrelated incidental call.
+    const sawView = wrapSpy.mock.calls.some(
+      ([arr]) =>
+        arr instanceof Float32Array && arr.buffer.byteLength !== arr.byteLength,
+    )
+    expect(sawView).toBe(true)
+  } finally {
+    wrapSpy.mockRestore()
+  }
 })
 
 test("hybrid search: vec scan LIMIT keeps per-paper diversity under chunk saturation (M5)", async () => {
