@@ -1,14 +1,27 @@
 {
-    "name": "scholar",
-    "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a vendored pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
-    "author": { "name": "zayn" },
-    "keywords": [
-        "literature-review",
-        "research",
-        "mcp-apps",
-        "annotations",
-        "ollama",
-        "sqlite-vec"
-    ],
-    "license": "MIT"
+  "name": "scholar",
+  "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a vendored pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
+  "author": {
+    "name": "zayn"
+  },
+  "keywords": [
+    "literature-review",
+    "research",
+    "mcp-apps",
+    "annotations",
+    "ollama",
+    "sqlite-vec"
+  ],
+  "license": "MIT",
+  "mcpServers": {
+    "scholar": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/build/scholar",
+      "env": {
+        "SCHOLAR_RUNTIME_ROOT": "${HOME}/mcp-data/scholar/runtime",
+        "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",
+        "SCHOLAR_OLLAMA_EMBED_MODEL": "nomic-embed-text:v1.5",
+        "SCHOLAR_OLLAMA_CHAT_MODEL": "qwen3:8b"
+      }
+    }
+  }
 }
