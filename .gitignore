@@ -16,3 +16,12 @@ runtime/
 
 .claude/scheduled_tasks.lock
 .claude/worktrees/**
+
+# Compiled server binaries + platform staging dirs — build outputs, never commit.
+bin/mcp-scholar
+bin/mcp-scholar.exe
+win32/
+# Stray nested copy from a build script writing to a literal "home/" path.
+home/
+# Backup of the deleted build-plugin.test.ts, kept locally during the refactor.
+build-plugin-test-old.ts

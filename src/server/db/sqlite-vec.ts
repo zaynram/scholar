@@ -2,17 +2,17 @@
 //
 // Returns the absolute path to the bundled vec0 shared library. Loading is the
 // caller's responsibility — see loadVecAndProbeDim in src/server/ingest/primitives.ts.
-import { join } from "path"
+import { join } from 'path'
 
 export function getVec0Extension() {
-  switch (process.platform) {
-    case "win32":
-      return "dll"
-    case "darwin":
-      return "dylib"
-    default:
-      return "so"
-  }
+    switch (process.platform) {
+        case 'win32':
+            return 'dll'
+        case 'darwin':
+            return 'dylib'
+        default:
+            return 'so'
+    }
 }
 
 /**
@@ -26,14 +26,14 @@ export function getVec0Extension() {
  * is the production fallback the packaged binary sets; keep that branch.
  */
 export const resolveVec0Path = (): string =>
-  process.env.SCHOLAR_VEC0_PATH ??
-  join(
-    process.env.CLAUDE_PLUGIN_ROOT ?? join(import.meta.dir, "..", "..", ".."),
-    "build",
-    "vendor",
-    "sqlite-vec",
-    `vec0.${getVec0Extension()}`,
-  )
+    process.env.SCHOLAR_VEC0_PATH ??
+    join(
+        process.env.CLAUDE_PLUGIN_ROOT ?? join(import.meta.dir, '..', '..', '..'),
+        'build',
+        'vendor',
+        'sqlite-vec',
+        `vec0.${getVec0Extension()}`
+    )
 
 /**
  * Normalize a Float32Array for safe bun:sqlite blob binding to vec0.
@@ -48,5 +48,5 @@ export const resolveVec0Path = (): string =>
  * Slow path: any view-over-larger-buffer → `Float32Array.from(...)` copies.
  */
 export function toTightFloat32(arr: Float32Array): Float32Array {
-  return arr.buffer.byteLength === arr.byteLength ? arr : Float32Array.from(arr)
+    return arr.buffer.byteLength === arr.byteLength ? arr : Float32Array.from(arr)
 }

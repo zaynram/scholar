@@ -1,50 +1,32 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": [
-      "ES2022",
-      "DOM"
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "lib": ["ES2022", "DOM"],
+        "jsx": "react-jsx",
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "types": ["bun-types"],
+        "noEmit": true,
+        "resolveJsonModule": true,
+        "allowImportingTsExtensions": true,
+        "verbatimModuleSyntax": false,
+        "paths": {
+            "^*": ["./*"],
+            "#*": ["./src/*"],
+            "&/*": ["./scripts/*"],
+            "%/*": ["./tests/*"]
+        }
+    },
+    "include": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "scripts/**/*.ts",
+        "*.test.ts",
+        "tests/**/*.ts"
     ],
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "types": [
-      "bun-types"
-    ],
-    "noEmit": true,
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": false,
-    "paths": {
-      "^*": [
-        "./*"
-      ],
-      "#*": [
-        "./src/*"
-      ],
-      "&/*": [
-        "./scripts/*"
-      ],
-      "%/*": [
-        "./tests/*"
-      ]
-    }
-  },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "scripts/**/*.ts",
-    "*.test.ts",
-    "tests/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "build",
-    "runtime",
-    "src/vendor"
-  ]
+    "exclude": ["node_modules", "build", "runtime", "src/vendor"]
 }
