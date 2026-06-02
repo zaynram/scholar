@@ -1,5 +1,8 @@
 import util, { ROOT } from '^scripts/util'
 import env from '^scripts/util/env'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // nu/scholar.test.ts
 // Red/Green tests for cycle 6.10 — nu module behavior + structural anchors.
 //
@@ -105,5 +108,47 @@ test('scholar transport invokes the server with --call <tool> <json> (M2)', asyn
         ])
     } finally {
         await Bun.$`rm -rf ${stubDir}`.quiet().catch(() => {})
+    }
+})
+
+// Production-resolution test (M2): with NO SCHOLAR_SERVER_CMD override and NO
+// CLAUDE_PLUGIN_DATA, `server-cmd` must resolve the server bundle from the
+// module's own location — `path self → dirname → dirname` = plugin root, then
+// `dist/server.js` — and fall back to a PATH `bun`. The override-driven test
+// above never exercises this branch; this one lays the real <root>/nu +
+// <root>/dist layout in a temp dir and confirms the SELF-relative resolution
+// reaches the bundle. (Verified by execution, not construction — see the
+// repeated override-only blind spot the slim pivot repoint nearly repeated.)
+test('server-cmd resolves dist/server.js relative to the module (M2 production path, no override)', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'scholar-nu-prod-'))
+    try {
+        mkdirSync(join(tmp, 'nu'))
+        mkdirSync(join(tmp, 'dist'))
+        await Bun.write(join(tmp, 'nu', 'scholar.nu'), SCRIPT_TEXT)
+        const argvFile = join(tmp, 'argv.json')
+        // argv-echo stub at the SELF-relative dist/server.js the module computes.
+        await Bun.write(
+            join(tmp, 'dist', 'server.js'),
+            [
+                `import { writeFileSync } from 'node:fs'`,
+                `writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)))`,
+            ].join('\n')
+        )
+        // Strip both seams so the production branch + PATH-bun fallback run.
+        const cleanEnv: Record<string, string | undefined> = { ...process.env, PATH }
+        delete cleanEnv.SCHOLAR_SERVER_CMD
+        delete cleanEnv.CLAUDE_PLUGIN_DATA
+        await Bun.$`nu ${join(tmp, 'nu', 'scholar.nu')} corpus.activate --json ${JSON.stringify({ slug: 'test' })}`
+            .env(cleanEnv)
+            .quiet()
+            .nothrow()
+        const argv = JSON.parse(await Bun.file(argvFile).text())
+        expect(argv).toEqual([
+            '--call',
+            'corpus.activate',
+            JSON.stringify({ slug: 'test' }),
+        ])
+    } finally {
+        rmSync(tmp, { recursive: true, force: true })
     }
 })
