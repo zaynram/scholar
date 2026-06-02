@@ -100,41 +100,27 @@ function findInteract(type: string): InteractCall[] {
 // NO_ACTIVE_CORPUS guards (§13 invariant 4)
 // =============================================================================
 
-test("scholar.annotations.list NO_ACTIVE_CORPUS guard fires when ctx.db is undefined", async () => {
-  const saved = built.ctx.db;
-  built.ctx.db = undefined;
-  try {
-    await expect(dispatch("scholar.annotations.list", { paper_id: TEST_PAPER }))
-      .rejects.toMatchObject({ code: "NO_ACTIVE_CORPUS" });
-    expect(interactCalls).toHaveLength(0);
-  } finally {
-    built.ctx.db = saved;
-  }
-});
-
-test("scholar.annotations.upsert NO_ACTIVE_CORPUS guard fires when ctx.db is undefined", async () => {
-  const saved = built.ctx.db;
-  built.ctx.db = undefined;
-  try {
-    await expect(dispatch("scholar.annotations.upsert", { paper_id: TEST_PAPER, body: "x" }))
-      .rejects.toMatchObject({ code: "NO_ACTIVE_CORPUS" });
-    expect(interactCalls).toHaveLength(0);
-  } finally {
-    built.ctx.db = saved;
-  }
-});
-
-test("scholar.annotations.delete NO_ACTIVE_CORPUS guard fires when ctx.db is undefined", async () => {
-  const saved = built.ctx.db;
-  built.ctx.db = undefined;
-  try {
-    await expect(dispatch("scholar.annotations.delete", { id: "01ABCD" }))
-      .rejects.toMatchObject({ code: "NO_ACTIVE_CORPUS" });
-    expect(interactCalls).toHaveLength(0);
-  } finally {
-    built.ctx.db = saved;
-  }
-});
+// All three handlers must guard ctx.db === undefined identically (§13 invariant
+// 4): reject NO_ACTIVE_CORPUS before any pdf-child I/O. Table-driven — one row
+// per handler, with that handler's minimal valid arg shape.
+test.each([
+  ["scholar.annotations.list", { paper_id: TEST_PAPER }],
+  ["scholar.annotations.upsert", { paper_id: TEST_PAPER, body: "x" }],
+  ["scholar.annotations.delete", { id: "01ABCD" }],
+] as [string, unknown][])(
+  "%s NO_ACTIVE_CORPUS guard fires when ctx.db is undefined",
+  async (tool, args) => {
+    const saved = built.ctx.db;
+    built.ctx.db = undefined;
+    try {
+      await expect(dispatch(tool, args))
+        .rejects.toMatchObject({ code: "NO_ACTIVE_CORPUS" });
+      expect(interactCalls).toHaveLength(0);
+    } finally {
+      built.ctx.db = saved;
+    }
+  },
+);
 
 // =============================================================================
 // NO_OPEN_VIEWER guards (§13 v1.1 invariant 5 — new)
@@ -512,23 +498,21 @@ test("upsert accepts valid 4-element finite rect JSON", async () => {
   expect(JSON.parse(row.rect)).toEqual([10, 20, 200, 300]);
 });
 
-test("upsert rejects rect with 3 elements", async () => {
-  await expect(dispatch("scholar.annotations.upsert", {
-    paper_id: TEST_PAPER, body: "x", rect: "[10, 20, 200]",
-  })).rejects.toMatchObject({ code: "INVALID_RECT" });
-});
-
-test("upsert rejects rect with non-finite numbers", async () => {
-  await expect(dispatch("scholar.annotations.upsert", {
-    paper_id: TEST_PAPER, body: "x", rect: "[10, 20, 200, 1e9999]",
-  })).rejects.toMatchObject({ code: "INVALID_RECT" });
-});
-
-test("upsert rejects rect with wrong shape (object)", async () => {
-  await expect(dispatch("scholar.annotations.upsert", {
-    paper_id: TEST_PAPER, body: "x", rect: '{"x":10}',
-  })).rejects.toMatchObject({ code: "INVALID_RECT" });
-});
+// Malformed rect strings all reject with INVALID_RECT. Table-driven; the
+// valid-accept case stays separate above (it asserts a successful DB round-trip,
+// not a rejection).
+test.each([
+  ["3 elements", "[10, 20, 200]"],
+  ["non-finite", "[10, 20, 200, 1e9999]"],
+  ["wrong shape (object)", '{"x":10}'],
+] as [string, string][])(
+  "upsert rejects malformed rect JSON: %s",
+  async (_label, rect) => {
+    await expect(dispatch("scholar.annotations.upsert", {
+      paper_id: TEST_PAPER, body: "x", rect,
+    })).rejects.toMatchObject({ code: "INVALID_RECT" });
+  },
+);
 
 // =============================================================================
 // Paper-level note + serializeForViewer fallback rect
