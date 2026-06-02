@@ -16,14 +16,35 @@ def --wrapped "safe extract" [
   }
 }
 
-# Wrapper for the `scholar` binary executable.
+# Resolve the M2 server invocation. The slim-plugin pivot (2026-06-01) dropped
+# the compiled `mcp-scholar` binary; scholar now runs as `bun dist/server.js`,
+# dispatched in CLI mode via `--call <tool> <json>` (see src/server/index.ts).
+# Resolution order:
+#   1. SCHOLAR_SERVER_CMD — space-separated override (test/operator escape hatch,
+#      mirrors SCHOLAR_PDF_ENTRYPOINT / SCHOLAR_BUN_PATH / SCHOLAR_VEC0_PATH).
+#   2. the provisioned bun (${CLAUDE_PLUGIN_DATA}/bun/bun) running
+#      ${CLAUDE_PLUGIN_ROOT}/dist/server.js, located relative to this module
+#      (nu/scholar.nu → plugin root); falls back to a PATH `bun` for dev.
+def server-cmd []: nothing -> list<string> {
+  if 'SCHOLAR_SERVER_CMD' in $env {
+    return ($env.SCHOLAR_SERVER_CMD | split row ' ' | where {|t| $t | is-not-empty })
+  }
+  let root = ($SELF | path dirname | path dirname)
+  let provisioned = ($env.CLAUDE_PLUGIN_DATA? | default '' | path join 'bun' 'bun')
+  let bun = if ($provisioned | path exists) { $provisioned } else { 'bun' }
+  [$bun ($root | path join 'dist' 'server.js')]
+}
+
+# Wrapper for the scholar MCP server (M2: `bun dist/server.js --call`).
 def main [
   tool?: string # The name of the tool to call on the server
   --json: oneof<record, string> # Parameters to pass through to the tool call
 ]: oneof<record, string, nothing> -> oneof<string, record, table, nothing> {
   if $tool == null { print --stderr 'tool name is required' | return }
   let args = $in | default $json | default {}
-  let output = mcp-scholar --call $tool $args
+  let payload = if ($args | describe) == 'string' { $args } else { $args | to json --raw }
+  let cmd = (server-cmd)
+  let output = run-external ($cmd | first) ...($cmd | skip 1) '--call' $tool $payload
     | complete
     | default 0 exit_code
     | default '{}' stdout stderr
