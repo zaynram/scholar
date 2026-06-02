@@ -21,8 +21,13 @@ Chores are cross-cutting work that doesn't belong to any single §6 cycle (licen
 
 ## Architecture (target system)
 
-- **scholar MCP server** — Bun + `bun:sqlite` + `drizzle-orm/bun-sqlite` + `sqlite-vec`, shipped as a `bun build --compile` single-file executable. Exposes corpus, ingestion, annotation, digest, prompts, search, and UI-resource tools. Spawns the vendored pdf MCP as a child.
-- **vendored pdf MCP** — `@modelcontextprotocol/server-pdf@1.7.2` shipped **unmodified** under `src/vendor/pdf-server/`. Root injection rides the standard MCP `roots/list` + `notifications/roots/list_changed` protocol; scholar implements the client-side responder in `src/server/pdf/lifecycle.ts`. No source patch.
+> **Slim-plugin pivot (2026-06-01):** packaging changed from a self-contained
+> `--compile` binary + bundled runtime to a slim ~2.9 MB plugin. See
+> `docs/superpowers/specs/2026-06-01-slim-plugin-pivot.md`. The bullets below
+> reflect the post-pivot model.
+
+- **scholar MCP server** — Bun + `bun:sqlite` + `drizzle-orm/bun-sqlite` + `sqlite-vec`, shipped as a `bun build --target=bun` bundle (`dist/server.js`, ~2.5 MB, **not** `--compile`). The `bun` runtime is **provisioned** into `${CLAUDE_PLUGIN_DATA}` by `bin/ensure-bun` at first launch (pinned to `scholar.bundledBunVersion` for the vec0 ABI), not shipped. A shell launcher (`bin/launch.{sh,cmd}`, manifest command `/bin/sh` | `cmd.exe`) provisions-then-runs the server (M2 — SessionStart does not block MCP spawn). Exposes corpus, ingestion, annotation, digest, prompts, search, and UI-resource tools. Spawns the pdf MCP as a child.
+- **pdf MCP** — `@modelcontextprotocol/server-pdf@1.7.2`. The vendored `src/vendor/pdf-server/` tree stays in-repo **unmodified** as the §16 `.d.ts` truth source and dev fallback. For packaging it is mechanically **rebundled standalone** (`bun build --target=bun` inlines pdfjs-dist) to `dist/pdf-server/index.js` + `mcp-app.html` — no source patch. `resolveChildEntrypoint` (`src/server/pdf/lifecycle.ts`) prefers `SCHOLAR_PDF_ENTRYPOINT` → shipped `dist/pdf-server/` → vendored dev fallback. Root injection rides the standard MCP `roots/list` + `notifications/roots/list_changed` protocol; scholar implements the client-side responder in `lifecycle.ts`.
 - **single-file UI bundle** — React, built by Bun's HTML bundler (`bun build src/ui/index.html --target=browser`, no vite). Five views: corpus dashboard, paper detail, digest panel, reading prompts, reader progress.
 - **nu CLI module** — `nu/scholar.nu`, user-facing wrapper that calls scholar MCP tools and shapes responses into nu tables.
 - **sqlite3-mcp delegation** — query/backup/pack surfaces are delegated; scholar calls `register_db` per corpus and does **not** reimplement those tools.

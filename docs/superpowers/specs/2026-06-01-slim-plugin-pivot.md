@@ -71,14 +71,51 @@ not the 6.7 MB vendored pdf — were the bloat.
   the bundle is a mechanical `bun build` of the unmodified vendor dist; the
   vendored tree stays in-repo as the §16 `.d.ts` truth source and dev fallback.
 
-## Open flags (require Windows-hardware validation — cannot verify from WSL)
+## Build system (validated 2026-06-01)
 
-- **koffi.node (win32-x64)** must be resolvable beside the provisioned/shipped
-  layout; the bundle bakes a dev `__dirname`. Linux never hits this path.
-- **vec0.dll** must be fetched for the target (`sqlite-vec-windows-x64`); only
-  `sqlite-vec-linux-x64` installs on the dev box.
-- **bun pin vs vec0 ABI**: pin is 1.3.11 (SQLite 3.51.2); dev runs 1.3.14. Build
-  gate: `loadExtension(vec0)` under the *pinned* bun must succeed.
-- **`@napi-rs/canvas`**: optional pdfjs native dep for raster page-rendering;
-  absent in the bundle (warns, degrades gracefully). Core flows (browser viewer,
-  text, annotations) do not need it.
+`scripts/build-plugin.ts` rewritten to the slim model; `SCHOLAR_BUILD_WIN`
+selects target. Both packages build on the Linux host:
+
+- **linux** `scholar.plugin` 2.8 MB / 15 files — unzipped and launched via the
+  generated manifest (`/bin/sh ${ROOT}/bin/launch.sh`) with a fresh
+  `CLAUDE_PLUGIN_DATA`: ensure-bun provisioned bun 1.3.11, MCP `initialize`
+  returned clean JSON-RPC on stdout. **Fully validated end-to-end.**
+- **win32** `scholar.plugin` 2.9 MB / 15 files — `vec0.dll` (PE32+ confirmed)
+  fetched from the `sqlite-vec-windows-x64` npm tarball at the version-parity
+  pin; Windows launcher set + `cmd.exe /c launch.cmd` manifest staged.
+  **Structure validated; launch path requires Windows hardware.**
+
+Launch is **M2** (see `bin/`): an always-present shell (`/bin/sh` | `cmd.exe`)
+runs `launch.{sh,cmd}`, which calls the idempotent `ensure-bun` provisioner then
+runs the server. A `SessionStart` hook pre-warms `ensure-bun` (latency only —
+the launcher is the correctness gate, because SessionStart does not block MCP
+spawn). On Linux the launcher `exec`s into bun (no orphaned wrapper).
+
+## Resolved (was open, now verified on Linux)
+
+- **bun pin vs vec0 ABI** — `loadExtension(vec0)` + a `vec0` virtual table
+  function under the *pinned* bun 1.3.11 (sqlite-vec 0.1.9). Linux build runs
+  the ABI probe as a hard gate.
+- **vec0.dll for the target** — obtained from the npm tarball (no mingw cross-
+  compile); 283 KB PE32+ x86-64 DLL.
+- **`@napi-rs/canvas`** — confirmed benign: scholar's pdf surface has no
+  rasterize/render-to-image call (grep clean); browser renders, `get_text` uses
+  the text layer.
+
+## Still open (require Windows-hardware validation — cannot verify from WSL)
+
+- **Windows launch orphan**: `cmd.exe /c launch.cmd` has no exec-replace, so
+  `bun.exe` runs as a child of cmd. If Claude Code does not tree-kill the MCP
+  process on shutdown, bun may orphan and hold `runtime/scholar.lock`. Verify
+  tree-kill; mitigate with a Job Object on the cmd side if observed.
+- **ensure-bun.ps1**: the PowerShell download/extract path is unexecuted on the
+  dev host. Validate `Invoke-WebRequest`/`Expand-Archive` + the lock-dir guard.
+- **koffi.node (win32-x64)**: the Job-Object reaper bundles a dev `__dirname`;
+  the native `koffi.node` must be resolvable on the target. Linux never hits it.
+- **UI bundling**: `build:ui` emits `ui/index.html` + a `chunk-*.js` (two files,
+  pre-existing behavior — not single-file as CLAUDE.md §14.1 implies). Both are
+  packaged; if the MCP UI resource requires a single inline file, the UI build
+  config (not the slim pivot) needs a follow-up.
+- **MCP connect timeout**: first launch blocks on the bun download (~tens of MB).
+  If Claude Code imposes a short MCP spawn/connect timeout, the SessionStart
+  pre-warm mitigates but does not guarantee; confirm the timeout is generous.
