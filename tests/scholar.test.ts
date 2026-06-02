@@ -73,30 +73,37 @@ test('scholar subcommands are all defined', async () =>
         )
     ))
 
-// Transport argv-shape test: injects a stub `scholar` binary on PATH, verifies
-// the nu `scholar` wrapper passes --call + tool name + JSON-serialized args.
-// Foundation-007 contract: ^scholar --call <tool> <json>.
-test('scholar transport calls ^scholar --call with JSON-serialized args', async () => {
-    await Bun.$`chmod +x bin/scholar.nu`.quiet()
+// Transport argv-shape test (M2): the slim pivot dropped the compiled
+// `mcp-scholar` binary, so the nu wrapper now invokes the server via the
+// SCHOLAR_SERVER_CMD seam. Foundation-007 contract is unchanged: the server
+// receives `--call <tool> <json>`. The stub RECORDS argv to a file the test
+// reads back — asserting inside the stub is ineffective because nu's `complete`
+// swallows the stub's exit code, so a bad invocation would not fail the test.
+test('scholar transport invokes the server with --call <tool> <json> (M2)', async () => {
     const stubDir = '/tmp/scholar-nu-transport'
     await Bun.$`mkdir -p ${stubDir}`.quiet()
-    const stubBin = `${stubDir}/mcp-scholar`
+    const stub = `${stubDir}/stub-server.ts`
+    const argvFile = `${stubDir}/argv.json`
     await Bun.write(
-        stubBin,
+        stub,
         [
-            `#!/usr/bin/env bun`,
-            `import { expect } from 'bun:test'`,
-            `const data = { flag: process.argv[2], tool: process.argv[3], args: process.argv[4], ok: true }`,
-            `expect(data.flag).toBe('--call')`,
-            `expect(data.tool).toBe('corpus.activate')`,
-            `expect(data.args).toMatch(JSON.stringify({slug: 'test'}))`,
-            'expect(data.ok).toBe(true)',
+            `import { writeFileSync } from 'node:fs'`,
+            `writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)))`,
         ].join('\n')
     )
-    await Bun.$`chmod +x ${stubBin}`.quiet()
-    await runScript({
-        pipe: { slug: 'test' },
-        args: ['corpus.activate'],
-        path: [stubDir],
-    }).finally(async () => await Bun.$`rm -rf ${stubDir}`.quiet().catch(() => {}))
+    try {
+        await runScript({
+            pipe: { slug: 'test' },
+            args: ['corpus.activate'],
+            vars: { SCHOLAR_SERVER_CMD: `bun ${stub}` },
+        })
+        const argv = JSON.parse(await Bun.file(argvFile).text())
+        expect(argv).toEqual([
+            '--call',
+            'corpus.activate',
+            JSON.stringify({ slug: 'test' }),
+        ])
+    } finally {
+        await Bun.$`rm -rf ${stubDir}`.quiet().catch(() => {})
+    }
 })

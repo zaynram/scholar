@@ -16,8 +16,7 @@
         "build:vec": "bun --silent scripts/build-vec0",
         "build": "bun --silent scripts/build-plugin",
         "build:linux": "SCHOLAR_BUILD_WIN=0 bun --silent run build",
-        "measure-bundle": "bun --silent scripts/measure-bundle",
-        "serve": "bun --silent scripts/start-server"
+        "measure-bundle": "bun --silent scripts/measure-bundle"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
