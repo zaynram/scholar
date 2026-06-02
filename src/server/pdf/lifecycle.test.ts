@@ -163,16 +163,34 @@ test.todo("FIXTURE 5 — Job Object reaps the orphan child on parent SIGKILL (wi
 // =========================================================================
 // FIXTURE 6: Supervised respawn (heavy — E2E only).
 // =========================================================================
-test.skipIf(!E2E)("FIXTURE 6 — supervised respawn: setRoots survives a child SIGKILL", async () => {
-  tmpRoot = makeTempPdfRoot();
-  handle = await spawnPdfChild({ initialRoots: [tmpRoot] });
-  const pidBefore = handle.childPid();
-  expect(pidBefore).toBeDefined();
-  process.kill(pidBefore!, "SIGKILL");
-  // Supervisor first-bucket is 1s; allow a 500ms slack window for SDK re-handshake.
-  await new Promise((r) => setTimeout(r, 1_500));
-  expect(handle.currentRoots()).toEqual([realpathSync(tmpRoot)]);
-  const h = handle.isHealthy();
-  expect(h.alive).toBe(true);
-  expect(handle.childPid()).not.toBe(pidBefore);
-});
+test.skipIf(!E2E)(
+  "FIXTURE 6 — supervised respawn: setRoots survives a child SIGKILL",
+  async () => {
+    tmpRoot = makeTempPdfRoot();
+    handle = await spawnPdfChild({ initialRoots: [tmpRoot] });
+    const pidBefore = handle.childPid();
+    expect(pidBefore).toBeDefined();
+    process.kill(pidBefore!, "SIGKILL");
+
+    // Respawn is asynchronous and has NO fixed duration: the supervisor waits
+    // BACKOFF_MS[0]=1s after onclose, then spawns a fresh child AND completes an
+    // MCP re-handshake before activePid flips (lifecycle.ts childPid → activePid).
+    // That total (1s backoff + spawn + handshake) intermittently exceeds a fixed
+    // sleep and varies with bun version / host load — a 1.5s sleep flaked 2-of-3
+    // under the CI-pinned bun 1.3.11. Poll for the new PID instead of guessing a
+    // duration; the explicit test timeout below (not bun's 5s default) bounds a
+    // genuine hang.
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const pid = handle.childPid();
+      if (pid !== undefined && pid !== pidBefore && handle.isHealthy().alive) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    expect(handle.currentRoots()).toEqual([realpathSync(tmpRoot)]);
+    const h = handle.isHealthy();
+    expect(h.alive).toBe(true);
+    expect(handle.childPid()).not.toBe(pidBefore);
+  },
+  20_000,
+);
