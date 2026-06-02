@@ -27,7 +27,7 @@ export interface SpawnOpts {
   initialRoots: string[];
   /** Override the child entrypoint path (test harness uses a stub). */
   childEntrypoint?: string;
-  /** Override the bun runtime path (default: process.execPath). */
+  /** Override the bun runtime path (default: SCHOLAR_BUN_PATH ?? process.execPath). */
   bunRuntime?: string;
   /** Disable supervised respawn (test harness, default false). */
   disableSupervisor?: boolean;
@@ -97,15 +97,30 @@ const CRASH_LOOP_TRIPS = 5;
 
 function resolveChildEntrypoint(override?: string): string {
   if (override) return override;
+  // Slim-plugin model: pdf-server is no longer vendored into the package. It is
+  // provisioned (pinned @1.7.2) into the persistent per-plugin data dir at
+  // install/first-run. Resolution order:
+  //   1. SCHOLAR_PDF_ENTRYPOINT  — explicit override the manifest wires in.
+  //   2. ${CLAUDE_PLUGIN_DATA}/pdf-server/dist/index.js — the provisioned copy.
+  //   3. <repo>/src/vendor/pdf-server/dist/index.js — dev/test fallback, still
+  //      present in-tree because §16 keeps the vendored .d.ts type surface and
+  //      the matching dist runs in the dev checkout where node_modules exists.
+  const fromEnv = process.env.SCHOLAR_PDF_ENTRYPOINT;
+  if (fromEnv) return fromEnv;
+  const dataDir = process.env.CLAUDE_PLUGIN_DATA;
+  if (dataDir) return join(dataDir, "pdf-server", "dist", "index.js");
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ?? resolve(import.meta.dir, "..", "..", "..");
   return join(pluginRoot, "src", "vendor", "pdf-server", "dist", "index.js");
 }
 
 function resolveBunRuntime(override?: string): string {
   if (override) return override;
-  // Bun is the runtime in dev AND packaged (build/runtime/bun{.exe}). The
-  // dispatcher gets process.execPath at runtime so this works in both layouts.
-  return process.execPath;
+  // Slim-plugin model: scholar itself is launched by the provisioned bun
+  // (manifest command = ${CLAUDE_PLUGIN_DATA}/bun{.exe}), so process.execPath is
+  // already that bun and serves as the default. SCHOLAR_BUN_PATH lets the
+  // manifest pin the child's runtime explicitly, decoupling it from however the
+  // parent happened to be launched (e.g. a wrapper, or a dev `bun run`).
+  return process.env.SCHOLAR_BUN_PATH ?? process.execPath;
 }
 
 export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
