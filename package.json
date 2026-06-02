@@ -6,7 +6,7 @@
     "engines": { "bun": ">=1.1.27" },
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "test": "bun test",
+        "test": "bun test src tests",
         "db:generate": "drizzle-kit generate",
         "build:server": "tsc --noEmit && bun build src/server/index.ts --target=bun --outfile=dist/server.js",
         "build:ui": "bun --silent scripts/build-ui",
