@@ -27,7 +27,12 @@ jobs:
         run: bun run build:vec
 
       - name: test
-        run: bun test --bail --only-failures
+        # Scoped to src+tests for deterministic discovery (matches the `test`
+        # package.json script). --bail stops at the first failure; --only-failures
+        # was a no-op here (no prior-run state in a fresh CI checkout) and is dropped.
+        # The SCHOLAR_PDF_E2E spawn fixtures stay OUT of this fast lane — see the
+        # `e2e` job — so a flaky child respawn can't bail the unit signal.
+        run: bun test src tests --bail
 
       - name: smoke
         run: |
@@ -42,3 +47,27 @@ jobs:
             db.run(r);
             console.log("CREATE VTAB vec0: ok");
           '
+
+  e2e:
+    # The pdf-child spawn fixtures gated behind SCHOLAR_PDF_E2E (display_pdf
+    # round-trip, list_changed, SIGKILL+respawn). Heavier and spawn-flakier than
+    # the unit lane, so they run here on their own signal — a flake reports
+    # against this job without bailing `test`. The vendored child is committed
+    # (src/vendor/pdf-server/dist/index.js) and `bun install` supplies the
+    # pdfjs-dist it dynamically imports, so no build step is needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11  # match scholar.bundledBunVersion
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: e2e
+        env:
+          SCHOLAR_PDF_E2E: "1"
+        run: bun test src/server/pdf
