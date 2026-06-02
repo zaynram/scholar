@@ -135,14 +135,21 @@ function stageBin(): void {
 }
 
 // ── Generate the per-OS plugin.json (M2 launch + pre-warm hook) ────────────────
-function generateManifest(): void {
-    const base = JSON.parse(readFileSync(util.subpath('.claude-plugin', 'plugin.json'), 'utf8'))
+// Pure construction (exported for build-plugin.test.ts): given the base dev
+// manifest, produce the per-OS M2 manifest. win=true → cmd.exe/launch.cmd +
+// PowerShell pre-warm; win=false → /bin/sh/launch.sh + sh pre-warm. The `bin`
+// field (compiled-binary leftover) is stripped. No I/O — generateManifest wraps
+// this with the read/write so the launch-model logic is unit-testable.
+export function buildManifest(
+    base: Record<string, unknown>,
+    win: boolean,
+): Record<string, unknown> {
     const ROOT = '${CLAUDE_PLUGIN_ROOT}'
-    const runtimeRoot = WIN
+    const runtimeRoot = win
         ? '${USERPROFILE}\\mcp-data\\scholar\\runtime'
         : '${HOME}/mcp-data/scholar/runtime'
-    const command = WIN ? 'cmd.exe' : '/bin/sh'
-    const args = WIN ? ['/c', `${ROOT}\\bin\\launch.cmd`] : [`${ROOT}/bin/launch.sh`]
+    const command = win ? 'cmd.exe' : '/bin/sh'
+    const args = win ? ['/c', `${ROOT}\\bin\\launch.cmd`] : [`${ROOT}/bin/launch.sh`]
 
     const manifest = {
         ...base,
@@ -167,7 +174,7 @@ function generateManifest(): void {
                     hooks: [
                         {
                             type: 'command',
-                            command: WIN
+                            command: win
                                 ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${ROOT}\\bin\\ensure-bun.ps1"`
                                 : `sh "${ROOT}/bin/ensure-bun.sh"`,
                         },
@@ -177,6 +184,12 @@ function generateManifest(): void {
         },
     }
     delete (manifest as { bin?: unknown }).bin
+    return manifest
+}
+
+function generateManifest(): void {
+    const base = JSON.parse(readFileSync(util.subpath('.claude-plugin', 'plugin.json'), 'utf8'))
+    const manifest = buildManifest(base, WIN)
     mkdirSync(join(DIR, '.claude-plugin'), { recursive: true })
     Bun.write(join(DIR, '.claude-plugin', 'plugin.json'), JSON.stringify(manifest, null, 2))
 }

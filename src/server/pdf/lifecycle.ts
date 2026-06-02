@@ -95,7 +95,7 @@ const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 30_000] as const;
 const CRASH_LOOP_THRESHOLD_MS = 1_000;
 const CRASH_LOOP_TRIPS = 5;
 
-function resolveChildEntrypoint(override?: string): string {
+export function resolveChildEntrypoint(override?: string): string {
   if (override) return override;
   // Slim-plugin model: pdf-server@1.7.2 ships as a single rebundled standalone
   // file (pdfjs-dist + all deps inlined by `bun build --target=bun`; verified to
@@ -116,7 +116,7 @@ function resolveChildEntrypoint(override?: string): string {
   return join(pluginRoot, "src", "vendor", "pdf-server", "dist", "index.js");
 }
 
-function resolveBunRuntime(override?: string): string {
+export function resolveBunRuntime(override?: string): string {
   if (override) return override;
   // Slim-plugin model: scholar itself is launched by the provisioned bun
   // (manifest command = ${CLAUDE_PLUGIN_DATA}/bun{.exe}), so process.execPath is
