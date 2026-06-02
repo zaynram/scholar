@@ -11,6 +11,9 @@
 // never-resolving promise) while a short timeout via env-var override keeps
 // CI runtime short. Per advisor: 200–500ms keeps the abort firmly in the
 // fetch-wait window, out of the body-read race.
+//
+// chore cover-ollama-client-and-index-dispatch-unit-gaps (2026-06-02):
+// Added chat success/fallback, listModels, and healthCheck coverage.
 import { test, expect, afterEach } from "bun:test";
 import {
   ollama,
@@ -93,4 +96,131 @@ test("chat throws OllamaUnavailableError when the request exceeds the chat timeo
   ).rejects.toBeInstanceOf(OllamaUnavailableError);
   const elapsed = Date.now() - start;
   expect(elapsed, `expected timeout near 250ms, got ${elapsed}ms`).toBeLessThan(5_000);
+});
+
+// ─── chore cover-ollama-client-and-index-dispatch-unit-gaps ─────────────────
+// chat(), listModels(), and healthCheck() success/failure branches.
+// All use Bun.serve fixture servers (same pattern as the timeout tests above)
+// rather than global-fetch monkey-patching, which matches the file's existing
+// style and avoids any potential cross-test contamination.
+
+// --- helpers ---
+
+/** Start a fixture server that returns a canned JSON body with the given HTTP status. */
+function startJsonServer(body: unknown, status = 200): string {
+  const srv = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  jsonServers.push(srv);
+  return `http://127.0.0.1:${srv.port}`;
+}
+
+const jsonServers: ReturnType<typeof Bun.serve>[] = [];
+
+afterEach(() => {
+  for (const srv of jsonServers.splice(0)) srv.stop(true);
+});
+
+// ─── embed() success (complement to the timeout test above) ──────────────────
+
+test("embed() returns a Float32Array on success (embedding field)", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ embedding: [1, 2, 3] });
+  const result = await ollama.embed("nomic-embed-text:v1.5", "hello");
+  expect(result).toBeInstanceOf(Float32Array);
+  expect(result.length).toBe(3);
+  expect(result[0]).toBe(1);
+});
+
+test("embed() returns a Float32Array on success (embeddings[] field fallback)", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ embeddings: [[4, 5, 6]] });
+  const result = await ollama.embed("nomic-embed-text:v1.5", "hello");
+  expect(result).toBeInstanceOf(Float32Array);
+  expect(result.length).toBe(3);
+  expect(result[0]).toBe(4);
+});
+
+// ─── chat() ──────────────────────────────────────────────────────────────────
+
+test("chat() resolves the message.content string on success", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({
+    message: { content: "hello from ollama" },
+  });
+  const result = await ollama.chat("test-model", [{ role: "user", content: "hi" }]);
+  expect(result).toBe("hello from ollama");
+});
+
+test("chat() falls back to response field when message is absent", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ response: "fallback text" });
+  const result = await ollama.chat("test-model", [{ role: "user", content: "hi" }]);
+  expect(result).toBe("fallback text");
+});
+
+test("chat() throws when both message.content and response are empty/absent", async () => {
+  // Both fields absent → "" content → throw (lines 139–141)
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({});
+  await expect(
+    ollama.chat("test-model", [{ role: "user", content: "hi" }]),
+  ).rejects.toThrow();
+});
+
+// ─── listModels() ─────────────────────────────────────────────────────────────
+
+test("listModels() returns the models array on success", async () => {
+  const models = [{ name: "llama3", size: 1234, modified_at: "2025-01-01T00:00:00Z" }];
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ models });
+  const result = await ollama.listModels();
+  expect(result).toEqual(models);
+});
+
+test("listModels() returns [] when the models key is absent", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({});
+  const result = await ollama.listModels();
+  expect(result).toEqual([]);
+});
+
+test("listModels() rejects OllamaUnavailableError when fetch throws (unreachable host)", async () => {
+  // Point at a guaranteed-dead port by starting then immediately stopping a server.
+  const dead = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+  const deadUrl = `http://127.0.0.1:${dead.port}`;
+  dead.stop(true);
+  process.env.SCHOLAR_OLLAMA_URL = deadUrl;
+  await expect(ollama.listModels()).rejects.toBeInstanceOf(OllamaUnavailableError);
+});
+
+test("listModels() rejects OllamaUnavailableError when res.ok is false", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ error: "not found" }, 503);
+  await expect(ollama.listModels()).rejects.toBeInstanceOf(OllamaUnavailableError);
+});
+
+// ─── healthCheck() ────────────────────────────────────────────────────────────
+
+test("healthCheck() returns ok:true when the server responds with 200", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ models: [] });
+  const result = await ollama.healthCheck();
+  expect(result.ok).toBe(true);
+  expect(typeof result.url).toBe("string");
+});
+
+test("healthCheck() returns ok:false with HTTP error string when res.ok is false", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({ error: "gone" }, 503);
+  const result = await ollama.healthCheck();
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("HTTP 503");
+});
+
+test("healthCheck() returns ok:false with error message when fetch throws", async () => {
+  const dead = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+  const deadUrl = `http://127.0.0.1:${dead.port}`;
+  dead.stop(true);
+  process.env.SCHOLAR_OLLAMA_URL = deadUrl;
+  const result = await ollama.healthCheck();
+  expect(result.ok).toBe(false);
+  expect(typeof result.error).toBe("string");
+  expect(result.error!.length).toBeGreaterThan(0);
 });
