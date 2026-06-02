@@ -58,6 +58,18 @@ not the 6.7 MB vendored pdf — were the bloat.
    `interact({navigate})` + `add/remove_annotations` round-tripped.
 3. Baseline preserved through the seam edits: `bunx tsc --noEmit` clean;
    `bun test` **285 pass / 8 skip / 0 fail**.
+4. **Production resolution paths exercised from the assembled package under the
+   pinned bun 1.3.11** (not the dev override / not a standalone probe):
+   - `resolveChildEntrypoint`'s `existsSync(${CLAUDE_PLUGIN_ROOT}/dist/pdf-server/index.js)`
+     branch — run with `CLAUDE_PLUGIN_ROOT` pointed at the installed package and
+     **no** `SCHOLAR_PDF_ENTRYPOINT` override — spawned the pdf child under the
+     provisioned bun (`process.execPath`). `lifecycle.contract.test.ts`: **2 pass**,
+     `[pdf-server] Ready` confirmed on stderr, `display_pdf` parsed.
+   - scholar's own `resolveVec0Path()` resolved the packaged
+     `${CLAUDE_PLUGIN_ROOT}/build/vendor/sqlite-vec/vec0.so` branch; `loadExtension`
+     + a `vec0` virtual table + a KNN `MATCH` all succeeded under bun 1.3.11
+     (`vec_version v0.1.9`). The ABI pin-gate now passes through scholar's
+     production resolver, not the build-time probe alone.
 
 ## Deviations from prior locked decisions (for user review)
 
@@ -106,12 +118,33 @@ spawn). On Linux the launcher `exec`s into bun (no orphaned wrapper).
 
 - **Windows launch orphan**: `cmd.exe /c launch.cmd` has no exec-replace, so
   `bun.exe` runs as a child of cmd. If Claude Code does not tree-kill the MCP
-  process on shutdown, bun may orphan and hold `runtime/scholar.lock`. Verify
-  tree-kill; mitigate with a Job Object on the cmd side if observed.
+  process on shutdown, bun may orphan. Verify tree-kill; mitigate with a Job
+  Object on the cmd side if observed. **Note:** the chained "orphan holds
+  `runtime/scholar.lock` → next session `SCHOLAR_LOCKED`" DoS is **moot today** —
+  the single-active-session flock is a frozen v1 *spec* invariant (CLAUDE.md) but
+  is **not yet implemented** (`grep` of `src/server/index.ts` finds no lock
+  acquisition). When that flock is wired, harden it against a stale holder
+  (liveness/staleness check) so a dead-but-lock-holding PID cannot wedge startup.
 - **ensure-bun.ps1**: the PowerShell download/extract path is unexecuted on the
   dev host. Validate `Invoke-WebRequest`/`Expand-Archive` + the lock-dir guard.
-- **koffi.node (win32-x64)**: the Job-Object reaper bundles a dev `__dirname`;
-  the native `koffi.node` must be resolvable on the target. Linux never hits it.
+- **koffi.node (win32-x64) — KNOWN REGRESSION (decided: accept + document).**
+  `attachJobObject` does a runtime `require("koffi")` inside `server.js`. `bun
+  build --target=bun` keeps native modules external, and the slim package ships
+  **no `node_modules`**, so on Windows that `require` throws and is swallowed by
+  the existing `try/catch` (lifecycle.ts:365) — Job-Object reaping of the **pdf
+  child** is OFF by default. The `--compile` binary embedded koffi and had it; the
+  slim bundle does not. This is accepted for the slim pivot because: (a) the reaper
+  is best-effort, already `try/catch` graceful-degrade by explicit design
+  (lifecycle.ts:372, "Foundation accepts the limitation"); (b) its only effect is
+  pdf-child orphaning *if* Claude Code also fails to tree-kill (the open flag
+  above) — the two must both fail to bite; (c) the lock-DoS escalation is moot
+  (flock unimplemented). **Remediation if pdf-child orphaning is observed on
+  Windows hardware:** fetch `@koromix/koffi-win32-x64`'s `.node` from npm (the
+  `os:win32` native is not installed on the Linux build host) and lay it out so
+  koffi's loader resolves it (e.g. `KOFFI_DIR` / a co-located
+  `node_modules/koffi`), *or* tree-kill the pdf child from the cmd-side launcher.
+  Not done blind here — koffi's native-binding resolution cannot be validated off
+  the target.
 - **UI bundling**: `build:ui` emits `ui/index.html` + a `chunk-*.js` (two files,
   pre-existing behavior — not single-file as CLAUDE.md §14.1 implies). Both are
   packaged; if the MCP UI resource requires a single inline file, the UI build
