@@ -605,10 +605,11 @@ Acceptance: `bun run build:ui` succeeds and produces `build/ui/app.html`; `bun r
     with the dispatcher owning the status flip per invariant 5.
   -->
   <chore id="cover-ollama-client-and-index-dispatch-unit-gaps"
-         status="open"
+         status="closed"
+         fulfillment="75abeaf"
          blast-radius="src/server/ollama/client.test.ts src/server/index.test.ts"
          blocks-plans="">
-    <synopsis>Close the two low-priority unit-coverage gaps flagged by the 2026-06-02 test audit. TEST-ONLY chore: extend the two existing *.test.ts files; do NOT modify source. If a path is genuinely untestable without a source seam (e.g. a fetch-injection point), STOP and raise it via scope-maintenance rather than widening the blast-radius.
+    <synopsis>Closed at 75abeaf (+29 tests, suite 324 pass/0 fail, tsc clean): client.ts lines 69.7-&gt;100% (listModels/healthCheck/chat covered); index.ts lines 77.7-&gt;85.64% (CLI dispatch covered). Two reported non-gaps left intentionally uncovered: client.ts func-counter reads 93.33% as a Bun v1.3.14 artifact despite 100% line coverage; index.ts runServer()/import.meta.main bind stdio and would deadlock a unit test (no source seam warranted). ORIGINAL SCOPE: close the two low-priority unit-coverage gaps flagged by the 2026-06-02 test audit. TEST-ONLY chore: extend the two existing *.test.ts files; do NOT modify source. If a path is genuinely untestable without a source seam (e.g. a fetch-injection point), STOP and raise it via scope-maintenance rather than widening the blast-radius.
 
 TARGET 1 — src/server/ollama/client.ts (76.9% funcs / 69.7% lines; uncovered lines 142-178). OllamaClientImpl calls the GLOBAL fetch (no constructor / no injection seam), so mock the global fetch the same way the existing timeout tests in client.test.ts already do. Add cases:
   (a) chat() success return (line 142): mock fetch to a 200 with {message:{content:'hi'}}; assert chat() resolves 'hi'. Also cover the response-fallback (line 138): mock returns {response:'x'} with no message field; assert resolves 'x'. (chat() empty-content throw and the timeout path are already covered — do not duplicate.)
