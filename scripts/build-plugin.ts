@@ -1,304 +1,267 @@
 // scripts/build-plugin.ts
 //
-// Build orchestrator for scholar.plugin — §14.1 seven-step build pipeline.
-// Run: bun scripts/build-plugin.ts
-// Fixture mode: BUILD_FIXTURE=1 bun scripts/build-plugin.ts
-//   Skips compilation steps (1, 2, 3, 4, 6); validates pre-assembly
-//   invariants (version match, vec0 presence) then runs assembly + zip.
-//   SCHOLAR_BUILD_ROOT overrides the repo root (for tests).
-//   SCHOLAR_PLUGIN_OUT overrides the output directory (for tests).
+// Slim-plugin build orchestrator. See docs/superpowers/specs/2026-06-01-slim-
+// plugin-pivot.md. Produces a per-OS scholar.plugin archive that ships only:
+//   - dist/server.js                  scholar server, `bun build --target=bun` (no --compile)
+//   - dist/pdf-server/{index.js,mcp-app.html}   pdf-server@1.7.2 rebundled standalone
+//   - build/vendor/sqlite-vec/vec0.<ext>        platform vec0 (so | dll)
+//   - ui/index.html                   single-file UI bundle
+//   - nu/scholar.nu                   nu CLI module
+//   - bin/<launcher set>              M2 launcher + ensure-bun provisioner
+//   - .claude-plugin/plugin.json      GENERATED per-OS (M2 command/args + hooks)
+//   - skills/**
+// The bun runtime is NOT shipped — it is provisioned into ${CLAUDE_PLUGIN_DATA}
+// by ensure-bun at first launch. No compiled binary, no bundled runtime.
+//
+// Run:        bun scripts/build-plugin.ts            (Windows target, default)
+// Linux pkg:  SCHOLAR_BUILD_WIN=0 bun scripts/build-plugin.ts
 
-import { compileVec0FromSource, probeVec0Abi } from './build-vec0'
-import util, { OUTPUT, FIXTURE } from './util'
-import env from './util/env'
-import { getVec0Extension } from '^src/server/db/sqlite-vec'
+import util, { OUTPUT } from './util'
 import { zipSync } from 'fflate'
 import {
     existsSync,
-    copyFileSync,
-    cpSync,
     mkdirSync,
     readFileSync,
     readdirSync,
+    copyFileSync,
+    rmSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
-if (process.env.SCHOLAR_BUILD_WIN !== '0')
-    process.env = {
-        ...process.env,
-        SCHOLAR_BUILD_EXT: '.exe',
-        SCHOLAR_BUILD_DIR: 'win32',
-        SCHOLAR_VEC0_EXT: 'dll',
-        UI_OUTDIR: util.subpath('build', 'win32', 'ui'),
-    }
+const WIN = process.env.SCHOLAR_BUILD_WIN !== '0'
+const NAME = WIN ? 'win32' : 'linux'
+const VEC0_EXT = WIN ? 'dll' : 'so'
+const DIR = util.subpath('build', NAME) // staging tree — an exact mirror of the package
 
-const VEC0 = `vec0.${process.env.SCHOLAR_VEC0_EXT ?? getVec0Extension()}`
-const EXT = process.env.SCHOLAR_BUILD_EXT ?? env.dynamic({ win32: '.exe', default: '' })
-const NAME = process.env.SCHOLAR_BUILD_DIR ?? process.platform
-const DIR = util.subpath('build', NAME)
-await util.sh`mkdir -p ${DIR}`.nothrow().quiet()
-
-// ── Pre-flight: version invariant (steps 4 ↔ 5) ─────────────────────────────
-// Reads scholar.bundledBunVersion and scholar.bunSqliteVersion from package.json
-// and aborts with SCHOLAR_BUILD_MISMATCH if either is missing or empty.
-//
-// These two fields record DIFFERENT facts about the same Bun release:
-//   - bundledBunVersion: the Bun runtime version (value of `bun --version` at build time)
-//   - bunSqliteVersion:  the SQLite library version Bun's bun:sqlite statically links against
-// Their string values are expected to differ (e.g. "1.3.11" vs "3.51.2").
-// The invariant is that BOTH are populated and non-empty — not that they are equal.
-// Both fields must be set from the same Bun release by foundation cycle 6.1.
-
+// ── Version invariant ─────────────────────────────────────────────────────────
+// bundledBunVersion (the bun release ensure-bun provisions) and bunSqliteVersion
+// (the SQLite the vec0 ABI targets) must both be populated. Different facts about
+// the same release; both load-bearing for the pinned-runtime / vec0 ABI contract.
+function readPkg(): {
+    scholar?: { bundledBunVersion?: string; bunSqliteVersion?: string }
+} {
+    return JSON.parse(readFileSync(util.subpath('package.json'), 'utf8'))
+}
 function assertVersionInvariant(): void {
-    const pkgRaw = readFileSync(util.subpath('package.json'), 'utf8')
-    const pkg = JSON.parse(pkgRaw) as {
-        scholar?: { bundledBunVersion?: string; bunSqliteVersion?: string }
-    }
-    const bv = pkg.scholar?.bundledBunVersion
-    const sv = pkg.scholar?.bunSqliteVersion
-    if (!bv || !bv.trim() || !sv || !sv.trim()) {
+    const s = readPkg().scholar ?? {}
+    if (!s.bundledBunVersion?.trim() || !s.bunSqliteVersion?.trim())
         util.abort(
             'SCHOLAR_BUILD_MISMATCH',
-            'package.json is missing scholar.bundledBunVersion or scholar.bunSqliteVersion ' +
-                '(both record different facts about the same Bun release; both must be populated). ' +
-                `Got bundledBunVersion=${JSON.stringify(bv)}, bunSqliteVersion=${JSON.stringify(sv)}.`
+            'package.json missing scholar.bundledBunVersion or scholar.bunSqliteVersion ' +
+                `(got ${JSON.stringify(s)}).`
         )
-    }
-    // No string-equality check: bundledBunVersion (Bun runtime version) and
-    // bunSqliteVersion (SQLite library version) record different facts about
-    // the same Bun release and are expected to differ.
 }
 
-// ── Step 1: Build server binary ───────────────────────────────────────────────
-// bun run build:server → tsc typecheck + bun build --compile src/server/index.ts
-// Also writes extension-less build/scholar sibling (resolved: copy, not shim).
-//
-// Exported and parameterised so the sibling-copy branch can be unit-tested in
-// isolation. fixture=true skips the shell-out but still performs the copy.
-
-export async function step1_buildServer(fixture: boolean = FIXTURE): Promise<void> {
-    // Explicit `fixture` parameter (default: env-derived FIXTURE) lets the
-    // sibling-copy branch be unit-tested without spawning the real build:server.
-    // Don't use the util.onfixture combinator here — sync-defaults-around-async
-    // is the same footgun that produced the prior step5 incident.
-    if (!fixture) await util.sh`bun run build:server`
-    await util.sh`cp bin/mcp-scholar.exe bin/mcp-scholar`
-    await util.sh`mkdir -p ${join(DIR, 'bin')}`.nothrow().quiet()
-    await util.sh`cp bin/mcp-scholar${EXT} ${join(DIR, 'bin', `mcp-scholar${EXT}`)}`
+// ── Bundle scholar server (platform-neutral) ──────────────────────────────────
+async function buildServer(): Promise<void> {
+    await util.sh`tsc --noEmit`
+    await util.sh`bun build src/server/index.ts --target=bun --outfile ${join(DIR, 'dist', 'server.js')}`
 }
 
-// ── Step 2: Build UI bundle ───────────────────────────────────────────────────
-// bun build src/ui/index.html --target=browser --outfile build/ui/app.html
-// Target ≤ 4.5 MB (bundle-budget gate resolved upstream by frontends cycle 6.9).
-
-async function step2_buildUI(): Promise<void> {
-    await util.onfixture(util.noop, {
-        async default() {
-            await util.sh`mkdir -p ${join(DIR, 'ui')}`.nothrow().quiet()
-            await util.sh`bun run build:ui`.env(process.env)
-        },
-    })
-}
-
-// ── Step 3: Copy vendored pdf dist ────────────────────────────────────────────
-// Copies src/vendor/pdf-server/ → build/vendor/pdf-server/.
-// No transpilation, no patch step (vendor is unmodified per §7.2).
-
-async function step3_copyPdf(): Promise<void> {
-    await util.onfixture(util.noop, {
-        default() {
-            cpSync(
-                util.subpath('src', 'vendor', 'pdf-server'),
-                join(DIR, 'vendor', 'pdf-server'),
-                { recursive: true }
-            )
-        },
-    })
-}
-
-// ── Step 4: Copy Bun runtime ──────────────────────────────────────────────────
-// Copies bun(.exe) from the build host's Bun install to build/runtime/.
-// The bundled runtime is the pdf-child spawn target.
-
-async function step4_copyRuntime(): Promise<void> {
-    await util.onfixture(util.noop, {
-        default() {
-            const name = `bun${EXT}`
-            const path = Bun.which(name)
-            if (!path)
-                return util.abort(
-                    'SCHOLAR_BUILD_RUNTIME_MISSING',
-                    'Cannot locate bun binary on PATH. Ensure bun is installed on the build host.'
-                )
-            const [firstLine = ''] = path.split('\n')
-            const bunSrc = firstLine.trim()
-            const destDir = join(DIR, 'runtime')
-            mkdirSync(destDir, { recursive: true })
-            copyFileSync(bunSrc, join(destDir, name))
-        },
-    })
-}
-
-// ── Step 5: vec0 shared library — ABI probe then compile fallback ─────────────
-// Production: probeVec0Abi on the prebuilt; if ABI matches, copy it; otherwise
-//   (or if absent) fall back to compileVec0FromSource (§14.1 step 5 / §16).
-// Fixture (no FORCE_COMPILE): skip ABI probe (stubs aren't real extensions);
-//   copy stub prebuilt directly. Abort if stub is absent.
-// Fixture + FORCE_COMPILE: skip prebuilt; exercise compile path with a stub CC.
-
-async function step5_copyVec(): Promise<void> {
-    const libName = VEC0
-    const prebuilt = util.subpath(`runtime/vendor/sqlite-vec/${libName}`)
-    const destDir = join(DIR, 'vendor', 'sqlite-vec')
-    mkdirSync(destDir, { recursive: true })
-    const destPath = join(destDir, libName)
-
-    await util.onfixture(
-        () =>
-            util.oncompile(() => compileVec0FromSource(destPath), {
-                default() {
-                    if (!existsSync(prebuilt))
-                        // Fixture: skip ABI probe; just assert prebuilt stub is staged and copy it.
-                        util.abort(
-                            'SCHOLAR_BUILD_VEC_MISSING',
-                            `Prebuilt ${libName} not found at ${prebuilt} [fixture mode]. ` +
-                                'Ensure FIXTURE_FILES stages both vec0.dll and vec0.so.'
-                        )
-                    else copyFileSync(prebuilt, destPath)
-                },
-            }),
-        {
-            async default() {
-                await util.oncompile(() => compileVec0FromSource(destPath), {
-                    async default() {
-                        if (existsSync(prebuilt) && probeVec0Abi(prebuilt)) {
-                            copyFileSync(prebuilt, destPath)
-                            return
-                        }
-                        const reason = existsSync(prebuilt)
-                            ? "prebuilt ABI probe failed (SQLite version mismatch between vec0 and Bun's bundled engine)"
-                            : `prebuilt ${libName} not found`
-                        console.warn(
-                            `vec0 ${reason} — falling back to source compilation`
-                        )
-                        await compileVec0FromSource(destPath)
-                    },
-                })
-            },
-        }
+// ── Rebundle pdf-server standalone (pdfjs inlined) + its mcp-app.html ──────────
+async function buildPdf(): Promise<void> {
+    const out = join(DIR, 'dist', 'pdf-server', 'index.js')
+    await util.sh`bun build src/vendor/pdf-server/dist/index.js --target=bun --outfile ${out}`
+    copyFileSync(
+        util.subpath('src', 'vendor', 'pdf-server', 'dist', 'mcp-app.html'),
+        join(DIR, 'dist', 'pdf-server', 'mcp-app.html')
     )
 }
 
-// ── Step 6: Copy nu module ────────────────────────────────────────────────────
-
-async function step6_copyBin(): Promise<void> {
-    await util.onfixture(util.noop, {
-        async default() {
-            await util.sh`cp bin/scholar.nu ${join(DIR, 'bin', 'scholar.nu')}`
-            await util.sh`cp bin/mcp-scholar${EXT} ${join(DIR, 'bin', `mcp-scholar${EXT}`)}`
-        },
-    })
+// ── UI single-file bundle ─────────────────────────────────────────────────────
+async function buildUI(): Promise<void> {
+    process.env.UI_OUTDIR = join(DIR, 'ui')
+    mkdirSync(process.env.UI_OUTDIR, { recursive: true })
+    await util.sh`bun run build:ui`.env(process.env)
 }
 
-// ── Step 7: Assemble plugin tree + zip ────────────────────────────────────────
-// Assembles the complete file map then produces scholar.plugin via fflate.
-// Uses fflate (Ruling #2, 2026-05-24) — imported at top of file.
+// ── vec0 shared library (per-OS) ──────────────────────────────────────────────
+// Linux dev: copy the prebuilt from the installed sqlite-vec-linux-x64 package.
+// Windows target: fetch the prebuilt vec0.dll from the sqlite-vec-windows-x64 npm
+//   tarball at the SAME version (no mingw cross-compile). The dll cannot be
+//   ABI-probed on Linux — the pinned-bun load gate runs on the target.
+async function stageVec0(): Promise<void> {
+    const dest = join(DIR, 'build', 'vendor', 'sqlite-vec', `vec0.${VEC0_EXT}`)
+    mkdirSync(join(DIR, 'build', 'vendor', 'sqlite-vec'), { recursive: true })
+    const ver = JSON.parse(
+        readFileSync(util.subpath('node_modules', 'sqlite-vec-linux-x64', 'package.json'), 'utf8')
+    ).version as string
 
-async function step7_assemblePlugin(): Promise<void> {
-    // Files to include in the archive: [src-abs-path, archive-relative-path]
-    const manifest: [string, string][] = [
-        '.claude-plugin/plugin.json',
-        `build/${NAME}/bin/mcp-scholar${EXT}`,
-        `build/${NAME}/bin/scholar.nu`,
-        `build/${NAME}/ui/index.html`,
-        `build/${NAME}/runtime/bun${EXT}`,
-        `build/${NAME}/vendor/sqlite-vec/${VEC0}`,
-    ].map(p => [util.subpath(p), p] as const)
-
-    // Recursively collect all files from a directory into the manifest.
-    // Used for pdf dist, slash commands, and skills — so frontends can add
-    // a file without requiring a packaging revision.
-    function collect(archBase: string): void {
-        const srcBase = util.subpath(archBase)
-        if (!existsSync(srcBase)) return // gracefully skip absent optional dirs
-        for (const entry of readdirSync(srcBase, { withFileTypes: true })) {
-            const srcPath = join(srcBase, entry.name)
-            const archPath = archBase + '/' + entry.name
-            if (entry.isDirectory()) collect(archPath)
-            else manifest.push([srcPath, archPath])
-        }
+    if (!WIN) {
+        const src = util.subpath('node_modules', 'sqlite-vec-linux-x64', 'vec0.so')
+        if (!existsSync(src))
+            util.abort('SCHOLAR_BUILD_VEC_MISSING', `linux vec0 prebuilt absent: ${src}`)
+        copyFileSync(src, dest)
+        // ABI probe is cheap on the dev host — fail fast on a bad pin.
+        const { probeVec0Abi } = await import('./build-vec0')
+        if (!probeVec0Abi(dest))
+            util.abort(
+                'SCHOLAR_BUILD_VEC_ABI',
+                `vec0.so failed ABI probe under bun ${Bun.version} (SQLite mismatch).`
+            )
+        return
     }
 
-    collect(join(DIR, 'vendor', 'pdf-server'))
-    collect('skills')
+    const cache = util.subpath('build', '.cache', `sqlite-vec-windows-x64-${ver}`)
+    const dll = join(cache, 'package', 'vec0.dll')
+    if (!existsSync(dll)) {
+        mkdirSync(cache, { recursive: true })
+        const url = `https://registry.npmjs.org/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-${ver}.tgz`
+        const res = await fetch(url)
+        if (!res.ok)
+            util.abort('SCHOLAR_BUILD_VEC_FETCH', `fetch ${url} -> HTTP ${res.status}`)
+        const tgz = join(cache, 'pkg.tgz')
+        await Bun.write(tgz, await res.arrayBuffer())
+        await util.sh`tar xzf ${tgz} -C ${cache}`
+    }
+    if (!existsSync(dll))
+        util.abort('SCHOLAR_BUILD_VEC_MISSING', `windows vec0.dll not extracted at ${dll}`)
+    copyFileSync(dll, dest)
+}
 
-    // Validate every source file exists before attempting zip.
-    const missing = manifest.map(([src]) => src).filter(src => !existsSync(src))
-    if (missing.length > 0)
-        return util.abort(
-            'SCHOLAR_BUILD_MISSING_ARTIFACT',
-            `Expected artifact(s) not found: ${missing.join(', ')}. ` +
-                'Ensure all upstream plans have completed their cycles.'
-        )
+// ── nu module + per-OS launcher set ───────────────────────────────────────────
+function stageBin(): void {
+    mkdirSync(join(DIR, 'bin'), { recursive: true })
+    mkdirSync(join(DIR, 'nu'), { recursive: true })
+    const nu = existsSync(util.subpath('nu', 'scholar.nu'))
+        ? util.subpath('nu', 'scholar.nu')
+        : util.subpath('bin', 'scholar.nu')
+    copyFileSync(nu, join(DIR, 'nu', 'scholar.nu'))
+    const launchers = WIN
+        ? ['launch.cmd', 'ensure-bun.ps1']
+        : ['launch.sh', 'ensure-bun.sh']
+    for (const f of launchers)
+        copyFileSync(util.subpath('bin', f), join(DIR, 'bin', f))
+}
 
-    // Build fflate-compatible file map.
+// ── Generate the per-OS plugin.json (M2 launch + pre-warm hook) ────────────────
+function generateManifest(): void {
+    const base = JSON.parse(readFileSync(util.subpath('.claude-plugin', 'plugin.json'), 'utf8'))
+    const ROOT = '${CLAUDE_PLUGIN_ROOT}'
+    const runtimeRoot = WIN
+        ? '${USERPROFILE}\\mcp-data\\scholar\\runtime'
+        : '${HOME}/mcp-data/scholar/runtime'
+    const command = WIN ? 'cmd.exe' : '/bin/sh'
+    const args = WIN ? ['/c', `${ROOT}\\bin\\launch.cmd`] : [`${ROOT}/bin/launch.sh`]
+
+    const manifest = {
+        ...base,
+        mcpServers: {
+            scholar: {
+                command,
+                args,
+                env: {
+                    SCHOLAR_RUNTIME_ROOT: runtimeRoot,
+                    SCHOLAR_OLLAMA_URL: 'http://127.0.0.1:11434',
+                    SCHOLAR_OLLAMA_EMBED_MODEL: 'nomic-embed-text:v1.5',
+                    SCHOLAR_OLLAMA_CHAT_MODEL: 'qwen3:8b',
+                },
+            },
+        },
+        // Pre-warm: start provisioning early. SessionStart does NOT block MCP
+        // spawn, so this is a latency optimization only — launch.{sh,cmd} is the
+        // correctness gate. ensure-bun is idempotent + lock-guarded.
+        hooks: {
+            SessionStart: [
+                {
+                    hooks: [
+                        {
+                            type: 'command',
+                            command: WIN
+                                ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${ROOT}\\bin\\ensure-bun.ps1"`
+                                : `sh "${ROOT}/bin/ensure-bun.sh"`,
+                        },
+                    ],
+                },
+            ],
+        },
+    }
+    delete (manifest as { bin?: unknown }).bin
+    mkdirSync(join(DIR, '.claude-plugin'), { recursive: true })
+    Bun.write(join(DIR, '.claude-plugin', 'plugin.json'), JSON.stringify(manifest, null, 2))
+}
+
+// ── Skills ────────────────────────────────────────────────────────────────────
+function stageSkills(): void {
+    const src = util.subpath('skills')
+    if (!existsSync(src)) return
+    cpDir(src, join(DIR, 'skills'))
+}
+function cpDir(from: string, to: string): void {
+    mkdirSync(to, { recursive: true })
+    for (const e of readdirSync(from, { withFileTypes: true })) {
+        const s = join(from, e.name)
+        const d = join(to, e.name)
+        if (e.isDirectory()) cpDir(s, d)
+        else copyFileSync(s, d)
+    }
+}
+
+// ── Assemble + zip the staging tree ───────────────────────────────────────────
+function collectFiles(base: string, acc: string[] = []): string[] {
+    for (const e of readdirSync(base, { withFileTypes: true })) {
+        const p = join(base, e.name)
+        if (e.isDirectory()) collectFiles(p, acc)
+        else acc.push(p)
+    }
+    return acc
+}
+async function assemble(): Promise<void> {
+    const files = collectFiles(DIR)
     const fileMap: Record<string, Uint8Array> = {}
-    for (const [src, archPath] of manifest) {
-        fileMap[archPath] = new Uint8Array(readFileSync(src))
-    }
+    for (const abs of files)
+        fileMap[relative(DIR, abs).split('\\').join('/')] = new Uint8Array(readFileSync(abs))
+
+    const required = [
+        '.claude-plugin/plugin.json',
+        'dist/server.js',
+        'dist/pdf-server/index.js',
+        'dist/pdf-server/mcp-app.html',
+        `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
+        WIN ? 'bin/launch.cmd' : 'bin/launch.sh',
+    ]
+    const missing = required.filter(r => !(r in fileMap))
+    if (missing.length)
+        util.abort('SCHOLAR_BUILD_MISSING_ARTIFACT', `missing: ${missing.join(', ')}`)
 
     const zipped = zipSync(fileMap, { level: 6 })
-
-    // Determine output paths.
     mkdirSync(OUTPUT, { recursive: true })
-    const primaryOut = join(OUTPUT, 'scholar.plugin')
-    await Bun.write(primaryOut, zipped)
-    await Bun.stdout.write(`scholar.plugin written to: ${primaryOut}`)
+    const out = join(OUTPUT, 'scholar.plugin')
+    await Bun.write(out, zipped)
+    const mb = (zipped.length / 1024 / 1024).toFixed(1)
+    process.stdout.write(`scholar.plugin (${NAME}, ${mb} MB, ${files.length} files) -> ${out}\n`)
 
-    // Best-effort secondary copy to COWORK_PLUGINS_DIR if set.
-    const stagingEnv = env.static('COWORK_PLUGINS_DIR')
-
-    if (stagingEnv) {
+    const staging = process.env.COWORK_PLUGINS_DIR
+    if (staging) {
         try {
-            mkdirSync(stagingEnv, { recursive: true })
-            const secondaryOut = join(stagingEnv, 'scholar.plugin')
-            await Bun.write(secondaryOut, zipped)
-            await Bun.stdout.write(
-                `scholar.plugin also copied to staging: ${secondaryOut}`
-            )
+            mkdirSync(staging, { recursive: true })
+            await Bun.write(join(staging, 'scholar.plugin'), zipped)
+            process.stdout.write(`also copied to staging: ${staging}\n`)
         } catch (e) {
-            await Bun.stderr.write(
-                `Warning: could not copy to COWORK_PLUGINS_DIR (${stagingEnv}): ` +
-                    `${(e as Error).message}`
-            )
+            process.stderr.write(`warn: COWORK_PLUGINS_DIR copy failed: ${(e as Error).message}\n`)
         }
     }
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
-
 async function main(): Promise<void> {
-    const tag = `[${await util.onfixture(() => 'scholar/fixture', {
-        default: () => 'scholar',
-    })}]`
-    await Bun.stdout.write(`${tag} plugin build\n`)
+    process.stdout.write(`[scholar] slim plugin build (${NAME})\n`)
+    rmSync(DIR, { recursive: true, force: true })
+    mkdirSync(DIR, { recursive: true })
     assertVersionInvariant()
-    await step1_buildServer()
-    await step2_buildUI()
-    await step3_copyPdf()
-    await step4_copyRuntime()
-    await step5_copyVec()
-    await step6_copyBin()
-    await step7_assemblePlugin()
-    await Bun.stdout.write(`\n${tag} build complete`)
+    await buildServer()
+    await buildPdf()
+    await buildUI()
+    await stageVec0()
+    stageBin()
+    generateManifest()
+    stageSkills()
+    await assemble()
+    process.stdout.write(`[scholar] build complete\n`)
 }
 
-// Guard main() so the module can be imported by tests without triggering the
-// build pipeline. import.meta.main is true only when this file is the entry point.
 if (import.meta.main)
-    main().catch(
-        async e =>
-            await Bun.stderr
-                .write(`unhandled build error: ${String(e)}`)
-                .then(() => process.exit(1))
-    )
+    main().catch(async e => {
+        process.stderr.write(`unhandled build error: ${String(e)}\n`)
+        process.exit(1)
+    })
