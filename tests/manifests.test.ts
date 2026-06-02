@@ -31,6 +31,6 @@ test('mcpServers.scholar uses the M2 shell launcher (pivot supersedes §7.1 comp
 test('SessionStart hook pre-warms the bun provisioner (M2 latency optimization)', () => {
     // The hook is a pre-warm only — launch.sh is the correctness gate, because
     // SessionStart does not block MCP spawn. Pin that ensure-bun is invoked.
-    const cmd = pluginManifest.hooks.SessionStart[0].hooks[0].command
+    const cmd = pluginManifest.hooks?.SessionStart?.[0]?.hooks?.[0]?.command
     expect(cmd).toContain('ensure-bun.sh')
 })
