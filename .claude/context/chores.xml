@@ -596,5 +596,30 @@ Fix options (pick A unless reason to keep --cwd=scripts):
 
 Acceptance: `bun run build:ui` succeeds and produces `build/ui/app.html`; `bun run measure-bundle` produces `build/ui/bundle-budget.json` matching the shape `bundle.test.ts` asserts (total_kb / threshold_kb / over_budget / per_dep[]); the 3 bundle.test.ts tests go green; full suite reaches 297 pass / 8 skip / 0 fail; typecheck clean. Tier: mechanical-with-interpretation (sonnet) — picking A vs B is a 30-second judgment, the edit itself is ≤5 LOC. Single commit: `fix(build): resolve build:ui + measure-bundle without --cwd=scripts`.</synopsis>
   </chore>
+
+  <!--
+    Low-priority unit-coverage gaps surfaced by the 2026-06-02 test audit
+    (residual-gaps item 3, reported after the e2e-handling fix). Filed
+    post-execution (plan-group 2026-05-22-scholar-plugin is closed) as a
+    test-only code chore; dispatched to spec-pipeline:chore-executor (sonnet)
+    with the dispatcher owning the status flip per invariant 5.
+  -->
+  <chore id="cover-ollama-client-and-index-dispatch-unit-gaps"
+         status="open"
+         blast-radius="src/server/ollama/client.test.ts src/server/index.test.ts"
+         blocks-plans="">
+    <synopsis>Close the two low-priority unit-coverage gaps flagged by the 2026-06-02 test audit. TEST-ONLY chore: extend the two existing *.test.ts files; do NOT modify source. If a path is genuinely untestable without a source seam (e.g. a fetch-injection point), STOP and raise it via scope-maintenance rather than widening the blast-radius.
+
+TARGET 1 — src/server/ollama/client.ts (76.9% funcs / 69.7% lines; uncovered lines 142-178). OllamaClientImpl calls the GLOBAL fetch (no constructor / no injection seam), so mock the global fetch the same way the existing timeout tests in client.test.ts already do. Add cases:
+  (a) chat() success return (line 142): mock fetch to a 200 with {message:{content:'hi'}}; assert chat() resolves 'hi'. Also cover the response-fallback (line 138): mock returns {response:'x'} with no message field; assert resolves 'x'. (chat() empty-content throw and the timeout path are already covered — do not duplicate.)
+  (b) listModels() (145-162, fully uncovered): success returns the models array; a body with no models key returns []; fetch throws rejects OllamaUnavailableError; res.ok false rejects OllamaUnavailableError.
+  (c) healthCheck() (164-181, fully uncovered): res.ok true returns {ok:true,url}; res.ok false returns {ok:false,url,error:'HTTP {status}'}; fetch throws returns {ok:false,url,error:message}.
+
+TARGET 2 — src/server/index.ts (55.3% funcs / 77.7% lines full-suite; the uncovered region is the CLI entrypoint dispatch). index.test.ts currently covers only buildServer / withCorpus snapshot / dispatch-unknown-tool. Add cases for the dispatch surface: parseEntryArgv (line 205), readArgsJson (215), runServer (227), runCli (233), main (287). Drive main()/parseEntryArgv() with synthetic argv and assert the branch selection (serve vs cli mode, the args.json read path, the error/exit-code branches at 294-305). Mock heavy side-effects via the makeDeps() helper already present in index.test.ts; do NOT spawn a real server or pdf child. Cover the buildServer branches at 132/135/138/142 if reachable through makeDeps() variants (e.g. the quiet-logger flag).
+
+CONSTRAINTS: bun:test only; no new deps; no production behavior change; preserve all existing tests; do not touch chores.xml (dispatcher owns the status flip).
+
+ACCEPTANCE: client.ts reaches 100% funcs with listModels/healthCheck/chat fully covered; index.ts dispatch functions covered with 85%+ lines; the full suite stays green (295 pass plus the added tests, 0 fail, 1 todo, 4 skip); bunx tsc --noEmit clean. Single work commit, suggested message: `test(coverage): cover ollama listModels/healthCheck/chat + index CLI dispatch`. Print WORK_COMMIT_SHA on completion. Tier: interpretive (sonnet) — mocking the global fetch and driving the argv dispatch require judgment on the seams. Vehicle: spec-pipeline:chore-executor.</synopsis>
+  </chore>
 </chores>
 </reference>
