@@ -97,19 +97,22 @@ const CRASH_LOOP_TRIPS = 5;
 
 function resolveChildEntrypoint(override?: string): string {
   if (override) return override;
-  // Slim-plugin model: pdf-server is no longer vendored into the package. It is
-  // provisioned (pinned @1.7.2) into the persistent per-plugin data dir at
-  // install/first-run. Resolution order:
-  //   1. SCHOLAR_PDF_ENTRYPOINT  — explicit override the manifest wires in.
-  //   2. ${CLAUDE_PLUGIN_DATA}/pdf-server/dist/index.js — the provisioned copy.
-  //   3. <repo>/src/vendor/pdf-server/dist/index.js — dev/test fallback, still
-  //      present in-tree because §16 keeps the vendored .d.ts type surface and
-  //      the matching dist runs in the dev checkout where node_modules exists.
+  // Slim-plugin model: pdf-server@1.7.2 ships as a single rebundled standalone
+  // file (pdfjs-dist + all deps inlined by `bun build --target=bun`; verified to
+  // parse PDFs with no node_modules — see lifecycle.contract.test.ts run under
+  // SCHOLAR_PDF_ENTRYPOINT). mcp-app.html sits beside it (vendor reads it from
+  // import.meta.dirname). Resolution order:
+  //   1. SCHOLAR_PDF_ENTRYPOINT — explicit override the manifest wires in.
+  //   2. ${CLAUDE_PLUGIN_ROOT}/dist/pdf-server/index.js — the shipped standalone
+  //      bundle (present only in the packaged plugin, not the dev checkout).
+  //   3. <repo>/src/vendor/pdf-server/dist/index.js — dev/test fallback; the
+  //      upstream dist whose pdfjs-dist dynamic import resolves from the repo
+  //      node_modules. §16 keeps this vendored tree as the .d.ts type source.
   const fromEnv = process.env.SCHOLAR_PDF_ENTRYPOINT;
   if (fromEnv) return fromEnv;
-  const dataDir = process.env.CLAUDE_PLUGIN_DATA;
-  if (dataDir) return join(dataDir, "pdf-server", "dist", "index.js");
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ?? resolve(import.meta.dir, "..", "..", "..");
+  const shipped = join(pluginRoot, "dist", "pdf-server", "index.js");
+  if (existsSync(shipped)) return shipped;
   return join(pluginRoot, "src", "vendor", "pdf-server", "dist", "index.js");
 }
 
