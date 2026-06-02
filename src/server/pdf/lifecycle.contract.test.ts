@@ -18,11 +18,10 @@
 // Gate: SCHOLAR_PDF_E2E=1 (same flag the FIXTURE 4 + 6 heavyweights use).
 // Default `bun test` skips this; CI sets the flag and runs it.
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { spawnPdfChild, type PdfChildHandle } from "./lifecycle.ts";
 import { ulid } from "../db/nowIso.ts";
+import { makeFixtureRoot } from "%/util/pdf-fixture";
 
 const E2E = process.env.SCHOLAR_PDF_E2E === "1";
 
@@ -40,46 +39,9 @@ afterEach(async () => {
   }
 });
 
-/**
- * Minimal valid PDF (one empty page, with xref + trailer). Vendor parses this
- * via pdf-lib; the synthetic byte-blob FIXTURE 4 uses is not a full PDF and
- * vendor may refuse it depending on parser version. This fixture is built
- * from a single canonical byte stream tested against pdf-lib 1.17.
- */
-function writeMinimalPdf(path: string): void {
-  // 1-page A4 portrait PDF, no content stream, no fonts — pdf-lib parses this
-  // and vendor's display_pdf accepts it as openable. Generated offline with
-  // pdf-lib; bytes are stable.
-  const bytes = Buffer.from(
-    [
-      "%PDF-1.4",
-      "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj",
-      "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj",
-      "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<<>>>>endobj",
-      "xref",
-      "0 4",
-      "0000000000 65535 f ",
-      "0000000009 00000 n ",
-      "0000000054 00000 n ",
-      "0000000101 00000 n ",
-      "trailer<</Size 4/Root 1 0 R>>",
-      "startxref",
-      "170",
-      "%%EOF",
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  writeFileSync(path, bytes);
-}
-
-function makeFixtureRoot(): { root: string; pdf: string } {
-  const root = mkdtempSync(join(tmpdir(), "scholar-pdf-contract-"));
-  mkdirSync(join(root, "papers"), { recursive: true });
-  const pdf = join(root, "papers", "fixture.pdf");
-  writeMinimalPdf(pdf);
-  return { root, pdf };
-}
+// The valid-minimal-PDF fixture (writeMinimalPdf / makeFixtureRoot) lives in
+// tests/util/pdf-fixture.ts — shared with lifecycle.test.ts FIXTURE 4, which
+// likewise needs a vendor-openable document for its display_pdf round-trip.
 
 // =============================================================================
 // FIXTURE C1 — display_pdf returns a viewUUID and `interact` accepts the

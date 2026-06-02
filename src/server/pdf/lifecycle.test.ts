@@ -1,12 +1,17 @@
 // src/server/pdf/lifecycle.test.ts — foundation cycle 6.2 (Task 2.2)
 //
-// The drift-canary fixture suite per §16. Foundation iterates: fixture 1 (spawn)
-// passes first, then 2 (roots/list), then 3 (list_changed), then 4 (viewUUID),
-// then 5 (Windows Job Object — skipped on POSIX), then 6 (supervised respawn).
+// The drift-canary fixture suite per §16. Gating is by COST, not by importance:
 //
-// Heavy fixtures (4 and 6) require an actual pdf-child round-trip + valid PDF
-// parsing; they gate behind SCHOLAR_PDF_E2E=1 to keep the default `bun test`
-// run fast and deterministic. The protocol-shape fixtures (1, 2, 3) always run.
+//   • Fixtures 1–3 (spawn → roots/list → list_changed) are protocol-shape: they
+//     start the child and exercise the roots responder + mutation path WITHOUT
+//     opening a PDF. Cheap and deterministic, so they ALWAYS run (local + CI).
+//   • Fixtures 4 + 6 do a real PDF round-trip (display_pdf) / a SIGKILL+respawn
+//     timing window. Heavier and spawn-flakier, so they gate behind
+//     SCHOLAR_PDF_E2E=1 — kept out of the fast default `bun test`, run in CI's
+//     dedicated e2e job. NB: fixture 4 asserts viewUUID survival via
+//     interact({navigate}), NOT get_text — get_text needs a live browser viewer
+//     and hangs headless (see lifecycle.contract.test.ts "Why no C3 for get_text?").
+//   • Fixture 5 (Windows Job Object) is a test.todo pending a Win32 CI rig.
 import { test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,6 +22,7 @@ import {
   buildClientCapabilities,
   type PdfChildHandle,
 } from "./lifecycle.ts";
+import { makeFixtureRoot } from "%/util/pdf-fixture";
 
 let handle: PdfChildHandle | undefined;
 let tmpRoot: string | undefined;
@@ -69,7 +75,7 @@ test("sanitizeRoots dedupes, resolves symlinks, and drops missing paths", () => 
 // =========================================================================
 // FIXTURE 1: Spawn lifecycle — child starts, initializes, exposes a healthy handle.
 // =========================================================================
-test.skipIf(!E2E)("FIXTURE 1 — spawn lifecycle: child initializes and reports healthy", async () => {
+test("FIXTURE 1 — spawn lifecycle: child initializes and reports healthy", async () => {
   tmpRoot = makeTempPdfRoot();
   handle = await spawnPdfChild({ initialRoots: [tmpRoot] });
   const health = handle.isHealthy();
@@ -80,7 +86,7 @@ test.skipIf(!E2E)("FIXTURE 1 — spawn lifecycle: child initializes and reports 
 // =========================================================================
 // FIXTURE 2: roots/list responder — scholar replies with currentRoots as file:// URIs.
 // =========================================================================
-test.skipIf(!E2E)(
+test(
   "FIXTURE 2 — roots/list responder: returns currentRoots as file:// URIs on demand",
   async () => {
     tmpRoot = makeTempPdfRoot();
@@ -93,7 +99,7 @@ test.skipIf(!E2E)(
 // =========================================================================
 // FIXTURE 3: list_changed round-trip — setRoots mutates without respawn.
 // =========================================================================
-test.skipIf(!E2E)("FIXTURE 3 — list_changed round-trip: setRoots mutates without respawn", async () => {
+test("FIXTURE 3 — list_changed round-trip: setRoots mutates without respawn", async () => {
   tmpRoot = makeTempPdfRoot();
   const secondRoot = mkdtempSync(join(tmpdir(), "scholar-pdf-root2-"));
   try {
@@ -114,17 +120,31 @@ test.skipIf(!E2E)("FIXTURE 3 — list_changed round-trip: setRoots mutates witho
 // FIXTURE 4: viewUUID survival across root mutation (heavy — E2E only).
 // =========================================================================
 test.skipIf(!E2E)("FIXTURE 4 — viewUUID survives across a root mutation", async () => {
-  tmpRoot = makeTempPdfRoot();
-  handle = await spawnPdfChild({ initialRoots: [tmpRoot] });
+  // Open a real PDF, mutate the root set, then prove the original viewUUID is
+  // still addressable. Survival is asserted via interact({navigate}) — a
+  // fire-and-ack wire op that round-trips headless. The earlier form called
+  // handle.getText(), which requires a live browser viewer to answer; headless
+  // it enqueues to the vendor's poll queue and never returns, so the test hung
+  // to its timeout (see lifecycle.contract.test.ts "Why no C3 for get_text?").
+  // Uses a VALID minimal PDF (makeFixtureRoot) — the vendor's display_pdf
+  // rejects the synthetic header blob the spawn-only fixtures use.
+  const fix = makeFixtureRoot();
+  tmpRoot = fix.root;
+  handle = await spawnPdfChild({ initialRoots: [fix.root] });
+
   // §13 v1.1 wire envelope: display_pdf is a separate vendor tool, NOT an
   // interact action. Use handle.displayPdf() — the dedicated method.
-  const openResp = await handle.displayPdf(join(tmpRoot, "papers", "fixture.pdf"));
-  expect(typeof openResp.viewUUID).toBe("string");
+  const { viewUUID } = await handle.displayPdf(fix.pdf);
+  expect(typeof viewUUID).toBe("string");
+
   const secondRoot = mkdtempSync(join(tmpdir(), "scholar-pdf-root3-"));
   try {
-    await handle.setRoots([tmpRoot, secondRoot]);
-    const text = await handle.getText({ viewUUID: openResp.viewUUID });
-    expect(typeof text).toBe("string");
+    await handle.setRoots([fix.root, secondRoot]);
+    // The root mutation must not drop the open view: a navigate against the
+    // pre-mutation viewUUID still round-trips (vendor returns null on success).
+    await expect(
+      handle.interact({ type: "navigate", page: 1 }, { viewUUID }),
+    ).resolves.toBeDefined();
   } finally {
     rmSync(secondRoot, { recursive: true, force: true });
   }
@@ -133,15 +153,12 @@ test.skipIf(!E2E)("FIXTURE 4 — viewUUID survives across a root mutation", asyn
 // =========================================================================
 // FIXTURE 5: Job Object kills child when scholar dies (Windows only).
 // =========================================================================
-test.skipIf(process.platform !== "win32")(
-  "FIXTURE 5 — Job Object reaps the orphan child on parent SIGKILL",
-  async () => {
-    // Implementation deferred — uses Bun.spawn for the harness and process.kill(pid, 0)
-    // to probe liveness. Foundation pins attachJobObject as best-effort; the test only
-    // runs on win32 and confirms the child does NOT outlive the parent.
-    expect(true).toBe(true); // placeholder; executor wires the harness in a Windows CI run
-  },
-);
+// test.todo, NOT a passing placeholder: the prior `expect(true).toBe(true)` on
+// win32 reported a vacuous green for a behavior that is never actually verified.
+// Implement once a Win32 CI rig exists — spawn under attachJobObject, SIGKILL
+// the parent, then assert the child is gone (process.kill(childPid, 0) throws
+// ESRCH). Tracked in docs/audits/ROADMAP.md.
+test.todo("FIXTURE 5 — Job Object reaps the orphan child on parent SIGKILL (win32)", () => {});
 
 // =========================================================================
 // FIXTURE 6: Supervised respawn (heavy — E2E only).
