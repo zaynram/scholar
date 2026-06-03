@@ -179,7 +179,18 @@ function openCorpusDb(slug: string, runtimeRoot: string): BunSQLiteDatabase {
 
 function currentStatusPayload(ctx: ServerContext) {
   const activeId = ctx.config.activeCorpusId();
-  return { activeCorpusId: activeId ?? null, dbOpen: activeId !== undefined };
+  return {
+    activeCorpusId: activeId ?? null,
+    // dbOpen reflects the REAL in-process handle, not the persisted activeCorpusId
+    // (Bug #2a′): a fresh process can have a persisted active id with ctx.db still
+    // undefined. Reporting `activeId !== undefined` here would falsely claim the
+    // db is open.
+    dbOpen: ctx.db !== undefined,
+    // Operator-facing discriminator (Bug #3 degrade visibility): isHealthy().alive
+    // is true for a wired live pdf child, false for the throwing stub — so a failed
+    // spawn (which degrades to the stub) is distinguishable from "wiring never landed".
+    pdf_child: ctx.pdf.isHealthy(),
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -254,8 +265,14 @@ async function handleActivate(args: unknown, ctx: ServerContext): Promise<unknow
   const _db = ctx.db; // snapshot at entry (§7.6)
   const { slug } = args as { slug: string };
 
-  // Idempotency: already-active → return current status without re-running factory
-  if (ctx.config.activeCorpusId() === slug) {
+  // Idempotency: already-active *and already open in THIS process* → return current
+  // status without re-running the factory. The `&& ctx.db` conjunct is load-bearing
+  // (Bug #2a′): a fresh runServer process inherits a *persisted* activeCorpusId from
+  // a prior session but has ctx.db === undefined. A bare activeCorpusId check would
+  // short-circuit and never open the corpus DB, so activate would report success
+  // while every corpus-scoped tool (ingest, pdf.open) fails with no open db. The
+  // conjunct means "active in this process"; a fresh process falls through and opens.
+  if (ctx.config.activeCorpusId() === slug && ctx.db) {
     return currentStatusPayload(ctx);
   }
 
@@ -288,9 +305,22 @@ async function handleActivate(args: unknown, ctx: ServerContext): Promise<unknow
     // Atomic tmp+fdatasync+rename write to runtime/config.json (durable cache).
     await writeRuntimeConfig({ activeCorpusId: slug }, runtimeRoot);
 
-    // Populate pdf child's roots from config DB.
+    // Populate pdf child's roots from config DB. Best-effort (Bug #2a): a missing
+    // or crashed pdf child must NOT fail activation — the corpus is already durably
+    // active (ctx.db + activeCorpusId + config.json committed above). With the pdf
+    // child wired (runServer) this succeeds; against the CLI stub or a crashed child
+    // it throws and we log + continue. pdf features then surface their own
+    // PDF_CHILD_UNAVAILABLE; corpus/search/digest are unaffected. Roots are re-pushed
+    // on the next activate (and on pdf-child respawn, which replays current roots).
     const roots = allPdfRoots(ctx.configDb, slug);
-    await ctx.pdf.setRoots(roots);
+    try {
+      await ctx.pdf.setRoots(roots);
+    } catch (err) {
+      ctx.log.warn(
+        "corpus.activate: pdf root push failed (corpus active; pdf features degraded until child available)",
+        { slug, err: String(err) },
+      );
+    }
   });
 
   return currentStatusPayload(ctx);

@@ -8,7 +8,7 @@
         "typecheck": "tsc --noEmit",
         "test": "bun test src tests",
         "db:generate": "drizzle-kit generate",
-        "build:server": "tsc --noEmit && bun build src/server/index.ts --target=bun --outfile=dist/server.js",
+        "build:server": "tsc --noEmit && bun build src/server/index.ts --target=bun --outfile=dist/server.js && bun scripts/stage-migrations.ts dist",
         "build:ui": "bun --silent scripts/build-ui",
         "build:ui:dev": "UI_MINIFY=false bun -q build:ui",
         "build:pdf": "bun --silent scripts/vendor-pdf-server",

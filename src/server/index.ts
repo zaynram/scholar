@@ -16,8 +16,8 @@ import {
   type ToolRegistry,
 } from "./tools/registry.ts";
 import { registerUiResource } from "./ui/resource.ts";
-import { openWithPragmas } from "./db/migrations.ts";
-import { spawnPdfChild as productionSpawnPdfChild } from "./pdf/lifecycle.ts";
+import { openWithPragmas, applyMigrations } from "./db/migrations.ts";
+import { spawnPdfChild as productionSpawnPdfChild, type SpawnOpts } from "./pdf/lifecycle.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -28,6 +28,61 @@ import { dirname, join } from "node:path";
  * (must wait for an active corpus's roots; corpus.activate is the call site).
  */
 export const spawnPdfChild = productionSpawnPdfChild;
+
+/**
+ * Bug #3 fix (2026-06-03 — first real smoke test). Bridge the production pdf-child
+ * spawner into buildServer.
+ *
+ * `buildServer` consumes a *synchronous* `() => PdfChild` factory, but the
+ * production spawner (`pdf/lifecycle.ts`) is `async (opts) => Promise<PdfChildHandle>`
+ * — signature-incompatible, which is why no entry point ever wired it and ctx.pdf
+ * was always the throwing stub. This awaits the async spawn once, then returns a
+ * sync closure yielding the resolved handle (`PdfChildHandle` structurally extends
+ * `PdfChild`, so the closure satisfies `deps.spawnPdfChild`).
+ *
+ * Two failure modes are made non-fatal so a broken pdf child never takes down the
+ * corpus / search / digest surfaces:
+ *   - spawn throws (entrypoint missing, bun fails) → degrade to stub + warn.
+ *   - spawn hangs on the MCP handshake → `client.connect` would block scholar's
+ *     own `initialize`, so the host sees scholar fail to start with no reason. We
+ *     bound it with `timeoutMs` and degrade on timeout. The abandoned spawn promise
+ *     may leak its child process — accepted: that path is already the failure case
+ *     and no handle exists to shut it down.
+ *
+ * Degrade-to-stub is intentionally *visible*, not silent (the stub's
+ * PDF_CHILD_UNAVAILABLE is otherwise indistinguishable from "#3 never landed"):
+ * `scholar.corpus.status.pdf_child` surfaces `isHealthy()` as the operator-facing
+ * real-child (`alive:true`) vs stub (`alive:false`) discriminator.
+ */
+export async function resolvePdfSpawnFactory(
+  spawn: (opts: SpawnOpts) => Promise<PdfChild> = productionSpawnPdfChild,
+  timeoutMs = 15_000,
+): Promise<(() => PdfChild) | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const handle = await Promise.race([
+      spawn({ initialRoots: [] }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`pdf child spawn timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+    return () => handle;
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        lvl: "warn",
+        m: "pdf child spawn failed; degrading to stub (pdf features unavailable — check scholar.corpus.status.pdf_child)",
+        err: String(err),
+      }),
+    );
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface BuildServerDeps {
   runtimeRoot: string;
@@ -124,6 +179,16 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
     mkdirSync(dirname(configDbPath), { recursive: true });
   }
   const configDb = openCfg(configDbPath);
+  // Migrate the config DB so the corpora / pdf_roots / settings tables exist.
+  // Symmetric with how corpus.ts migrates each per-corpus DB (applyMigrations).
+  // Guarded to the default opener: test-harness overrides inject a config DB
+  // they have already migrated (or intend to leave bare), so we must not run
+  // migrations on an injected handle. runRawDdl is config-DB-safe here — it
+  // creates only the reading_queue view (papers exists in every migrated DB)
+  // and skips chunk_vec while embed.dim is unset, so no vec0 load is needed.
+  if (!deps.openConfigDb) {
+    applyMigrations(configDb);
+  }
 
   // Stub pdf so foundation can construct ServerContext before cycle 6.2 lands
   // the real spawn lifecycle. Production uses deps.spawnPdfChild (set by
@@ -225,7 +290,13 @@ async function readArgsJson(source: string): Promise<unknown> {
 }
 
 async function runServer(runtimeRoot: string): Promise<void> {
-  const { server } = buildServer({ runtimeRoot });
+  // Bug #3 fix: spawn the real pdf child and hand the resolved handle to
+  // buildServer (degrades to the stub + warn on spawn failure/timeout). CLI mode
+  // (runCli) intentionally stays on the stub — `--call` is single-shot and
+  // stateless, so spawning a child per call would be wasteful and pdf features
+  // are a long-lived-session concern.
+  const spawnPdf = await resolvePdfSpawnFactory();
+  const { server } = buildServer({ runtimeRoot, spawnPdfChild: spawnPdf });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

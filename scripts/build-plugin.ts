@@ -17,6 +17,7 @@
 // Linux pkg:  SCHOLAR_BUILD_WIN=0 bun scripts/build-plugin.ts
 
 import util, { OUTPUT } from './util'
+import { stageMigrations } from './stage-migrations'
 import { zipSync } from 'fflate'
 import {
     existsSync,
@@ -56,6 +57,10 @@ function assertVersionInvariant(): void {
 async function buildServer(): Promise<void> {
     await util.sh`tsc --noEmit`
     await util.sh`bun build src/server/index.ts --target=bun --outfile ${join(DIR, 'dist', 'server.js')}`
+    // Bug #5: stage drizzle migrations beside the bundle. In the bundle
+    // import.meta.dir is dist/, so applyMigrations resolves <dist>/migrations;
+    // without these files every DB open fails with "Can't find meta/_journal.json".
+    stageMigrations(join(DIR, 'dist'))
 }
 
 // ── Rebundle pdf-server standalone (pdfjs inlined) + its mcp-app.html ──────────
@@ -228,6 +233,7 @@ async function assemble(): Promise<void> {
     const required = [
         '.claude-plugin/plugin.json',
         'dist/server.js',
+        'dist/migrations/meta/_journal.json',
         'dist/pdf-server/index.js',
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,

@@ -207,6 +207,50 @@ test("corpus.activate calls ctx.pdf.setRoots with corpus PDF roots", async () =>
   expect(Array.isArray(roots)).toBe(true);
 });
 
+test("corpus.activate tolerates a failing pdf.setRoots — corpus still activates (Bug #2a best-effort root push)", async () => {
+  // A missing or crashed pdf child throws on setRoots, but by then the corpus is
+  // already durably active (ctx.db + activeCorpusId + config.json committed).
+  // Activation MUST resolve (not reject) and leave ctx.db open; the root push is
+  // best-effort. Before the fix this rejected with PDF_CHILD_UNAVAILABLE while
+  // the corpus was active — a partial success reported as a failure.
+  await createCorpus("besteffort");
+  setRootsMock.mockImplementation(async () => {
+    throw new Error("PDF_CHILD_UNAVAILABLE");
+  });
+  await dispatch("scholar.corpus.activate", { slug: "besteffort" });
+  expect(built.ctx.db).toBeDefined();
+});
+
+test("corpus.activate opens ctx.db on a fresh process even when activeCorpusId is already persisted (Bug #2a′ idempotency guard)", async () => {
+  // Simulate a fresh runServer process: the corpus was activated in a PRIOR
+  // session (activeCorpusId persisted in the config DB) but THIS process never
+  // opened it (ctx.db === undefined). A bare `activeCorpusId === slug` idempotency
+  // check short-circuits and leaves ctx.db undefined — activate falsely reports
+  // success while every corpus-scoped tool (ingest, pdf.open) fails with no open
+  // db. The `&& ctx.db` guard forces the real open. THIS assertion is the
+  // live-session failure that would have wasted the user's login.
+  await createCorpus("persisted");
+  built.ctx.config.set("activeCorpusId", "persisted"); // prior-session state, db NOT open here
+  expect(built.ctx.db).toBeUndefined();
+  await dispatch("scholar.corpus.activate", { slug: "persisted" });
+  expect(built.ctx.db).toBeDefined();
+});
+
+test("corpus.activate payload surfaces a pdf_child health discriminator + truthful dbOpen", async () => {
+  // Degrade-to-stub on a failed pdf spawn is intentionally visible, not silent:
+  // a stub's PDF_CHILD_UNAVAILABLE is indistinguishable from "#3 wiring never
+  // landed". `pdf_child` exposes isHealthy() (alive:true = real child, false =
+  // stub) so an operator can tell the two apart. `dbOpen` must reflect the REAL
+  // in-process handle (ctx.db !== undefined), not the persisted activeCorpusId.
+  await createCorpus("healthy");
+  const result = (await dispatch("scholar.corpus.activate", { slug: "healthy" })) as {
+    pdf_child: { alive: boolean };
+    dbOpen: boolean;
+  };
+  expect(result.pdf_child).toMatchObject({ alive: expect.any(Boolean) });
+  expect(result.dbOpen).toBe(true);
+});
+
 test("corpus.archive sets archived_at; subsequent status shows archived", async () => {
   await createCorpus("toarch");
   await dispatch("scholar.corpus.archive", { slug: "toarch" });

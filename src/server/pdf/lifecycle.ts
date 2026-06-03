@@ -110,10 +110,25 @@ export function resolveChildEntrypoint(override?: string): string {
   //      node_modules. §16 keeps this vendored tree as the .d.ts type source.
   const fromEnv = process.env.SCHOLAR_PDF_ENTRYPOINT;
   if (fromEnv) return fromEnv;
-  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT ?? resolve(import.meta.dir, "..", "..", "..");
-  const shipped = join(pluginRoot, "dist", "pdf-server", "index.js");
-  if (existsSync(shipped)) return shipped;
-  return join(pluginRoot, "src", "vendor", "pdf-server", "dist", "index.js");
+  const envRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (envRoot) {
+    // Packaged session: the host pins the plugin root. Honor it exclusively
+    // (unchanged semantics): shipped bundle, else the vendored dev tree.
+    const shipped = join(envRoot, "dist", "pdf-server", "index.js");
+    if (existsSync(shipped)) return shipped;
+    return join(envRoot, "src", "vendor", "pdf-server", "dist", "index.js");
+  }
+  // Dev, no CLAUDE_PLUGIN_ROOT: derive the root from THIS file's location, which
+  // differs between layouts — <root>/src/server/pdf/lifecycle.ts in the source tree
+  // (root = up 3) vs <root>/dist/server.js when bundled (import.meta.dir = <root>/
+  // dist, root = up 1). The old code assumed only the source layout, so a bundle
+  // run without the env mis-resolved to <home> and failed to find the child.
+  // Try both candidate roots; the first that has a shipped bundle wins.
+  for (const root of [resolve(import.meta.dir, ".."), resolve(import.meta.dir, "..", "..", "..")]) {
+    const shipped = join(root, "dist", "pdf-server", "index.js");
+    if (existsSync(shipped)) return shipped;
+  }
+  return join(resolve(import.meta.dir, "..", "..", ".."), "src", "vendor", "pdf-server", "dist", "index.js");
 }
 
 export function resolveBunRuntime(override?: string): string {

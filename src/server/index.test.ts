@@ -13,7 +13,14 @@
 // line target is met without those two regions.
 import { test, expect, afterEach } from "bun:test";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
-import { buildServer, parseEntryArgv, main, spawnPdfChild, type BuildServerDeps } from "./index.ts";
+import {
+  buildServer,
+  parseEntryArgv,
+  main,
+  spawnPdfChild,
+  resolvePdfSpawnFactory,
+  type BuildServerDeps,
+} from "./index.ts";
 
 function makeDeps(overrides: Partial<BuildServerDeps> = {}): BuildServerDeps {
   return {
@@ -59,6 +66,57 @@ test("spawnPdfChild is re-exported from foundation entry for corpus 6.3 handoff"
   // Foundation owns the production pdf-child spawner; corpus cycle 6.3
   // (`scholar.corpus.activate`) imports it from this module surface.
   expect(typeof spawnPdfChild).toBe("function");
+});
+
+// ─── Bug #3 (2026-06-03): production pdf-child wiring — resolvePdfSpawnFactory ──
+// The first real smoke test exposed that NO production entry point ever passed
+// the spawner to buildServer, so ctx.pdf was always the throwing stub. Worse,
+// the real spawner is `async (opts) => Promise<PdfChildHandle>` while
+// `BuildServerDeps.spawnPdfChild` is `() => PdfChild` (sync) — signature-
+// incompatible. resolvePdfSpawnFactory bridges them: await the async spawn once
+// (bounded by a timeout so a hung MCP handshake can't block scholar's own
+// initialize), then return a sync closure yielding the resolved handle.
+// A live child reports `isHealthy().alive === true`; the stub reports `false` —
+// that gap is the production-visible discriminator (surfaced via corpus.status).
+
+// A fake "live" pdf child: isHealthy → alive:true, distinguishing a real spawned
+// handle from the buildServer stub (alive:false).
+function aliveChild(): ReturnType<NonNullable<BuildServerDeps["spawnPdfChild"]>> {
+  return {
+    interact: async () => null,
+    getText: async () => "",
+    currentRoots: () => [],
+    setRoots: async () => {},
+    displayPdf: async () => ({ viewUUID: "live-view-uuid" }),
+    isHealthy: () => ({ alive: true, lastOkAt: 1, stdioOpen: true }),
+  };
+}
+
+test("resolvePdfSpawnFactory: a successful async spawn yields a factory that wires the live child", async () => {
+  const factory = await resolvePdfSpawnFactory(async () => aliveChild());
+  expect(factory).toBeDefined();
+  const { ctx } = buildServer(makeDeps({ spawnPdfChild: factory! }));
+  // ctx.pdf is the spawned child (alive:true), NOT the throwing stub (alive:false).
+  expect(ctx.pdf.isHealthy().alive).toBe(true);
+});
+
+test("resolvePdfSpawnFactory: a spawn rejection degrades to the stub (undefined factory, no throw)", async () => {
+  const factory = await resolvePdfSpawnFactory(async () => {
+    throw new Error("pdf entrypoint missing");
+  });
+  expect(factory).toBeUndefined();
+  // buildServer with undefined → throwing stub (alive:false): degrade is graceful,
+  // not fatal — corpus/search/digest still work without a pdf child.
+  const { ctx } = buildServer(makeDeps({ spawnPdfChild: factory }));
+  expect(ctx.pdf.isHealthy().alive).toBe(false);
+});
+
+test("resolvePdfSpawnFactory: a hung spawn is bounded by the timeout and degrades to the stub", async () => {
+  // A spawn that never settles (hung MCP handshake) must not block forever —
+  // it would otherwise stall scholar's own initialize and the host would see
+  // scholar fail to start with no reason. Bounded → undefined (degrade to stub).
+  const factory = await resolvePdfSpawnFactory(() => new Promise<never>(() => {}), 20);
+  expect(factory).toBeUndefined();
 });
 
 test("dispatch throws structured unknown_tool error for unregistered tools", async () => {
@@ -161,12 +219,28 @@ test("main(['--call','scholar.unknown.tool','{}']) returns exit code 2 (unknown_
 });
 
 test("main(['--call','scholar.corpus.status','{}']) dispatches tool-error and returns 1", async () => {
-  // scholar.corpus.status requires an active corpus DB with the migrations applied.
-  // The temp DB is blank (no migrations run) → tool throws a DB error → return 1.
+  // The config DB is migrated by buildServer, but no corpus is active, so
+  // scholar.corpus.status throws NO_ACTIVE_CORPUS → tool_error → exit 1.
   makeTempRuntime();
   const code = await main(["--call", "scholar.corpus.status", "{}"]);
   // tool_error → exit 1
   expect(code).toBe(1);
+});
+
+// ─── REGRESSION: buildServer must migrate the config DB (default opener) ──────
+// Bug surfaced 2026-06-03 (first real smoke test): buildServer opened the config
+// DB via the default opener but never ran migrations on it, so the corpora /
+// pdf_roots / settings tables never existed. Every real install hit "no such
+// table: corpora" on scholar.corpus.{list,create} — the entire corpus workflow
+// was unreachable outside tests. Tests masked it by injecting a *pre-migrated*
+// openConfigDb (makeDeps), so the production opener path had zero coverage.
+// This guards the real opener directly: a fresh on-disk runtime must yield a
+// migrated config DB where corpus.list returns an empty corpora set, not a throw.
+test("buildServer migrates the config DB so corpus.list works on a fresh runtime", async () => {
+  const dir = makeTempRuntime();
+  const { dispatch } = buildServer({ runtimeRoot: dir, quiet: true });
+  const result = (await dispatch("scholar.corpus.list", {})) as { corpora: unknown[] };
+  expect(result.corpora).toEqual([]);
 });
 
 // ─── runCli return-0 analog: withCorpus throws without corpus (tool_error path) ─
