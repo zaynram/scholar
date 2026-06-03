@@ -39,6 +39,17 @@ annotation + PDF-viewer path (§7), which has *zero* automated coverage because 
 hangs headless — a live viewer is the only way to prove it works. Do this in a
 real Claude Code session so it also validates install + spawn (G3).
 
+**⟵ FIRST, confirm WHICH scholar your session runs — this decides everything.**
+All the headless proofs below used the **dev checkout** as the plugin root. Three
+cases, only you know which is yours:
+- **Dev checkout** (`CLAUDE_PLUGIN_ROOT=/home/ramda/code/scholar`): `dist/` is
+  rebuilt and carries every fix — you're ready.
+- **Fresh `out/scholar.plugin`** built today (`bun run build:linux`) and
+  reinstalled: ready — it carries the staged migrations + wiring.
+- **A previously-installed `scholar.plugin`** (unzipped before 2026-06-03):
+  carries **none** of commit f293b18 — you'll hit the old no-op pdf child and
+  `Can't find meta/_journal.json` again. **Rebuild + reinstall before logging in.**
+
 **Update 2026-06-03 — the pdf-child blocker is cleared.** Driving the first real
 smoke test surfaced that production never spawned the pdf child (#3) and that
 `corpus.activate` both hard-failed on an absent child (#2a) and never opened
@@ -65,6 +76,18 @@ you:** if you run an *installed* `scholar.plugin` (not the dev checkout), rebuil
 reinstall (`bun run build:linux` → `out/scholar.plugin`) so the install carries the
 staged migrations. If you point `CLAUDE_PLUGIN_ROOT` at this checkout, `dist/` is
 already rebuilt and ready.
+
+**Launcher chain proven end-to-end (2026-06-03).** The earlier proofs used the dev
+bun; the *actual* manifest path is `/bin/sh bin/launch.sh` → `sh ensure-bun.sh`
+(provisions the pinned **1.3.11** bun into `${CLAUDE_PLUGIN_DATA}/bun`) →
+`exec ${CLAUDE_PLUGIN_DATA}/bun/bun dist/server.js`. Both legs now verified
+headless: `ensure-bun.sh` cold-provisions exactly 1.3.11 (download→unzip→exec, ~2s),
+and driving `/bin/sh launch.sh` with **no dev bun on PATH** through the provisioned
+1.3.11 runtime still returns `activate isError=false, dbOpen=true,
+pdf_child.alive=true` against `daisy-lit-review` (child logs the real publications
+root). So the provisioning + spawn + migrate + activate spine is no longer an
+assumption — the **only** unproven leg is the PDF *viewer* (`displayPdf`/`getText`,
+step 7), which can only be exercised by a human at the desktop.
 
 ---
 
