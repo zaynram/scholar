@@ -11,13 +11,12 @@ real PDF viewer). Allow ~30 min.
 
 ## 0. Prerequisites (gates — do not skip)
 
-- [ ] **Ollama models present.** Defaults are `nomic-embed-text:v1.5` (embed) and
-  `qwen3:8b` (chat). Check `ollama list`. If missing:
-  `ollama pull nomic-embed-text:v1.5 && ollama pull qwen3:8b`
-  (or point `SCHOLAR_OLLAMA_{EMBED,CHAT}_MODEL` at models you already have).
-  See `HUMAN.md` — on this machine the Windows `ollama.exe` was not reachable
-  from WSL, so this step is deferred to you.
-- [ ] **Ollama reachable** at `http://127.0.0.1:11434` (the manifest default).
+- [x] **Ollama models present.** ✅ `nomic-embed-text:v1.5` (embed, 768-dim) and
+  `qwen3:8b` (chat) pulled into the GPU-accelerated **ipex-llm-ollama** service
+  and verified through scholar's `client.ts` (2026-06-03). See `HUMAN.md` §1.
+- [x] **Ollama reachable** at `http://127.0.0.1:11434` — `ipex-llm-ollama.service`
+  is enabled + active and binds the manifest default. (`sudo systemctl status
+  ipex-llm-ollama` to check.)
 - [ ] **Build is fresh.** `bun run build` → `out/scholar.plugin` (~2.8–2.9 MB).
 - [ ] **Suite green.** `bun test src tests` → 0 fail.
 

@@ -169,6 +169,50 @@ test("chat() throws when both message.content and response are empty/absent", as
   ).rejects.toThrow();
 });
 
+// ─── thinking-model handling (qwen3:8b default) ──────────────────────────────
+
+test("chat() strips a leading <think>…</think> reasoning block from content", async () => {
+  // A thinking model that ignores `think: false` still prefixes its answer with
+  // a reasoning monologue; scholar must return the answer only so digests and
+  // reading-prompts don't leak the chain-of-thought.
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({
+    message: {
+      content: "<think>\nThe user wants a definition. Keep it tight.\n</think>\n\nA literature review surveys existing work on a topic.",
+    },
+  });
+  const result = await ollama.chat("qwen3:8b", [{ role: "user", content: "define it" }]);
+  expect(result).toBe("A literature review surveys existing work on a topic.");
+});
+
+test("chat() leaves content without a think block untouched", async () => {
+  process.env.SCHOLAR_OLLAMA_URL = startJsonServer({
+    message: { content: "A plain answer, no reasoning tags." },
+  });
+  const result = await ollama.chat("test-model", [{ role: "user", content: "hi" }]);
+  expect(result).toBe("A plain answer, no reasoning tags.");
+});
+
+test("chat() requests think:false to suppress reasoning at the source", async () => {
+  // Capture the posted body and assert the suppression flag rides along with
+  // stream:false — the request-level half of the belt-and-suspenders.
+  let posted: Record<string, unknown> | null = null;
+  const srv = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      posted = (await req.json()) as Record<string, unknown>;
+      return new Response(JSON.stringify({ message: { content: "ok" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  jsonServers.push(srv);
+  process.env.SCHOLAR_OLLAMA_URL = `http://127.0.0.1:${srv.port}`;
+  await ollama.chat("qwen3:8b", [{ role: "user", content: "hi" }]);
+  expect(posted).not.toBeNull();
+  expect(posted!.think).toBe(false);
+  expect(posted!.stream).toBe(false);
+});
+
 // ─── listModels() ─────────────────────────────────────────────────────────────
 
 test("listModels() returns the models array on success", async () => {

@@ -128,6 +128,12 @@ class OllamaClientImpl implements OllamaClient {
       model,
       messages,
       stream: false,
+      // Thinking models (e.g. the default qwen3:8b) otherwise prefix their
+      // answer with a <think>…</think> reasoning monologue that would leak into
+      // digests and reading-prompts. Ask the model to skip it — this also saves
+      // the GPU from generating tokens we'd discard. Non-thinking models and
+      // older Ollama builds ignore the field.
+      think: false,
       options: opts,
     };
     const res = await this.postJson<{ message?: { content: string }; response?: string }>(
@@ -135,7 +141,11 @@ class OllamaClientImpl implements OllamaClient {
       body,
       this.chatTimeoutMs(),
     );
-    const content = res.message?.content ?? res.response ?? "";
+    const raw = res.message?.content ?? res.response ?? "";
+    // Defensive strip: if a model ignores `think: false` (or honors it only
+    // partially), drop a leading <think>…</think> block so callers get the
+    // answer only. Belt-and-suspenders with the request-level suppression.
+    const content = raw.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, "");
     if (!content) {
       throw new Error(`Ollama /api/chat returned empty content for model=${model}`);
     }

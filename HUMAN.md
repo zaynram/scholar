@@ -5,33 +5,29 @@ repos). Created 2026-06-02. Delete items as you clear them.
 
 ---
 
-## 1. Install the required Ollama models  ⟵ gates day-to-day use
+## 1. Ollama models — RESOLVED ✅ (2026-06-03)
 
-The plugin defaults to `nomic-embed-text:v1.5` (embeddings) and `qwen3:8b`
-(chat). Without them, ingestion (embed) and digest/reading-prompts (chat) fail.
+Scholar talks to Ollama over the REST API (`/api/tags`, `/api/embeddings`,
+`/api/chat`) at `SCHOLAR_OLLAMA_URL` (default `http://127.0.0.1:11434`). On this
+machine that is served by the GPU-accelerated **ipex-llm-ollama** systemd
+service (`~/.ipex-llm-ollama`, Intel iGPU via Level Zero/SYCL), which binds the
+same default host:port — so **no config change is needed**.
 
-**Status:** deferred — the Windows `ollama.exe` was **not reachable from this WSL
-instance** (not on `PATH`, not under the usual `/mnt/c/.../Programs/Ollama/`,
-`/mnt/c/Program Files/Ollama/`, or `/mnt/c/ProgramData/Ollama/` paths). The
-WSL-native `ollama` on `PATH` is installed but only has vision models
-(`granite3.2-vision:2b`, `qwen2.5vl:7b`) — neither default is present.
+Verified end-to-end through scholar's own `src/server/ollama/client.ts`:
 
-Pick one and run it yourself:
+- `ipex-llm-ollama.service`: enabled + active + reachable at the default URL.
+- `nomic-embed-text:v1.5` pulled (274 MB) — `/api/embeddings` → **768-dim** vector.
+- `qwen3:8b` pulled (5.2 GB) — `/api/chat` → clean answer (`hasThinkTag=false`).
 
-- **Windows-side (your intent):** from PowerShell/CMD, or once `ollama.exe` is on
-  the WSL `PATH`:
-  ```
-  ollama.exe pull nomic-embed-text:v1.5
-  ollama.exe pull qwen3:8b
-  ```
-  Then make sure scholar points at it: `SCHOLAR_OLLAMA_URL` (manifest default
-  `http://127.0.0.1:11434`) must reach the Windows daemon from where the server
-  runs. From WSL that's typically the Windows host IP, not `127.0.0.1`.
-- **WSL-native:** `ollama pull nomic-embed-text:v1.5 && ollama pull qwen3:8b`
-  (uses the daemon already on `PATH`; `127.0.0.1:11434` works as-is).
-- **Use models you already have:** set `SCHOLAR_OLLAMA_EMBED_MODEL` /
-  `SCHOLAR_OLLAMA_CHAT_MODEL` in the manifest env (note: a different embed model
-  changes the vector dimension — start a fresh corpus, don't mix).
+**Thinking-model handling:** qwen3:8b is a reasoning model; left alone it prefixes
+answers with a `<think>…</think>` monologue that would leak into digests. Scholar
+now passes `think:false` **and** defensively strips any residual block in
+`chat()`. Swapping to a non-thinking model via `SCHOLAR_OLLAMA_CHAT_MODEL` leaves
+that handling as a harmless no-op. (A different *embed* model would change the
+vector dimension — start a fresh corpus, don't mix dims.)
+
+If the service ever stops: `sudo systemctl start ipex-llm-ollama` (it's enabled,
+so it also comes up on boot).
 
 ---
 

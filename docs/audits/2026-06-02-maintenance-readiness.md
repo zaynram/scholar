@@ -118,7 +118,7 @@ Actioned in one pass; suite stayed green throughout.
 
 | Item | Outcome |
 |---|---|
-| **G1** | **Deferred to `HUMAN.md`** — Windows `ollama.exe` not reachable from WSL; pull commands + URL caveat recorded there. |
+| **G1** | **Resolved (2026-06-03)** — both default models pulled into the GPU-accelerated **ipex-llm-ollama** service (enabled + active + reachable at the default URL); embed **768-dim** and chat verified through scholar's own `client.ts`. qwen3's `<think>` reasoning is now suppressed in `client.ts` (`think:false` + defensive strip, +3 regressions). See `HUMAN.md` §1. |
 | **G2/G3** | Runbook written: **`docs/runbooks/e2e-smoke-test.md`**, referenced from `HUMAN.md`. Still requires a live session (human). Note: the slim-pivot spec records the **linux launch handshake as already validated**; the untested frontier is the full workflow + the viewer leg. |
 | **T1** | Done — `CLAUDE.md` "Repository state"/"Workflow" rewritten to the implemented/maintenance-mode reality; stale `nu/scholar.nu` → `bin/scholar.nu`. |
 | **T2** | **Dropped** — chore `redesign-registry-schemas` marked `status="dropped"` in `chores.xml`; desired XSD changes summarized in `HUMAN.md` §3 for upstream reconciliation. |
@@ -127,4 +127,4 @@ Actioned in one pass; suite stayed green throughout.
 | **T5** | Done — rebuilt: win32 **2.9 MB / 14 files**, linux **2.8 MB / 14 files**. CLAUDE.md "~2.9 MB" claim confirmed accurate; spec file count corrected 15 → 14 (the dedup in T3 accounts for the −1). |
 | **T6** | Done — `bin/scholar.nu` bun resolution hardened: honors `SCHOLAR_BUN_PATH` (parity with `lifecycle.ts`), prefers the provisioned pinned bun, and **warns loudly** when falling back to an unpinned PATH bun (the item-4 edge). Verified: warning fires on 1.3.14≠1.3.11; override honored; nu test green. |
 
-**Remaining = G1 + G2/G3 only**, both human-gated and tracked in `HUMAN.md`.
+**Remaining = G2/G3 only** (the live smoke test) — G1 cleared 2026-06-03. Tracked in `HUMAN.md`.
