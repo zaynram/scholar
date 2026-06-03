@@ -88,11 +88,11 @@ not the 6.7 MB vendored pdf — were the bloat.
 `scripts/build-plugin.ts` rewritten to the slim model; `SCHOLAR_BUILD_WIN`
 selects target. Both packages build on the Linux host:
 
-- **linux** `scholar.plugin` 2.8 MB / 15 files — unzipped and launched via the
+- **linux** `scholar.plugin` 2.8 MB / 14 files — unzipped and launched via the
   generated manifest (`/bin/sh ${ROOT}/bin/launch.sh`) with a fresh
   `CLAUDE_PLUGIN_DATA`: ensure-bun provisioned bun 1.3.11, MCP `initialize`
   returned clean JSON-RPC on stdout. **Fully validated end-to-end.**
-- **win32** `scholar.plugin` 2.9 MB / 15 files — `vec0.dll` (PE32+ confirmed)
+- **win32** `scholar.plugin` 2.9 MB / 14 files — `vec0.dll` (PE32+ confirmed)
   fetched from the `sqlite-vec-windows-x64` npm tarball at the version-parity
   pin; Windows launcher set + `cmd.exe /c launch.cmd` manifest staged.
   **Structure validated; launch path requires Windows hardware.**

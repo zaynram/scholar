@@ -16,23 +16,45 @@ def --wrapped "safe extract" [
   }
 }
 
+# The pinned bun whose bun:sqlite ABI matches the vendored vec0 build. Keep in
+# sync with package.json `scholar.bundledBunVersion` and bin/ensure-bun.sh PIN.
+const BUN_PIN = '1.3.11'
+
+# Resolve the bun runtime that runs dist/server.js. Mirrors the server-side seam
+# in src/server/pdf/lifecycle.ts `resolveBunRuntime` (SCHOLAR_BUN_PATH) plus the
+# provisioned-runtime path the shell launcher uses. Order:
+#   1. SCHOLAR_BUN_PATH — explicit operator override (parity with lifecycle.ts).
+#   2. ${CLAUDE_PLUGIN_DATA}/bun/bun — the PINNED runtime bin/ensure-bun.sh lays
+#      down; the only ABI guaranteed to load the vendored vec0 extension.
+#   3. PATH `bun` — dev fallback. UNPINNED, so it warns: a host bun whose
+#      bun:sqlite version differs from the pin can fail to load vec0. This is the
+#      item-4 edge — a nu repoint with CLAUDE_PLUGIN_DATA unset previously fell
+#      through here silently, giving no signal that the ABI was unpinned.
+def resolve-bun []: nothing -> string {
+  if ('SCHOLAR_BUN_PATH' in $env) and ($env.SCHOLAR_BUN_PATH | is-not-empty) {
+    return $env.SCHOLAR_BUN_PATH
+  }
+  let provisioned = ($env.CLAUDE_PLUGIN_DATA? | default '' | path join 'bun' 'bun')
+  if ($provisioned | path exists) { return $provisioned }
+  let ver = (try { ^bun --version | str trim } catch { 'absent' })
+  if $ver != $BUN_PIN {
+    print --stderr $"scholar: using PATH bun ($ver), not pinned ($BUN_PIN) — vec0 may fail to load. Set CLAUDE_PLUGIN_DATA / SCHOLAR_BUN_PATH / SCHOLAR_SERVER_CMD to pin the runtime."
+  }
+  'bun'
+}
+
 # Resolve the M2 server invocation. The slim-plugin pivot (2026-06-01) dropped
 # the compiled `mcp-scholar` binary; scholar now runs as `bun dist/server.js`,
 # dispatched in CLI mode via `--call <tool> <json>` (see src/server/index.ts).
-# Resolution order:
-#   1. SCHOLAR_SERVER_CMD — space-separated override (test/operator escape hatch,
-#      mirrors SCHOLAR_PDF_ENTRYPOINT / SCHOLAR_BUN_PATH / SCHOLAR_VEC0_PATH).
-#   2. the provisioned bun (${CLAUDE_PLUGIN_DATA}/bun/bun) running
-#      ${CLAUDE_PLUGIN_ROOT}/dist/server.js, located relative to this module
-#      (nu/scholar.nu → plugin root); falls back to a PATH `bun` for dev.
+# SCHOLAR_SERVER_CMD short-circuits the whole resolution (test/operator escape
+# hatch); otherwise the bundle is located relative to this module
+# (bin/scholar.nu → plugin root) and run under `resolve-bun`.
 def server-cmd []: nothing -> list<string> {
   if 'SCHOLAR_SERVER_CMD' in $env {
     return ($env.SCHOLAR_SERVER_CMD | split row ' ' | where {|t| $t | is-not-empty })
   }
   let root = ($SELF | path dirname | path dirname)
-  let provisioned = ($env.CLAUDE_PLUGIN_DATA? | default '' | path join 'bun' 'bun')
-  let bun = if ($provisioned | path exists) { $provisioned } else { 'bun' }
-  [$bun ($root | path join 'dist' 'server.js')]
+  [(resolve-bun) ($root | path join 'dist' 'server.js')]
 }
 
 # Wrapper for the scholar MCP server (M2: `bun dist/server.js --call`).

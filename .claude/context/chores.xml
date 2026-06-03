@@ -89,7 +89,9 @@
   -->
 
   <chore id="redesign-registry-schemas"
-         status="open"
+         status="dropped"
+         dropped-at="2026-06-02"
+         dropped-reason="User decision (2026-06-02): spec-pipeline meta-tooling debt, not scholar product. Dropped from the scholar registry; the desired XSD changes are summarized in HUMAN.md (repo root) for reconciliation against the upstream spec-pipeline schemas. Synopsis retained below as the source record."
          blast-radius=".claude/context/schema/ .claude/context/plans.xml .claude/context/chores.xml docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml"
          blocks-plans="">
     <synopsis>Replace the XSDs to match the active spec-pipeline emission shape (modified-at, fulfillment, synopsis-as-element, blast-radius/blocks-plans attrs, slug-only chore ids) AND tighten _long_desc maxLength to keep chore bodies terse. Concrete drifts from the closed sibling: plans.xsd &lt;reference&gt; required-attrs unused; plan-group synopsis as element not attr; chores.xsd requires type/origin/baseline none of the existing chores carry; chore.id pattern `\d{4}-\d{2}-\d{2}-...` rejects every existing slug; splits.xsd 250-char _long_desc cap exceeded by the extraction plan synopsis (435 chars). Open question for the user: schema-then-data retrofit, schema-rewrite to fit data, or drop schemas. Once shape lands, sweep all four files into compliance and re-enable xmllint --schema in spec-pipeline workflow step 2.</synopsis>

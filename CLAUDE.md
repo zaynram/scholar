@@ -4,18 +4,22 @@ This file orients future Claude Code instances working in this repository. It ca
 
 ## Repository state
 
-Pre-implementation. The repository contains:
+**Implemented.** All seven plans in `.claude/context/plans.xml` are `closed`; the plugin builds (`bun run build` → `out/scholar.plugin`, ~2.8–2.9 MB) and the test suite is green (`bun test src tests`). The repository contains:
 
 - `docs/superpowers/specs/2026-05-22-scholar-plugin-design.md` — the design spec (1.3k lines, frozen by the four-session 2026-05-22 reconciliation pass).
+- `docs/superpowers/specs/2026-06-01-slim-plugin-pivot.md` — the packaging pivot (self-contained `--compile` binary → slim provisioned-runtime bundle).
 - `docs/superpowers/specs/2026-05-22-scholar-plugin-splits.xml` — the plan-split derivation that maps §6 cycles to seven plans (foundation → corpus → {ingest, extraction, annotations} → frontends → packaging).
-- `.claude/context/plans.xml` — the spec-pipeline plan registry (one plan-group, seven children).
-- `.claude/context/chores.xml` — the spec-pipeline chore registry (three seeded cross-cutting chores).
+- `.claude/context/plans.xml` — the spec-pipeline plan registry (one plan-group, seven children, all closed).
+- `.claude/context/chores.xml` — the spec-pipeline chore registry (all closed; one governance-tooling item dropped — see `HUMAN.md`).
+- `src/` — the implemented server, tool modules, db layer, ingest adapters, pdf lifecycle, Ollama client, and React UI sources.
+- `bin/` + `dist/` — the slim-plugin launcher/provisioner scripts (`launch.{sh,cmd}`, `ensure-bun.{sh,ps1}`, `scholar.nu`) and the built `server.js` + `pdf-server/` bundles.
+- `docs/audits/` — the production-readiness roadmap (S/H/M batches) and the `2026-06-02-maintenance-readiness.md` assessment.
 
-Foundation cycle 6.1 is the first plan to execute; it creates `src/`, `package.json`, `tsconfig.json`, `drizzle.config.ts`, the plugin manifest, `.mcp.json`, and the full module skeleton (stubs for every later-plan-owned file). Until then, the only sources of truth are the spec, splits.xml, plans.xml, and chores.xml.
+The remaining gates before reliable day-to-day use are **operational**, not code: the Ollama models must be installed and a live end-to-end workflow must be exercised. Both are tracked in `HUMAN.md` (repo root) and `docs/runbooks/e2e-smoke-test.md`.
 
 ## Workflow
 
-Plan authoring and execution go through the `spec-pipeline` skill. The next step from the current state is `spec-pipeline:spec-to-multi-plan`, which reads the spec + splits.xml and writes one `docs/superpowers/plans/<plan-id>.md` per plan, then sets each plan's `plan-md` attribute in `plans.xml`. Plan execution is the `exec-plan` (single-plan) or `exec-multi-plan` (concurrent wave) workflow; cycles run TDD inside each plan.
+Plan authoring and execution went through the `spec-pipeline` skill (`spec-to-multi-plan` → `exec-plan` / `exec-multi-plan`); all seven plans are executed and closed, so the project is in **maintenance mode**. Future plan-shaped work re-enters that pipeline; cycles run TDD (`bun test`, tests live next to source as `*.test.ts`).
 
 Chores are cross-cutting work that doesn't belong to any single §6 cycle (license audit, CI setup, re-vendor process). Add new chores through the spec-pipeline scope-maintenance protocol — not by editing chores.xml directly mid-task.
 
@@ -29,7 +33,7 @@ Chores are cross-cutting work that doesn't belong to any single §6 cycle (licen
 - **scholar MCP server** — Bun + `bun:sqlite` + `drizzle-orm/bun-sqlite` + `sqlite-vec`, shipped as a `bun build --target=bun` bundle (`dist/server.js`, ~2.5 MB, **not** `--compile`). The `bun` runtime is **provisioned** into `${CLAUDE_PLUGIN_DATA}` by `bin/ensure-bun` at first launch (pinned to `scholar.bundledBunVersion` for the vec0 ABI), not shipped. A shell launcher (`bin/launch.{sh,cmd}`, manifest command `/bin/sh` | `cmd.exe`) provisions-then-runs the server (M2 — SessionStart does not block MCP spawn). Exposes corpus, ingestion, annotation, digest, prompts, search, and UI-resource tools. Spawns the pdf MCP as a child.
 - **pdf MCP** — `@modelcontextprotocol/server-pdf@1.7.2`. The vendored `src/vendor/pdf-server/` tree stays in-repo **unmodified** as the §16 `.d.ts` truth source and dev fallback. For packaging it is mechanically **rebundled standalone** (`bun build --target=bun` inlines pdfjs-dist) to `dist/pdf-server/index.js` + `mcp-app.html` — no source patch. `resolveChildEntrypoint` (`src/server/pdf/lifecycle.ts`) prefers `SCHOLAR_PDF_ENTRYPOINT` → shipped `dist/pdf-server/` → vendored dev fallback. Root injection rides the standard MCP `roots/list` + `notifications/roots/list_changed` protocol; scholar implements the client-side responder in `lifecycle.ts`.
 - **single-file UI bundle** — React, built by Bun's HTML bundler (`bun build src/ui/index.html --target=browser`, no vite). Five views: corpus dashboard, paper detail, digest panel, reading prompts, reader progress.
-- **nu CLI module** — `nu/scholar.nu`, user-facing wrapper that calls scholar MCP tools and shapes responses into nu tables.
+- **nu CLI module** — `bin/scholar.nu`, user-facing wrapper that calls scholar MCP tools and shapes responses into nu tables.
 - **sqlite3-mcp delegation** — query/backup/pack surfaces are delegated; scholar calls `register_db` per corpus and does **not** reimplement those tools.
 - **Ollama (local)** — embeddings (`nomic-embed-text:v1.5` default) and chat (`qwen3:8b` default). The `cowork.askClaude` host fallback is opt-in per request.
 

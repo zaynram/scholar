@@ -1,5 +1,5 @@
 ---
-name: scholar-workflow
+name: workflow
 description: Guides usage of scholar plugin surfaces for literature review sessions — UI views, CLI subcommands, and slash commands.
 ---
 
@@ -29,5 +29,5 @@ Scholar exposes three concentric surface layers — all backed by the same `scho
 ## Where to look next
 
 - Spec: `docs/superpowers/specs/2026-05-22-scholar-plugin-design.md` (§9 view contracts, §11 askClaude sentinel, §13 annotation reconciler)
-- nu module: `nu/scholar.nu` (transport + exported subcommands)
-- Slash commands: `commands/{ingest,digest,status}.md`
+- nu module: `bin/scholar.nu` (transport + exported subcommands)
+- User-invocable skills: `skills/{ingest,digest,status}/SKILL.md` (the `/scholar:*` slash surfaces)

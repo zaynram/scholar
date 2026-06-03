@@ -29,6 +29,21 @@ Routes to one of
 `scholar.ingest.doi`, `scholar.ingest.arxiv`, `scholar.ingest.bibtex`, or `scholar.ingest.ris`
 based on the supplied flag.
 
-All metadata is sanitized at the ingestion boundary
-(`sanitizeText`, `wrapUntrusted`, `encodeDoi`, `validateArxivId`).
-Duplicate DOI / arXiv entries UPSERT (not re-insert).
+| Source | Tool | CLI | Slash |
+|---|---|---|---|
+| BibTeX file | `scholar.ingest.bibtex` | `scholar ingest --bibtex <path>` | `/scholar:ingest --bibtex <path>` |
+| RIS file | `scholar.ingest.ris` | `scholar ingest --ris <path>` | `/scholar:ingest --ris <path>` |
+| CrossRef DOI | `scholar.ingest.doi` | `scholar ingest --doi <doi>` | `/scholar:ingest --doi <doi>` |
+| arXiv ID/URL | `scholar.ingest.arxiv` | `scholar ingest --arxiv <id>` | `/scholar:ingest --arxiv <id>` |
+
+## Discipline
+
+- **Sanitization at the boundary.** All metadata routes through `sanitizeText` + `wrapUntrusted` + `encodeDoi` + `validateArxivId` (§12.0 primitives — invariant in CLAUDE.md). Untrusted strings are NEVER concatenated into prompts/paths/URLs.
+- **Idempotent UPSERTs.** Duplicate DOI / arXiv ID re-ingestions UPDATE the existing row; they do not insert a duplicate.
+- **Citations.** CrossRef ingestion follows `references-doi` links to build the citation graph; arXiv's metadata fills in where CrossRef doesn't.
+- **PDF extraction is a follow-on step.** After ingestion, run `scholar.pdf.refresh-extraction` to chunk + embed (semantic-search readiness; `still_indexing` pill on the dashboard until done).
+
+## Where to look next
+
+- Spec: `docs/superpowers/specs/2026-05-22-scholar-plugin-design.md` §6.4 (ingest contracts), §12.0 (primitives), §12.1 (allow-list legs).
+- Tool code: `src/server/tools/ingest.ts` + `src/server/ingest/{bibtex,ris,doi,arxiv,primitives}.ts`.
