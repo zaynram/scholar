@@ -1,4 +1,5 @@
 #!/usr/bin/env -S nu --stdin
+# nu-lint-ignore-file: check_typed_flag_before_use
 # Usage: nu scholar.nu
 const SELF = path self
 
@@ -19,7 +20,6 @@ def --wrapped "safe extract" [
 # The pinned bun whose bun:sqlite ABI matches the vendored vec0 build. Keep in
 # sync with package.json `scholar.bundledBunVersion` and bin/ensure-bun.sh PIN.
 const BUN_PIN = '1.3.11'
-
 # Resolve the bun runtime that runs dist/server.js. Mirrors the server-side seam
 # in src/server/pdf/lifecycle.ts `resolveBunRuntime` (SCHOLAR_BUN_PATH) plus the
 # provisioned-runtime path the shell launcher uses. Order:
@@ -30,48 +30,37 @@ const BUN_PIN = '1.3.11'
 #      bun:sqlite version differs from the pin can fail to load vec0. This is the
 #      item-4 edge — a nu repoint with CLAUDE_PLUGIN_DATA unset previously fell
 #      through here silently, giving no signal that the ABI was unpinned.
-def resolve-bun []: nothing -> string {
-  if ('SCHOLAR_BUN_PATH' in $env) and ($env.SCHOLAR_BUN_PATH | is-not-empty) {
-    return $env.SCHOLAR_BUN_PATH
-  }
-  let provisioned = ($env.CLAUDE_PLUGIN_DATA? | default '' | path join 'bun' 'bun')
-  if ($provisioned | path exists) { return $provisioned }
-  let ver = (try { ^bun --version | str trim } catch { 'absent' })
-  if $ver != $BUN_PIN {
-    print --stderr $"scholar: using PATH bun ($ver), not pinned ($BUN_PIN) — vec0 may fail to load. Set CLAUDE_PLUGIN_DATA / SCHOLAR_BUN_PATH / SCHOLAR_SERVER_CMD to pin the runtime."
-  }
-  'bun'
-}
-
-# Resolve the M2 server invocation. The slim-plugin pivot (2026-06-01) dropped
-# the compiled `mcp-scholar` binary; scholar now runs as `bun dist/server.js`,
-# dispatched in CLI mode via `--call <tool> <json>` (see src/server/index.ts).
-# SCHOLAR_SERVER_CMD short-circuits the whole resolution (test/operator escape
-# hatch); otherwise the bundle is located relative to this module
-# (bin/scholar.nu → plugin root) and run under `resolve-bun`.
-def server-cmd []: nothing -> list<string> {
+def server-cmd []: nothing -> closure {
   if 'SCHOLAR_SERVER_CMD' in $env {
-    return ($env.SCHOLAR_SERVER_CMD | split row ' ' | where {|t| $t | is-not-empty })
+    let parts = (
+      $env.SCHOLAR_SERVER_CMD
+      | split row ' '
+      | where ($it | is-not-empty)
+    )
+    return {|...rest: string|
+      run-external ...$parts `--call` ...$rest | complete
+    }
   }
   let root = ($SELF | path dirname | path dirname)
-  [(resolve-bun) ($root | path join 'dist' 'server.js')]
+  let server_js = $root | path join dist server.js
+  {|...rest: string|
+    bunx $'bun@($BUN_PIN)' run $server_js --call ...$rest | complete
+  }
 }
 
 # Wrapper for the scholar MCP server (M2: `bun dist/server.js --call`).
 def main [
   tool?: string # The name of the tool to call on the server
-  --json: oneof<record, string> # Parameters to pass through to the tool call
+  --json: oneof<record, string> = {} # Parameters to pass through to the tool call
 ]: oneof<record, string, nothing> -> oneof<string, record, table, nothing> {
   if $tool == null { print --stderr 'tool name is required' | return }
-  let args = $in | default $json | default {}
-  let payload = if ($args | describe) == 'string' { $args } else { $args | to json --raw }
-  let cmd = (server-cmd)
-  let output = run-external ($cmd | first) ...($cmd | skip 1) '--call' $tool $payload
-    | complete
+  let args = $in | default $json
+  let payload = if ($args | describe) == string { $args } else { $args | to json --raw }
+  let output = do (server-cmd) $tool $payload
     | default 0 exit_code
     | default '{}' stdout stderr
   let text = if ($output.exit_code) == 0 { $output.stdout } else { $output.stderr }
-  try { $text | str trim | to json --raw } catch { $text }
+  try { $text | str trim | from json } catch { $text }
 }
 
 # List papers in the active corpus (uses ctx.db snapshot — no corpus_id arg).
@@ -82,7 +71,8 @@ def "main list" [
   let res = {q: $query limit: $limit} | main papers.search
   if ($res | describe) == string { return $res }
   if ($res.still_indexing? | default false) {
-    print "note: semantic index still building; results are lexical only"
+    "note: semantic index still building; results are lexical only"
+    | print --stderr $in
   }
   $res.hits? | default [] | select id title score
 }
@@ -98,28 +88,22 @@ def "main status" [
 # Ingest papers from BibTeX/RIS/DOI/arXiv.
 # Routes to scholar.ingest.{bibtex,ris,doi,arxiv}.
 def "main ingest" [
-  corpus: string # The identifier of the corpus to ingest papers into
   --bibtex: string # Path to a BibTeX paper to ingest
-  --ris: string # Path to a RIS paper to ingest
   --doi: string # Direct DOI of a paper to ingest
   --arxiv: string # arXiv identifier of a paper to ingest
 ]: nothing -> oneof<table, string> {
   if ($bibtex | is-not-empty) {
-    {file_path: $bibtex corpus_id: $corpus}
+    {filePath: $bibtex}
     | main scholar.ingest.bibtex
     | safe extract imported
-  } else if ($ris | is-not-empty) {
-    {file_path: $ris corpus_id: $corpus}
-    | main scholar.ingest.ris
-    | safe extract imported
   } else if ($doi | is-not-empty) {
-    {doi: $doi corpus_id: $corpus}
+    {doi: $doi}
     | main scholar.ingest.doi
   } else if ($arxiv | is-not-empty) {
-    {arxiv_id: $arxiv corpus_id: $corpus}
+    {id: $arxiv}
     | main scholar.ingest.arxiv
   } else {
-    error make "one of `--bibtex`, `--ris`, `--doi`, `--arxiv` is required"
+    error make "one of `--bibtex`, `--doi`, `--arxiv` is required"
   }
 }
 
