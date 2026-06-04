@@ -26,7 +26,7 @@ Receipts are `file:line` from direct reads, not memory.
 
 | # | Invariant (source) | Status | Receipt |
 |---|---|---|---|
-| 1 | §12.0 primitives at every untrusted boundary | enforced-in-code (use) + convention (coverage) | `ingest/primitives.ts` exports `sanitizeText:33`, `wrapUntrusted:62`, `resolveUnderRoot:75`, `encodeDoi:107`, `validateArxivId:116` (+`loadVecAndProbeDim`,`initOnce`); 7 import sites. *Full boundary coverage is not statically proven.* |
+| 1 | §12.0 primitives at every untrusted boundary | **was `enforced-in-code (use) + convention (coverage)` → now enforced-in-test (coverage)** | Primitives unit-proven against hostile input (`primitives.test.ts`: bidi/tag-block reject, parent-traversal + symlink `PathEscapeError`, malformed DOI/arXiv reject). Boundaries proven to *fire* the primitive: ingest (`ingest.test.ts:168/176/184` → `PathEscapeError`/`InvalidDoiError`/`InvalidArxivIdError`), digest/prompts nonce envelope (`digest.test.ts:84-99,119`, `prompts.test.ts:105`), annotations body+anchor (`annotations.test.ts:461,476` → bidi-override rejected before write/push). `papers.search` SQL-binding pinned behaviorally (`papers.test.ts` "SQL-injection safety"). Per-module classification of the no-primitive boundaries in Δ6. |
 | 2 | §7.6 `ctx.db` snapshot-at-entry | **enforced-in-test** + code | `index.test.ts:52` "ServerContext.withCorpus snapshots ctx.db at entry"; pervasive `const _db = ctx.db` across all tool modules; `corpus.activate` mutates in place (`corpus.ts:342`). |
 | 3 | §7.6 frozen contracts (`ServerContext`/`PdfChild`/…) pinned for v1 | convention-only | No automated guard. Honored. *This pass declined to add a `ServerContext` field (INV-3 fix) precisely to respect this freeze.* |
 | 4 | Per-corpus DB + `PRAGMA foreign_keys=ON` per connection | **enforced-in-test** (strong) | `openWithPragmas`; `migrations.test.ts` pins "sets PRAGMA foreign_keys = ON on every open" **and** "applyMigrations refuses to run when PRAGMA foreign_keys is OFF". |
@@ -74,6 +74,21 @@ Receipts are `file:line` from direct reads, not memory.
 - **INV-9 (`raw-ddl.ts`):** confirmed `chunk_vec` (deferred vec0 virtual table) and `reading_queue` (view) are owned by `raw-ddl.ts`, created via `runRawDdl(db)` which `migrations.ts:65-66` invokes **after** Drizzle `migrate()`; `schema.ts:127,267` annotates both as "NOT Drizzle". Enforced-in-code (sole creation path + ordering) and in-test (`raw-ddl.test.ts`: vec0 ABI smoke, chunk_vec materialization, M4/A1 settings-desync invariant errors).
 - **INV-10 (Ollama default / askClaude opt-in):** confirmed `digest.ts:128` and `prompts.ts:120` take the local Ollama path (`ollama.chat(DEFAULT_CHAT_MODEL)` = qwen3:8b) unless `use_claude === true`, which only returns a sentinel for the host to forward — scholar never calls Claude itself. Embeddings default to `ollama.embed(DEFAULT_EMBED_MODEL)` (nomic-embed-text:v1.5). Enforced-in-test (`digest.test.ts`, `prompts.test.ts`, `client.test.ts`).
 
+### Δ6 — INV-1 §12.0 boundary coverage verified + behaviorally pinned (was the last convention-only row)
+- **Reframing (load-bearing).** "Every boundary routes through a §12.0 primitive" is the *wrong* invariant — and a naive check enforcing it would be the exact bluffing test this audit exists to kill. Parameterized SQL binding is the §12.0-sanctioned no-primitive path (CLAUDE.md §12.0 forbids "bare string concatenation into prompts, paths, or HTTP requests" — bound `?` values are not concatenation). So the honest coverage claim is **per-module, justified by what the untrusted input flows into**, not by "imports a primitive".
+- **Boundaries that DO use a primitive — enforced-in-test:**
+  - **ingest** (`ingest.ts`): `validateArxivId` / `encodeDoi` / `resolveUnderRoot` on arXiv id, DOI, pdfPath. Proven to fire: `ingest.test.ts:168` (PathEscapeError, pdf outside roots), `:176` (InvalidDoiError), `:184` (InvalidArxivIdError).
+  - **digest / prompts** (`digest.ts`, `prompts.ts`): `sanitizeText` + `wrapUntrusted` wrap paper title/abstract in a per-request nonce envelope before the LLM. Proven: `digest.test.ts:84-99` (user msg carries `<untrusted_data id="…">`, system prompt carries the §12.0 clause), `:119` (askClaude path also wrapped), `prompts.test.ts:105`.
+  - **annotations** (`annotations.ts`): `sanitizeText` on user-supplied body **and** anchor (`:197-198`); proven in-test — `annotations.test.ts:461` (body bidi-override U+202E rejected *before* DB write or `pdf.interact`) and `:476` (anchor bidi-override rejected).
+  - The primitives themselves are unit-proven against hostile input in `primitives.test.ts` (U+202E bidi + Unicode-tag-block rejection, NFC normalize, length cap; parent-traversal + symlink-leaf + missing-root `PathEscapeError`; malformed DOI/arXiv rejection).
+- **Boundaries that correctly use NO primitive — justified per module:**
+  - **papers** (`papers.ts`): untrusted `q` → `%${q}%` **bound via `?`** (`:101`,`:107`); the dynamic `UPDATE` SET clause is built from a **fixed column-token enum**, values bound via `?` (`:190-216`, comment `:214-215`). Injection is defused by binding, not a primitive. **Now pinned behaviorally** — `papers.test.ts` "SQL-injection safety": a `'; DROP TABLE papers; --` query is matched as a *literal substring* (the load-bearing assertion — a refactor to interpolation closes the string literal early and turns it red), plus a weaker assertion that the table survives (which guards a future switch to a multi-statement exec path).
+  - **roots** (`roots.ts`): the `path` arg is a **user-designated** corpus root (trusted by definition — the user is naming their own filesystem location), stored via parameterized SQL (`:45` drizzle tagged-template; `:65-70` `?` binds). Traversal *within* a root is confined later, at read-time, by `resolveUnderRoot` in the ingest boundary.
+  - **snapshot** (`snapshot.ts`): all values flow through parameterized SQL (`:68-69` `INSERT … VALUES (?, ?, ?, ?)`); no path / prompt / HTTP sink.
+  - **inspect** (`inspect.ts`): read-only schema introspection — `z.object({}).passthrough()` (`:67`) over static `sqlite_master` SELECTs (`:42-49`); takes no untrusted input that reaches a sink.
+- **Ratchet deliberately NOT added.** A "new tool module must import a primitive" structural check was considered and rejected: it catches only a *new unclassified module*, not the realistic regression (a new unsafe sink added to an *already-classified* module — e.g. string-built SQL appearing in `papers.ts` later). That failure mode is caught instead by the behavioral binding test above. A structural ratchet would add the *appearance* of enforcement without its substance — the precise thing this audit exists to remove.
+- **No source change to the boundaries** — investigation found no real §12.0 defect; the only code added is the one behavioral regression test (`papers.test.ts`).
+
 ---
 
 ## Surfaced follow-ups (NOT actioned)
@@ -84,6 +99,8 @@ Receipts are `file:line` from direct reads, not memory.
 ---
 
 ## Next rows to grind
-INV-1 §12.0 coverage: a static/test check that every `papers/inspect/ingest` boundary actually routes through a §12.0 primitive (currently convention-only — the one remaining "honored by discipline, nothing checks it" row).
+All ten matrix rows are now classified at `enforced-*` or justified `convention-only`. Remaining deliberate work:
+- **§7.6 unfreeze (row 3):** thread `runtimeRoot` through `ServerContext` so handlers stop calling `resolveRuntimeRoot()` directly — the "real" fix deferred in Δ2 as out-of-maintenance-authority. Mutates a frozen §7.6 contract, so it needs a deliberate spec unfreeze; selected as the next thread.
+- **F3:** pid-reuse residual — accepted/documented (above), not selected.
 
-*(INV-8 done — Δ4; INV-9, INV-10 done — Δ5.)*
+*(INV-8 done — Δ4; INV-9, INV-10 done — Δ5; INV-1 §12.0 done — Δ6.)*

@@ -250,6 +250,45 @@ test("hybrid search: respects limit parameter (default 20)", async () => {
   expect(r2.hits.length).toBeLessThanOrEqual(5)
 })
 
+// §12.0 boundary check (papers.search). The untrusted `q` becomes `%${q}%`
+// (papers.ts:101) and is bound via `?` (papers.ts:107) — it is DATA, never
+// concatenated into SQL.
+//
+// The load-bearing tripwire is assertion 1 (literal-match). If `q` were
+// interpolated into the SQL string instead of bound, the `'` in the payload
+// closes the string literal early → prepare() throws, or the truncated
+// `LIKE '%'` matches everything (→ ["p1","p2"]); either way assertion 1 goes
+// red. Assertion 2 (table survives) is a *weaker* guard: under a `.prepare()`
+// interpolation bug SQLite compiles only the first statement and the trailing
+// `DROP` sits unparsed, so the table survives anyway — assertion 2 only
+// discriminates a switch to a multi-statement exec path (e.g. `.exec()`) on
+// interpolated SQL. (`%`/`_` ARE LIKE wildcards even when bound — that is LIKE
+// semantics, not injection; the threat is breaking OUT of the literal, which
+// the `'`/`;`/`--` payload exercises.)
+test("papers.search: untrusted query is bound, not interpolated (§12.0 SQL-injection safety)", async () => {
+  const sqlite = seededDb({ deferred: true }) // lexical-only path: no vec setup needed
+  const payload = `'; DROP TABLE papers; --`
+  const ins = sqlite.prepare(
+    `INSERT INTO papers(id,key,title,imported_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')`,
+  )
+  ins.run("p1", "k1", "Attention is all you need")
+  ins.run("p2", "k2", `paper about ${payload} syntax`) // title literally contains the payload
+
+  // 1) Tripwire — literal-match semantics: the metacharacter payload is matched
+  //    as a plain substring (binding treats it as data) → finds p2, not p1.
+  //    Interpolation breaks this assertion.
+  const hit = await searchPapers(fakeCtx(sqlite), { q: payload })
+  expect(hit.hits.map((h) => h.id)).toEqual(["p2"])
+
+  // 2) Weaker guard: the table survives the `DROP TABLE` payload. This holds
+  //    even under a `.prepare()` interpolation bug (trailing statement left
+  //    unparsed); it only fails if the SQL moves to a multi-statement exec.
+  const count = (
+    sqlite.query("SELECT COUNT(*) AS n FROM papers").get() as { n: number }
+  ).n
+  expect(count).toBe(2)
+})
+
 test("scholar.papers.update: status flip bumps status_touched_at; reading_queue reorders", async () => {
   const sqlite = seededDb()
   sqlite.run(`INSERT INTO papers(id,key,title,imported_at) VALUES
