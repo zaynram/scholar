@@ -33,7 +33,7 @@ Receipts are `file:line` from direct reads, not memory.
 | 5 | Single active session — flock on `runtime/scholar.lock`, `SCHOLAR_LOCKED` refusal | **was `documented-unimplemented` → now enforced-in-test + real-artifact** | Implemented this pass: `session-lock.ts`; `session-lock.test.ts` (5 cases); two real `bun run … index.ts` servers proven (see below). *Mechanism changed from flock → pidfile; see Δ1.* Release is no longer signal-dependent — the F1 graceful-shutdown fix (Δ3) releases on stdin EOF too, closing the host-shutdown-mode hazard the first pass surfaced. |
 | 6 | Single runtime-root source of truth | **was `convention-only` → now enforced-by-construction** | `main()` now delegates to `resolveRuntimeRoot()` (`index.ts`), the same resolver handlers use. See Δ2. |
 | 7 | No downstream `bun add` / `package.json` edit | convention-only | Honored. The lock impl used only `node:fs` — no new dep. |
-| 8 | §13 annotation reconciliation — no `await` inside `db.transaction` closure | **unverified** | `annotations.ts` has *no literal* `transaction(` token. Either the phase-3 write is structured via a different helper or is absent. See F2. |
+| 8 | §13 annotation discipline — no pdf round-trip inside a write-lock window | **was `unverified` → now enforced-by-construction + enforced-in-test** | The v1.0 `db.transaction` reconciler was **retired** (2026-05-27 §13 v1.1 amendment; `server-pdf@1.7.2` has no enumeration verb). v1.1 is write-then-push: `handleUpsert`/`handleDelete` (`annotations.ts`) do read-check → **no await** → single-statement `.run()` write → `await pdf.interact` (push *after* commit). Single-threaded loop + no-await-between-read-and-write ⇒ effectively atomic; no transaction window exists to hold across a round-trip. Tests: `annotations.test.ts` write-then-push ordering for upsert (`:202`) and delete (`:321`) + dirty-row failure-safety (`:280`). See F2 resolution (Δ4). |
 | 9 | `raw-ddl.ts` for non-Drizzle objects (`chunk_vec`, `reading_queue`) | unverified | Not inspected this pass. |
 | 10 | Mechanical LLM → local Ollama default; `askClaude` opt-in only | unverified | Not inspected this pass. |
 
@@ -64,12 +64,15 @@ Receipts are `file:line` from direct reads, not memory.
   - `sleep N | bun src/server/index.ts` (faithful EOF-mid-session): **exit 0 in ~2.0s** (pre-fix: 25s+ → `timeout` exit 124); lock file removed; real pdf child (`bun run dist/pdf-server/index.js --stdio`) **reaped dead**, no `--stdio` survivors.
   - SIGTERM path (stdin held open via FIFO to isolate it): **exit 0**, lock removed, pdf child reaped.
 
+### Δ4 — F2: §13 INV-8 verified (was "unverified"); CLAUDE.md corrected
+- **Finding:** the audit's worry ("no literal `transaction(` token") was correct but benign — the `db.transaction` reconciler was **retired** in the 2026-05-27 §13 v1.1 amendment (spec §13 lines 1186–1192; `server-pdf@1.7.2` exposes no enumeration verb). v1.1 is **write-then-push**, a *stronger* guarantee than "no awaits inside the txn": there is no transaction window at all. `handleUpsert`/`handleDelete` do read-check → **no await** → single-statement `.run()` → `await pdf.interact` (push after commit). On the single-threaded loop the await-free read→write window is effectively atomic (no TOCTOU), and concurrent `annotations.list` (a pure sync read) never contends with an open write lock.
+- **Enforcement:** by-construction (no `db.transaction`; single-statement writes) **and** in-test — `annotations.test.ts` snapshots DB state inside the `interact` mock to prove the write committed before the push, for both upsert (`:202`) and delete (`:321`), plus a dirty-row-persists-on-push-throw failure-safety case (`:280`). All 24 annotations tests green.
+- **Doc fix:** CLAUDE.md §13 invariant rewritten (it had described the retired v1.0 `db.transaction` model — same "documented invariant describes dead code" shape as the earlier flock→pidfile correction). Also synced the INV-1 line: the lock now releases on stdin EOF too (F1/Δ3), so the prior "stdin-EOF-hung holder" caveat no longer applies — only a hard SIGKILL leaves a reclaimable file.
+- **No code change** — the implementation was already correct.
+
 ---
 
 ## Surfaced follow-ups (NOT actioned)
-
-### F2 — §13 no-awaits-in-txn (INV-8) unverified
-- `annotations.ts` has no literal `transaction(` token. Confirm how the §13 phase-3 write is structured (different helper? absent?) before trusting the "no awaits inside the write-lock window" guarantee that concurrent `annotations.list` correctness depends on.
 
 ### F3 — pid-reuse residual hazard (mitigated, documented)
 - A dead holder's pid recycled to an unrelated live process reads as "alive" → false `SCHOLAR_LOCKED`. Inherent to pidfile locking. Mitigated by the self-rescuing error message. Documented in `session-lock.ts`.
