@@ -219,6 +219,11 @@ export function buildServer(deps: BuildServerDeps): BuiltServer {
   const ctx: ServerContext = {
     db: undefined,
     configDb,
+    // §7.6 maintenance amendment (2026-06-04): single source of truth for the
+    // runtime root. main() resolves it once via resolveRuntimeRoot() and passes
+    // it as deps.runtimeRoot; corpus handlers read ctx.runtimeRoot instead of
+    // re-resolving per-call. See registry.ts ServerContext + audit Δ7.
+    runtimeRoot: deps.runtimeRoot,
     pdf,
     // §13 v1.1: process-local paper_id → viewUUID map. Populated by
     // scholar.pdf.open; consumed by annotations.{upsert,delete} and
@@ -456,11 +461,12 @@ async function runCli(
 
 /** Entry point for the compiled binary (bun build --compile) and `bun run`. */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  // Single source of truth (INV-3): delegate to the same resolver the corpus
-  // handlers use, so the config DB (buildServer deps.runtimeRoot) and the corpus
-  // DBs (handlers via resolveRuntimeRoot) can never resolve to different roots.
-  // The previous inline computation was byte-identical but a second, drift-prone
-  // source.
+  // Single source of truth (INV-3): resolveRuntimeRoot() runs HERE, exactly
+  // once per process. The value flows to buildServer as deps.runtimeRoot, which
+  // captures it on ctx.runtimeRoot; corpus handlers read ctx.runtimeRoot (§7.6
+  // amendment 2026-06-04, audit Δ7) rather than re-resolving. So the config DB
+  // and the per-corpus DBs can never resolve to different roots, and there is no
+  // second, drift-prone resolution site.
   const runtimeRoot = resolveRuntimeRoot();
   const parsed = parseEntryArgv(argv);
   if (parsed.mode === "cli") {

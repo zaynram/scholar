@@ -5,8 +5,9 @@
 //
 // Design notes:
 //   - Every handler snapshots ctx.db on its first line (§7.6 invariant #3).
-//   - Slot keys include resolveRuntimeRoot() so test-isolated tmpDirs produce
-//     distinct slot namespaces even within the same module-level Map.
+//   - Slot keys include the runtime root (ctx.runtimeRoot, threaded in via the
+//     §7.6 2026-06-04 amendment) so test-isolated tmpDirs produce distinct slot
+//     namespaces even within the same module-level Map.
 //   - corpus.create uses a fire-and-clear slot (clears after factory settles) to
 //     allow subsequent creates for the same slug without server restart.
 //   - corpus.activate uses a retain-on-success slot (cleared only by reset-init)
@@ -198,7 +199,10 @@ function openCorpusDb(slug: string, runtimeRoot: string): BunSQLiteDatabase {
  */
 export function reopenPersistedCorpus(
   ctx: ServerContext,
-  runtimeRoot: string = resolveRuntimeRoot(),
+  // §7.6 amendment (2026-06-04): default to ctx.runtimeRoot, not a fresh
+  // resolveRuntimeRoot() — keeps the rehydrate path on the single resolution
+  // source. The sole production caller (index.ts) still passes it explicitly.
+  runtimeRoot: string = ctx.runtimeRoot,
 ): string | undefined {
   if (ctx.db) return ctx.config.activeCorpusId(); // already open (defensive; runCli never hits this)
   const slug = ctx.config.activeCorpusId();
@@ -256,7 +260,7 @@ async function handleCreate(args: unknown, ctx: ServerContext): Promise<unknown>
 
   validateSlug(slug);
   const sanitized = sanitizeDisplayName(display_name, slug, ctx.log);
-  const runtimeRoot = resolveRuntimeRoot();
+  const runtimeRoot = ctx.runtimeRoot;
 
   await withCreateLock(slug, runtimeRoot, async () => {
     const dbPath = corpusDbPath(slug, runtimeRoot);
@@ -321,7 +325,7 @@ async function handleActivate(args: unknown, ctx: ServerContext): Promise<unknow
   if (!row) throw new CorpusError("CORPUS_NOT_FOUND", `Corpus not found: "${slug}"`);
   if (row.archived_at) throw new CorpusError("CORPUS_ARCHIVED", `Corpus is archived: "${slug}"`);
 
-  const runtimeRoot = resolveRuntimeRoot();
+  const runtimeRoot = ctx.runtimeRoot;
 
   await withActivateLock(slug, runtimeRoot, async () => {
     // I2 race fix: re-read archived_at INSIDE the factory to close the
@@ -385,7 +389,7 @@ async function handleArchive(args: unknown, ctx: ServerContext): Promise<unknown
   );
 
   // If this corpus is currently active, clear in-memory state + config.json.
-  const runtimeRoot = resolveRuntimeRoot();
+  const runtimeRoot = ctx.runtimeRoot;
   if (ctx.config.activeCorpusId() === slug) {
     ctx.db = undefined;  // in-memory clear
     ctx.config.set("activeCorpusId", null);
@@ -438,7 +442,7 @@ async function handleExport(args: unknown, ctx: ServerContext): Promise<unknown>
   const row = ctx.config.corpora().find(c => c.id === slug);
   if (!row) throw new CorpusError("CORPUS_NOT_FOUND", `Corpus not found: "${slug}"`);
 
-  const runtimeRoot = resolveRuntimeRoot();
+  const runtimeRoot = ctx.runtimeRoot;
   const src = corpusDbPath(slug, runtimeRoot);
   if (!existsSync(src)) {
     throw new CorpusError("CORPUS_DB_MISSING", `Per-corpus DB not found at ${src}`);
@@ -471,7 +475,7 @@ async function handleExport(args: unknown, ctx: ServerContext): Promise<unknown>
 async function handleResetInit(args: unknown, ctx: ServerContext): Promise<unknown> {
   const _db = ctx.db; // snapshot at entry
   const { slug } = args as { slug: string };
-  const runtimeRoot = resolveRuntimeRoot();
+  const runtimeRoot = ctx.runtimeRoot;
   clearActivateSlot(slug, runtimeRoot);
   ctx.log.info("corpus.reset-init: cleared activation slot", { slug });
   return { slug, reset: true };

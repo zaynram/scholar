@@ -634,6 +634,7 @@ interface ConfigAccessor {
 interface ServerContext {
   db: BunSQLiteDatabase | undefined;  // active per-corpus Drizzle db; undefined until a corpus is active
   configDb: BunSQLiteDatabase;        // scholar-config.db
+  runtimeRoot: string;                // 2026-06-04 maintenance amendment (see note below) — single runtime-root source
   pdf: PdfChild;
   // Process-local paper_id → viewUUID map. Populated by scholar.pdf.open
   // (which calls vendor display_pdf and registers the returned viewUUID
@@ -656,6 +657,33 @@ function registerTools(server: McpServer, ctx: ServerContext): void;
 // immediately after Drizzle migrations at corpus-open (§7.3 step 4).
 function runRawDdl(db: BunSQLiteDatabase): void;
 ```
+
+**`ServerContext.runtimeRoot` — maintenance amendment (2026-06-04).** The
+`runtimeRoot: string` field above was **not** present in the frozen v1 contract;
+it was added after all seven plans closed. This is a deliberate spec edit under
+the project's "spec is the source of truth — spec wins until a deliberate spec
+edit lands" rule, and it is recorded here so the contract and the code agree.
+
+It must not be read as something the v1 freeze permitted. The freeze (and the
+"a downstream plan that needs more threads it through `ServerContext`, never by
+editing `registry.ts`" clause above) **barred** exactly this edit *during plan
+execution*, because that clause governs downstream plans consuming what
+foundation pre-provisioned — adding a field to `ServerContext` *is* editing
+`registry.ts`. What licenses the change is that the freeze's sole stated purpose
+— keeping the seven plans' blast-radii content-disjoint so `worktree="not-required"`
+held during concurrent wave-2 execution (this §7.6 opening paragraph, plus the
+§6.1 dependency pre-declaration that makes the splits-file `worktree="not-required"`
+invariant "defensible") — is fully discharged in maintenance mode: there are no
+concurrent plans left to collide. The amendment is made by the spec owner,
+outside that regime, not by a plan reaching across a seam.
+
+Payoff: it retires the dual runtime-root resolution path. Previously the corpus
+handlers each called `resolveRuntimeRoot()` (reading `process.env` per call)
+while the config DB used `buildServer`'s `deps.runtimeRoot`; a mid-session env
+change could point them at different roots. Now `resolveRuntimeRoot()` runs once
+in `main()`, flows in as `deps.runtimeRoot`, and is captured on `ctx.runtimeRoot`,
+which every corpus handler reads. See `docs/audits/2026-06-04-invariant-enforcement.md`
+Δ7 (and Δ2, which this completes).
 
 **`ctx.db` snapshot-at-entry rule.** `corpus.activate` mutates `ctx.db` in place. Every tool handler MUST snapshot `ctx.db` into a local at the very first line and read from that local for the rest of the call — re-reading `ctx.db` mid-call after an `await` would silently write to a different corpus. Foundation exposes a helper `ctx.withCorpus(fn)` that closes over the entry snapshot and passes it to `fn`; new handlers should prefer it.
 

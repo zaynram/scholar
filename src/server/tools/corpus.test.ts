@@ -343,6 +343,55 @@ test("corpus.export survives a runtime-root path containing shell metacharacters
   }
 });
 
+// ─── Δ7: handlers read ctx.runtimeRoot, NOT process.env (strong Δ2 tripwire) ──
+
+test("corpus.create writes the per-corpus DB under ctx.runtimeRoot, ignoring a divergent SCHOLAR_RUNTIME_ROOT (§7.6 amendment 2026-06-04, Δ7)", async () => {
+  // The discriminating pin for this thread's actual thesis: corpus handlers must
+  // read ctx.runtimeRoot (captured once from deps), NOT re-read the env per call.
+  // index.test.ts pins that the *ctx literal* sources from deps; THIS pins that a
+  // *handler* honors it. Make deps (A) and env (B) DISAGREE and assert the new
+  // per-corpus DB lands under A, never B. Revert any handler to
+  // resolveRuntimeRoot() → it reads B → the A-exists assertion goes red (the
+  // exact Δ2 regression). The whole suite otherwise sets env == deps, so without
+  // this test handler-reads-ctx and handler-reads-env are indistinguishable.
+  const rootA = mkdtempSync(join(tmpdir(), "scholar-ctxroot-A-"));
+  const rootB = mkdtempSync(join(tmpdir(), "scholar-ctxroot-B-"));
+  mkdirSync(join(rootA, "dbs"), { recursive: true });
+  mkdirSync(join(rootB, "dbs"), { recursive: true }); // exists so a buggy handler *succeeds* under B → clean discrimination
+  const origRoot = process.env.SCHOLAR_RUNTIME_ROOT;
+  process.env.SCHOLAR_RUNTIME_ROOT = rootB; // decoy — must NOT win
+  try {
+    const configDbA = openWithPragmas(join(rootA, "dbs", "scholar-config.db"));
+    applyMigrations(configDbA);
+    const builtA = buildServer({
+      runtimeRoot: rootA,
+      openConfigDb: () => configDbA,
+      spawnPdfChild: () => ({
+        interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+        getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+        currentRoots: () => [],
+        setRoots: async () => {},
+        displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
+        isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
+      }),
+    });
+    await builtA.dispatch("scholar.corpus.create", {
+      slug: "ctxroot",
+      display_name: "Ctx Root",
+      initial_pdf_root: rootA,
+    });
+    // Landed under deps (A) …
+    expect(existsSync(join(rootA, "dbs", "scholar-ctxroot.db"))).toBe(true);
+    // … and NOT under the divergent env (B).
+    expect(existsSync(join(rootB, "dbs", "scholar-ctxroot.db"))).toBe(false);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+    if (origRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
+    else process.env.SCHOLAR_RUNTIME_ROOT = origRoot;
+  }
+});
+
 // ─── posture-B regression guard ──────────────────────────────────────────────
 
 test("corpus handlers make no sqlite3-mcp calls (posture-B guard)", async () => {

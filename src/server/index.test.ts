@@ -50,6 +50,27 @@ test("buildServer returns an McpServer + ServerContext + dispatch triple", () =>
   expect(typeof dispatch).toBe("function");
 });
 
+test("buildServer populates ctx.runtimeRoot from deps, not from env (§7.6 maintenance amendment 2026-06-04, Δ2 single resolution path)", () => {
+  // Pins ONE link of the single-resolution chain: the ctx literal sources
+  // runtimeRoot from deps, not a fresh re-resolve. Make deps and env DISAGREE —
+  // ctx.runtimeRoot must reflect the deps value buildServer was handed (catches
+  // a regression to `runtimeRoot: resolveRuntimeRoot()` in the literal). It does
+  // NOT prove the handlers consume the field rather than re-reading env on the
+  // hot path — that discrimination lives in corpus.test.ts "writes the
+  // per-corpus DB under ctx.runtimeRoot, ignoring a divergent
+  // SCHOLAR_RUNTIME_ROOT" (the strong Δ2 tripwire). See audit Δ7.
+  const fromDeps = "/tmp/scholar-runtime-from-deps";
+  const origEnv = process.env.SCHOLAR_RUNTIME_ROOT;
+  process.env.SCHOLAR_RUNTIME_ROOT = "/tmp/scholar-runtime-from-env-SHOULD-NOT-WIN";
+  try {
+    const { ctx } = buildServer(makeDeps({ runtimeRoot: fromDeps }));
+    expect(ctx.runtimeRoot).toBe(fromDeps);
+  } finally {
+    if (origEnv === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
+    else process.env.SCHOLAR_RUNTIME_ROOT = origEnv;
+  }
+});
+
 test("ServerContext.withCorpus snapshots ctx.db at entry", async () => {
   const { ctx } = buildServer(makeDeps());
   const fakeDbA = { tag: "A" } as never;

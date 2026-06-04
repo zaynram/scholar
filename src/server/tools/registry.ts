@@ -130,6 +130,26 @@ export interface ServerContext {
    */
   db: BunSQLiteDatabase | undefined;
   configDb: BunSQLiteDatabase;
+  /**
+   * Absolute runtime-data root (per-corpus DB dir, locks, snapshots live under
+   * it). Resolved EXACTLY ONCE at process entry by `resolveRuntimeRoot()` in
+   * `main()`, handed to `buildServer` as `deps.runtimeRoot`, and captured here.
+   * Corpus handlers read `ctx.runtimeRoot` — they must NOT call
+   * `resolveRuntimeRoot()` or read `process.env.SCHOLAR_RUNTIME_ROOT` on the
+   * hot path; that dual resolution path is the hazard this field retires.
+   *
+   * §7.6 maintenance amendment (2026-06-04): the v1 spec froze ServerContext
+   * and barred downstream plans from editing it ("a downstream plan that needs
+   * more threads it through ServerContext, never by editing registry.ts"). That
+   * freeze's purpose — content-disjoint blast radii so worktree="not-required"
+   * held during 7-plan parallel execution (spec §7.6 opening + §6.1 dependency
+   * pre-declaration) — is retired now that all plans are closed (maintenance
+   * mode). This field is added by a DELIBERATE spec edit under the project's
+   * "spec wins until a deliberate spec edit lands" rule; it is not something the
+   * freeze permitted. See spec §7.6 amendment note + audit Δ7
+   * (docs/audits/2026-06-04-invariant-enforcement.md).
+   */
+  runtimeRoot: string;
   pdf: PdfChild;
   /**
    * Process-local paper_id → viewUUID map (spec §7.6 + §13 v1.1, 2026-05-27).
