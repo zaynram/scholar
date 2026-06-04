@@ -61,10 +61,14 @@ function runScript(
         .quiet()
 }
 
+// Parse-health: `--help` forces nu to parse the module and resolve `main`
+// without running a tool, and exits 0. (The old form ran the module with no
+// args, which is now a runtime error since `tool` is a required positional —
+// that asserts no-arg behavior, not that the module parses.)
 test('module parses without errors', async () =>
-    await runScript({}, 'echo ok').then(output =>
-        expect(output.text().trim()).toBe('ok')
-    ))
+    await runScript({ args: ['--help'] })
+        .text()
+        .then(text => expect(text).not.toMatch(/Error:/)))
 
 test('scholar subcommands are all defined', async () =>
     await Promise.all(
@@ -134,11 +138,20 @@ test('server-cmd resolves dist/server.js relative to the module (M2 production p
                 `writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)))`,
             ].join('\n')
         )
+        // `resolve bun` reads <root>/package.json for the pinned bundledBunVersion.
+        // Mirror the production layout (package.json beside dist/) and pin to the
+        // running bun so resolution uses PATH bun directly — exercising the real
+        // self-relative resolve js/bun branch without a bunx fetch.
+        await Bun.write(
+            join(tmp, 'package.json'),
+            JSON.stringify({ scholar: { bundledBunVersion: Bun.version } })
+        )
         // Strip both seams so the production branch + PATH-bun fallback run.
         const cleanEnv: Record<string, string | undefined> = { ...process.env, PATH }
         delete cleanEnv.SCHOLAR_SERVER_CMD
         delete cleanEnv.CLAUDE_PLUGIN_DATA
-        await Bun.$`nu ${join(tmp, 'nu', 'scholar.nu')} corpus.activate --json ${JSON.stringify({ slug: 'test' })}`
+        // json is a positional arg now (the `--json` flag was dropped in the refactor).
+        await Bun.$`nu ${join(tmp, 'nu', 'scholar.nu')} corpus.activate ${JSON.stringify({ slug: 'test' })}`
             .env(cleanEnv)
             .quiet()
             .nothrow()
@@ -150,5 +163,69 @@ test('server-cmd resolves dist/server.js relative to the module (M2 production p
         ])
     } finally {
         rmSync(tmp, { recursive: true, force: true })
+    }
+})
+
+// Regression (stream isolation): the server writes its JSON result to stdout and
+// structured logs to stderr. `main` must parse stdout alone — an earlier refactor
+// used `out+err>| complete`, which merged a stderr log line into the parsed value
+// and threw json_decode_error on any call where the server logged (e.g. the
+// pdf-stub warn on a fresh corpus.activate). A stub that logs to stderr AND emits
+// a JSON result on stdout reproduces it: pre-fix this errors, post-fix it parses.
+test('main parses stdout JSON even when the server logs to stderr (no out+err merge)', async () => {
+    const stubDir = mkdtempSync(join(tmpdir(), 'scholar-nu-stderr-'))
+    try {
+        // Stub server: a log line on stderr (like ctx.log.*) + the JSON result on
+        // stdout. Markers let us assert across the external (table-rendering)
+        // boundary: the stdout payload must flow through; the stderr line must not.
+        const stub = join(stubDir, 'log-server.ts')
+        await Bun.write(
+            stub,
+            [
+                `process.stderr.write('SCHOLAR_STDERR_LOG_LINE\\n')`,
+                `process.stdout.write(JSON.stringify({ ok: true, marker: 'SCHOLAR_STDOUT_MARKER' }) + '\\n')`,
+            ].join('\n')
+        )
+        // Pre-fix (`out+err>| complete`) the stderr line merged into stdout and
+        // `from json` threw json_decode_error → non-zero exit → `.text()` rejects.
+        const out = await runScript({
+            pipe: { slug: 'x' },
+            args: ['scholar.papers.search'],
+            vars: { SCHOLAR_SERVER_CMD: `bun ${stub}` },
+        }).text()
+        expect(out).toContain('SCHOLAR_STDOUT_MARKER') // stdout JSON parsed + returned
+        expect(out).not.toContain('SCHOLAR_STDERR_LOG_LINE') // stderr stayed isolated
+    } finally {
+        rmSync(stubDir, { recursive: true, force: true })
+    }
+})
+
+// Regression (stdout preamble): the production path resolves the pinned bun via
+// `bunx bun@<pin>`, which on a cold cache can prepend a provisioning line
+// ("Saved lockfile") to the child's STDOUT, ahead of the server's JSON result.
+// `main` takes the LAST non-empty line of stdout, so the preamble is stripped
+// regardless of which stream it lands on — the original failure mode (a non-JSON
+// line reaching `from json`) cannot recur. This is the bunx arm the override-
+// driven tests never exercise; assert via markers across the table boundary.
+test('main parses stdout JSON even when a bunx preamble precedes it (no contamination)', async () => {
+    const stubDir = mkdtempSync(join(tmpdir(), 'scholar-nu-preamble-'))
+    try {
+        const stub = join(stubDir, 'preamble-server.ts')
+        await Bun.write(
+            stub,
+            [
+                `process.stdout.write('Saved lockfile\\n')`, // bunx provisioning chatter on stdout
+                `process.stdout.write(JSON.stringify({ ok: true, marker: 'SCHOLAR_PREAMBLE_MARKER' }) + '\\n')`,
+            ].join('\n')
+        )
+        const out = await runScript({
+            pipe: { slug: 'x' },
+            args: ['scholar.papers.search'],
+            vars: { SCHOLAR_SERVER_CMD: `bun ${stub}` },
+        }).text()
+        expect(out).toContain('SCHOLAR_PREAMBLE_MARKER') // JSON result parsed despite the preamble
+        expect(out).not.toContain('Saved lockfile') // preamble line stripped, not merged in
+    } finally {
+        rmSync(stubDir, { recursive: true, force: true })
     }
 })

@@ -19,6 +19,7 @@ import {
   main,
   spawnPdfChild,
   resolvePdfSpawnFactory,
+  makeServerTeardown,
   type BuildServerDeps,
 } from "./index.ts";
 
@@ -117,6 +118,82 @@ test("resolvePdfSpawnFactory: a hung spawn is bounded by the timeout and degrade
   // scholar fail to start with no reason. Bounded → undefined (degrade to stub).
   const factory = await resolvePdfSpawnFactory(() => new Promise<never>(() => {}), 20);
   expect(factory).toBeUndefined();
+});
+
+// ─── F1 fix (2026-06-04): graceful teardown on every server exit path ───────
+// Root cause (verified): StdioServerTransport registers only 'data'/'error' on
+// stdin (no 'end'), and the live pdf child keeps the event loop alive — so the
+// server never self-exits on stdin EOF. The host then falls back to its
+// stdin.end()→2s→SIGTERM→2s→SIGKILL ladder (SDK client/stdio.js), i.e. a dead
+// ~2s wait on EVERY session close, and on Linux the pdf child (lifecycle.ts:388
+// "relies on scholar's own shutdown handler" — which did not exist) is orphaned.
+// makeServerTeardown is that handler, wired to stdin 'end'/'close', SIGINT, and
+// SIGTERM. It reaps the child by a DIRECT pid signal (instant) rather than
+// handle.shutdown(): the child also hangs on its own stdin EOF, so shutdown()
+// would re-incur ~2s; on a host-driven teardown there is nothing to flush, so a
+// direct signal is correct. The live EOF→exit wiring is proven by a real-artifact
+// run (runServer binds a live transport and cannot be driven in-process); these
+// unit tests pin the injectable reap+release+exit+idempotency logic.
+test("makeServerTeardown reaps the pdf child, releases the lock, then exits — in that order", () => {
+  const calls: string[] = [];
+  const teardown = makeServerTeardown({
+    releaseLock: () => calls.push("release"),
+    pdfChildPid: () => 4242,
+    kill: (pid, sig) => calls.push(`kill:${pid}:${sig}`),
+    exit: (code) => calls.push(`exit:${code}`),
+  });
+  teardown(0);
+  // reap BEFORE release/exit so the child dies even if a later step throws.
+  expect(calls).toEqual(["kill:4242:SIGTERM", "release", "exit:0"]);
+});
+
+test("makeServerTeardown is idempotent — a second exit path is a no-op", () => {
+  let releases = 0;
+  let exits = 0;
+  const teardown = makeServerTeardown({
+    releaseLock: () => {
+      releases++;
+    },
+    pdfChildPid: () => undefined,
+    kill: () => {},
+    exit: () => {
+      exits++;
+    },
+  });
+  teardown(0);
+  teardown(0); // e.g. SIGTERM arriving after stdin 'end' already fired
+  expect(releases).toBe(1);
+  expect(exits).toBe(1);
+});
+
+test("makeServerTeardown skips the kill when there is no live pdf child pid", () => {
+  for (const pid of [undefined, 0, -1]) {
+    let killed = false;
+    const teardown = makeServerTeardown({
+      releaseLock: () => {},
+      pdfChildPid: () => pid,
+      kill: () => {
+        killed = true;
+      },
+      exit: () => {},
+    });
+    teardown(0);
+    expect(killed).toBe(false); // stub/degraded child or invalid pid → nothing to reap
+  }
+});
+
+test("makeServerTeardown still releases + exits when the pdf-child kill throws", () => {
+  const calls: string[] = [];
+  const teardown = makeServerTeardown({
+    releaseLock: () => calls.push("release"),
+    pdfChildPid: () => 999999,
+    kill: () => {
+      throw new Error("ESRCH"); // child already dead — must not abort teardown
+    },
+    exit: (code) => calls.push(`exit:${code}`),
+  });
+  teardown(0);
+  expect(calls).toEqual(["release", "exit:0"]);
 });
 
 test("dispatch throws structured unknown_tool error for unregistered tools", async () => {

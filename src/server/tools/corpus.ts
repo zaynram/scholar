@@ -173,6 +173,46 @@ function openCorpusDb(slug: string, runtimeRoot: string): BunSQLiteDatabase {
   return db;
 }
 
+/**
+ * Bug #2b (2026-06-03): re-open the persisted active corpus into `ctx.db` on a fresh
+ * process. `runCli` (src/server/index.ts) builds a fresh server per `--call`, where
+ * buildServer sets `ctx.db = undefined`. `handleActivate` is the ONLY path that opens
+ * `ctx.db`, and the CLI never calls it — so every active-corpus tool (papers.search,
+ * ingest, digest) reaches a `--call` process with no open DB and throws
+ * NO_ACTIVE_CORPUS, even though a corpus was durably activated in a prior session
+ * (settings.activeCorpusId + config.json both persist the *identity*).
+ *
+ * This replays ONLY the durable half of activate — open the corpus DB, assign `ctx.db`.
+ * It deliberately omits activate's side effects: no `last_opened_at` bump, no
+ * `config.json` rewrite, no `pdf.setRoots` (the CLI stays on the pdf stub by design —
+ * runServer owns the live child). It is a no-op for the long-lived stdio server, which
+ * activates on demand; only `runCli` calls it.
+ *
+ * Defensive, mirroring activate's preflight (`row` missing / `archived_at`): returns
+ * `undefined` (leaving `ctx.db` unset) when nothing is persisted, when the corpus is
+ * missing or archived, or when its DB file is absent — so corpus.{list,create,status}
+ * still work and a stale pointer never fabricates an empty DB via openWithPragmas'
+ * create-on-open.
+ *
+ * @returns the reopened slug, or `undefined` if nothing was rehydrated.
+ */
+export function reopenPersistedCorpus(
+  ctx: ServerContext,
+  runtimeRoot: string = resolveRuntimeRoot(),
+): string | undefined {
+  if (ctx.db) return ctx.config.activeCorpusId(); // already open (defensive; runCli never hits this)
+  const slug = ctx.config.activeCorpusId();
+  if (!slug) return undefined;
+  const row = ctx.config.corpora().find(c => c.id === slug);
+  if (!row || row.archived_at) return undefined;
+  if (!existsSync(corpusDbPath(slug, runtimeRoot))) {
+    ctx.log.warn("reopenPersistedCorpus: persisted active corpus DB file missing; leaving ctx.db unset", { slug });
+    return undefined;
+  }
+  ctx.db = openCorpusDb(slug, runtimeRoot);
+  return slug;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // currentStatusPayload — shared by activate + idempotency return
 // ═══════════════════════════════════════════════════════════════════════════════

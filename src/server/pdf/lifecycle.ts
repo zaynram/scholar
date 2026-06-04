@@ -385,7 +385,10 @@ function setPdeathsig(_childPid: number): void {
   // The Linux equivalent (PR_SET_PDEATHSIG, SIGKILL) must run in the child
   // after fork but before exec — Node/Bun's spawn doesn't expose a pre-exec
   // hook. Foundation accepts the limitation: orphan reaping on Linux relies on
-  // the SDK transport's child cleanup + scholar's own shutdown handler.
-  // koffi-based prctl from the parent is not equivalent (it acts on parent PID).
-  // Documented as a known gap; matches §16 "set on Linux for parity" intent.
+  // scholar's own shutdown handler — `makeServerTeardown` (src/server/index.ts),
+  // wired to stdin EOF / SIGINT / SIGTERM, sends SIGTERM to `childPid()` on every
+  // server exit path (verified by real-artifact run, 2026-06-04). koffi-based
+  // prctl from the parent is not equivalent (it acts on parent PID). Matches §16
+  // "set on Linux for parity" intent; the residual gap is a hard crash of scholar
+  // that runs no handler (SIGKILL of scholar itself) — then the child is orphaned.
 }

@@ -16,8 +16,14 @@ import {
   type ToolRegistry,
 } from "./tools/registry.ts";
 import { registerUiResource } from "./ui/resource.ts";
+import { reopenPersistedCorpus, resolveRuntimeRoot } from "./tools/corpus.ts";
+import { acquireSessionLock } from "./session-lock.ts";
 import { openWithPragmas, applyMigrations } from "./db/migrations.ts";
-import { spawnPdfChild as productionSpawnPdfChild, type SpawnOpts } from "./pdf/lifecycle.ts";
+import {
+  spawnPdfChild as productionSpawnPdfChild,
+  type SpawnOpts,
+  type PdfChildHandle,
+} from "./pdf/lifecycle.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -289,14 +295,103 @@ async function readArgsJson(source: string): Promise<unknown> {
   }
 }
 
+/**
+ * F1 fix (2026-06-04). Build the one-shot teardown wired to every server exit
+ * path (stdin EOF, SIGINT, SIGTERM). It (1) reaps the pdf child, (2) releases the
+ * session lock, (3) exits — in that order, idempotently across the multiple paths
+ * that may fire (e.g. host SIGTERM arriving after stdin 'end').
+ *
+ * Why this exists: `StdioServerTransport` registers only 'data'/'error' on stdin
+ * (no 'end' handler), and the live pdf child keeps the event loop alive, so the
+ * server never self-exits on stdin EOF (verified: `bun run index.ts < /dev/null`
+ * hung). The host then falls back to its stdin.end()→2s→SIGTERM→2s→SIGKILL ladder
+ * (SDK client/stdio.js) — a dead ~2s wait on every session close — and on Linux
+ * the pdf child is orphaned (lifecycle.ts:388 names a "scholar's own shutdown
+ * handler" that did not exist; PR_SET_PDEATHSIG is unavailable, Job Object is
+ * win32-only). This is that handler.
+ *
+ * Why a direct pid signal, not `handle.shutdown()`: the pdf child runs the SAME
+ * transport and also hangs on its own stdin EOF, so shutdown()→client.close()
+ * would re-incur the ~2s ladder against the child. On a host-driven teardown
+ * there is nothing to flush, so a direct SIGTERM is correct and instant; the
+ * kernel reaps the child regardless of scholar's state.
+ *
+ * Exported (NOT §7.6 — entry-point internal) so the reap+release+exit+idempotency
+ * logic is unit-tested via injected kill/exit; the live EOF→exit wiring (runServer
+ * binds a real transport, un-drivable in-process) is proven by a real-artifact run.
+ */
+export function makeServerTeardown(opts: {
+  releaseLock: () => void;
+  pdfChildPid: () => number | undefined;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  exit?: (code: number) => void;
+}): (code: number) => void {
+  const kill = opts.kill ?? ((pid, signal) => process.kill(pid, signal));
+  const exit = opts.exit ?? ((code) => process.exit(code));
+  let done = false;
+  return (code: number) => {
+    if (done) return; // a second exit path (e.g. SIGTERM after 'end') is a no-op
+    done = true;
+    const pid = opts.pdfChildPid();
+    if (typeof pid === "number" && pid > 0) {
+      try {
+        kill(pid, "SIGTERM"); // instant; child has no SIGTERM handler → default-terminates
+      } catch {
+        /* already gone (ESRCH) / not ours — teardown must still proceed */
+      }
+    }
+    opts.releaseLock();
+    exit(code);
+  };
+}
+
 async function runServer(runtimeRoot: string): Promise<void> {
+  // Single-active-session guard (INV-1). Server-only: runCli is intentionally
+  // lock-free (`--call` is single-shot; Bug #2b runs many concurrent processes).
+  // Throws errorCode "SCHOLAR_LOCKED" if a live server already holds this root;
+  // main() catches it and emits a structured line + exit 1.
+  const releaseLock = acquireSessionLock(runtimeRoot);
+
   // Bug #3 fix: spawn the real pdf child and hand the resolved handle to
   // buildServer (degrades to the stub + warn on spawn failure/timeout). CLI mode
   // (runCli) intentionally stays on the stub — `--call` is single-shot and
   // stateless, so spawning a child per call would be wasteful and pdf features
-  // are a long-lived-session concern.
+  // are a long-lived-session concern. Materialize the handle here (not only inside
+  // buildServer) so teardown can reap the child by pid.
   const spawnPdf = await resolvePdfSpawnFactory();
-  const { server } = buildServer({ runtimeRoot, spawnPdfChild: spawnPdf });
+  const pdfChild = spawnPdf?.();
+  const { server } = buildServer({
+    runtimeRoot,
+    spawnPdfChild: pdfChild ? () => pdfChild : undefined,
+  });
+
+  // F1 fix (2026-06-04): graceful teardown on every exit path. Without this the
+  // server hangs on stdin EOF (StdioServerTransport has no 'end' handler; the pdf
+  // child keeps the loop alive), forcing the host's dead ~2s wait + SIGTERM and
+  // orphaning the pdf child on Linux. See makeServerTeardown for the full root
+  // cause. Wiring stdin EOF here also makes the INV-1 lock release independent of
+  // any signal arriving from the host.
+  //
+  // Registered BEFORE connect(): connect()→transport.start() adds the stdin 'data'
+  // listener that puts stdin into flowing mode. If stdin is already at EOF (e.g.
+  // host closed it before we subscribed), the 'end'/'close' events would fire as
+  // soon as it flows — subscribing first guarantees we never miss them. A bare
+  // 'end' listener does not itself drain the stream; the transport's 'data'
+  // listener is what drives it to EOF.
+  const teardown = makeServerTeardown({
+    releaseLock,
+    // pdfChild is a PdfChildHandle when the real spawner ran (childPid present);
+    // the stub/degraded path has no childPid → nothing to reap.
+    pdfChildPid: () => (pdfChild as Partial<PdfChildHandle> | undefined)?.childPid?.(),
+  });
+  // 'exit' is the sync backstop for any OTHER exit (uncaught throw, hard crash):
+  // it can only release the lock (reaping/async is not reliable inside 'exit').
+  process.on("exit", releaseLock);
+  process.once("SIGINT", () => teardown(0));
+  process.once("SIGTERM", () => teardown(0));
+  process.stdin.once("end", () => teardown(0));
+  process.stdin.once("close", () => teardown(0));
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -326,6 +421,11 @@ async function runCli(
     return 2;
   }
   const built = buildServer({ runtimeRoot, quiet: true }); // quiet=true for CLI mode
+  // Bug #2b: a fresh `--call` process has ctx.db === undefined (corpus.activate is the
+  // only path that opens it, and the CLI never calls it). Re-open the persisted active
+  // corpus so active-corpus tools (papers.search/ingest/digest) work instead of throwing
+  // NO_ACTIVE_CORPUS. No-op when no corpus is persisted; stays on the pdf stub by design.
+  reopenPersistedCorpus(built.ctx, runtimeRoot);
   try {
     const result = await built.dispatch(toolName, args);
     process.stdout.write(JSON.stringify(result) + "\n");
@@ -356,15 +456,27 @@ async function runCli(
 
 /** Entry point for the compiled binary (bun build --compile) and `bun run`. */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  const runtimeRoot =
-    process.env.SCHOLAR_RUNTIME_ROOT ??
-    join(process.env.HOME ?? process.env.USERPROFILE ?? ".", "mcp-data", "scholar", "runtime");
+  // Single source of truth (INV-3): delegate to the same resolver the corpus
+  // handlers use, so the config DB (buildServer deps.runtimeRoot) and the corpus
+  // DBs (handlers via resolveRuntimeRoot) can never resolve to different roots.
+  // The previous inline computation was byte-identical but a second, drift-prone
+  // source.
+  const runtimeRoot = resolveRuntimeRoot();
   const parsed = parseEntryArgv(argv);
   if (parsed.mode === "cli") {
     return await runCli(runtimeRoot, parsed.toolName, parsed.argsSource);
   }
-  await runServer(runtimeRoot);
-  return 0; // unreachable in normal flow (server runs until transport closes)
+  try {
+    await runServer(runtimeRoot);
+    return 0; // unreachable in normal flow (server runs until transport closes)
+  } catch (e) {
+    const err = e as { errorCode?: string; message?: string };
+    if (err.errorCode === "SCHOLAR_LOCKED") {
+      process.stderr.write(JSON.stringify({ error: "SCHOLAR_LOCKED", message: err.message }) + "\n");
+      return 1;
+    }
+    throw e;
+  }
 }
 
 if (import.meta.main) {
