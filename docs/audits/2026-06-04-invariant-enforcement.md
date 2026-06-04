@@ -34,8 +34,8 @@ Receipts are `file:line` from direct reads, not memory.
 | 6 | Single runtime-root source of truth | **was `convention-only` → now enforced-by-construction** | `main()` now delegates to `resolveRuntimeRoot()` (`index.ts`), the same resolver handlers use. See Δ2. |
 | 7 | No downstream `bun add` / `package.json` edit | convention-only | Honored. The lock impl used only `node:fs` — no new dep. |
 | 8 | §13 annotation discipline — no pdf round-trip inside a write-lock window | **was `unverified` → now enforced-by-construction + enforced-in-test** | The v1.0 `db.transaction` reconciler was **retired** (2026-05-27 §13 v1.1 amendment; `server-pdf@1.7.2` has no enumeration verb). v1.1 is write-then-push: `handleUpsert`/`handleDelete` (`annotations.ts`) do read-check → **no await** → single-statement `.run()` write → `await pdf.interact` (push *after* commit). Single-threaded loop + no-await-between-read-and-write ⇒ effectively atomic; no transaction window exists to hold across a round-trip. Tests: `annotations.test.ts` write-then-push ordering for upsert (`:202`) and delete (`:321`) + dirty-row failure-safety (`:280`). See F2 resolution (Δ4). |
-| 9 | `raw-ddl.ts` for non-Drizzle objects (`chunk_vec`, `reading_queue`) | unverified | Not inspected this pass. |
-| 10 | Mechanical LLM → local Ollama default; `askClaude` opt-in only | unverified | Not inspected this pass. |
+| 9 | `raw-ddl.ts` for non-Drizzle objects (`chunk_vec`, `reading_queue`) | **enforced-in-code + enforced-in-test** | `raw-ddl.ts` owns both (`CREATE VIRTUAL TABLE … vec0` deferred behind `embed.dim`+`chunk_vec.created`; `CREATE VIEW reading_queue`, both `IF NOT EXISTS`); `migrations.ts:65-66` runs `migrate()` **then** `runRawDdl(db)`; `schema.ts:127,267` marks both "NOT Drizzle". Tests: `raw-ddl.test.ts` vec0 ABI smoke, chunk_vec materialization (`:62`), M4/A1 invariant errors (`:77,:94`). See Δ5. |
+| 10 | Mechanical LLM → local Ollama default; `askClaude` opt-in only | **enforced-in-code + enforced-in-test** | `digest.ts:128` / `prompts.ts:120`: `if (use_claude === true)` → return sentinel, **else** `ollama.chat(DEFAULT_CHAT_MODEL)`; embeddings via `ollama.embed(DEFAULT_EMBED_MODEL)` (`pdf.ts:162`, `primitives.ts:151`). `use_claude` defaults false; scholar never calls Claude — it emits a sentinel the host *may* forward to `cowork.askClaude`. Tests: `digest.test.ts:101/113` + `prompts.test.ts:106/115` (default→qwen3:8b, opt-in→sentinel-without-Ollama); `client.test.ts:33/41` pins the default models. See Δ5. |
 
 ---
 
@@ -70,6 +70,10 @@ Receipts are `file:line` from direct reads, not memory.
 - **Doc fix:** CLAUDE.md §13 invariant rewritten (it had described the retired v1.0 `db.transaction` model — same "documented invariant describes dead code" shape as the earlier flock→pidfile correction). Also synced the INV-1 line: the lock now releases on stdin EOF too (F1/Δ3), so the prior "stdin-EOF-hung holder" caveat no longer applies — only a hard SIGKILL leaves a reclaimable file.
 - **No code change** — the implementation was already correct.
 
+### Δ5 — INV-9 + INV-10 verified (were "unverified"; no code change)
+- **INV-9 (`raw-ddl.ts`):** confirmed `chunk_vec` (deferred vec0 virtual table) and `reading_queue` (view) are owned by `raw-ddl.ts`, created via `runRawDdl(db)` which `migrations.ts:65-66` invokes **after** Drizzle `migrate()`; `schema.ts:127,267` annotates both as "NOT Drizzle". Enforced-in-code (sole creation path + ordering) and in-test (`raw-ddl.test.ts`: vec0 ABI smoke, chunk_vec materialization, M4/A1 settings-desync invariant errors).
+- **INV-10 (Ollama default / askClaude opt-in):** confirmed `digest.ts:128` and `prompts.ts:120` take the local Ollama path (`ollama.chat(DEFAULT_CHAT_MODEL)` = qwen3:8b) unless `use_claude === true`, which only returns a sentinel for the host to forward — scholar never calls Claude itself. Embeddings default to `ollama.embed(DEFAULT_EMBED_MODEL)` (nomic-embed-text:v1.5). Enforced-in-test (`digest.test.ts`, `prompts.test.ts`, `client.test.ts`).
+
 ---
 
 ## Surfaced follow-ups (NOT actioned)
@@ -80,4 +84,6 @@ Receipts are `file:line` from direct reads, not memory.
 ---
 
 ## Next rows to grind
-INV-9 (`raw-ddl.ts`), INV-10 (Ollama-default / `askClaude` opt-in), and a static check that every `papers/inspect/ingest` boundary actually routes through a §12.0 primitive (currently convention).
+INV-1 §12.0 coverage: a static/test check that every `papers/inspect/ingest` boundary actually routes through a §12.0 primitive (currently convention-only — the one remaining "honored by discipline, nothing checks it" row).
+
+*(INV-8 done — Δ4; INV-9, INV-10 done — Δ5.)*
