@@ -4,3 +4,14 @@
 # Scoped to *.cmd ONLY — the POSIX launchers (launch.sh, ensure-bun.sh) must
 # stay LF, so do NOT add a blanket `* text=auto eol=crlf` rule here.
 *.cmd text eol=crlf
+
+# Prebuilt native extensions committed for the source-sync marketplace install
+# (build/vendor/sqlite-vec/vec0.{so,dll}; .dylib reserved for a future mac drop).
+# These are the repo's FIRST committed binaries and the marketplace performs a
+# real `git checkout` on Windows. Git's text=auto heuristic already detects ELF/PE
+# by their leading NUL bytes and skips EOL conversion (even under
+# core.autocrlf=true), so this is belt-and-suspenders: mark them binary explicitly
+# so no misconfigured checkout can ever CRLF-mangle the byte stream koffi loads.
+*.so binary
+*.dll binary
+*.dylib binary
