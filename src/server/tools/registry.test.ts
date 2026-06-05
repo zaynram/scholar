@@ -21,7 +21,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerAll, type ToolRegistry } from "./registry.ts";
-import { APP_URI } from "../ui/resource.ts";
+import { APP_URI, MCP_APP_MIME, UI_EXTENSION_ID, registerUiResource } from "../ui/resource.ts";
 
 const VIEW_OPENERS = [
   "scholar.dashboard",
@@ -155,6 +155,40 @@ test("real SDK serializes view-opener _meta.ui.resourceUri into the tools/list w
       expect(meta?.ui?.resourceUri, `${name} wire _meta.ui.resourceUri`).toBe(APP_URI);
       expect(meta?.["ui/resourceUri"], `${name} wire legacy _meta["ui/resourceUri"]`).toBe(APP_URI);
     }
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("real SDK advertises the MCP Apps UI extension on the initialize capabilities", async () => {
+  // Render Layer 3 (Cowork field report 2026-06-05). Layers 1+2 — view-opener
+  // tool `_meta.ui.resourceUri` and the MCP_APP_MIME resource — are INERT unless
+  // the server also tells the host it speaks MCP Apps: a host checks
+  // `capabilities.extensions["io.modelcontextprotocol/ui"]` in the initialize
+  // result BEFORE rendering any iframe (the field test saw every view invisible
+  // until this landed). Prove the declaration survives onto the SERIALIZED
+  // initialize result the client parsed off the wire — getServerCapabilities()
+  // returns exactly that — not merely that registerCapabilities() was called.
+  const server = new McpServer({ name: "scholar-test", version: "0.0.0" });
+  registerAll(server, fakeCtx());
+  registerUiResource(server, fakeCtx()); // folds in declareUiAppCapability (Layer 3)
+
+  const client = new Client({ name: "registry-test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const caps = client.getServerCapabilities() as
+      | { extensions?: Record<string, { mimeTypes?: string[] }> }
+      | undefined;
+    const ui = caps?.extensions?.[UI_EXTENSION_ID];
+    expect(ui, `server must advertise extensions["${UI_EXTENSION_ID}"]`).toBeDefined();
+    // Value is the spec's `{ mimeTypes }` shape carrying exactly the mime scholar
+    // serves — satisfies a host that reads the sub-field and one that only checks
+    // presence.
+    expect(ui?.mimeTypes, "advertised mimeTypes must include the MCP Apps profile mime")
+      .toContain(MCP_APP_MIME);
   } finally {
     await client.close();
     await server.close();

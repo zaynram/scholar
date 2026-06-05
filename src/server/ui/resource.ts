@@ -34,6 +34,40 @@ export const APP_URI = "ui://scholar/app.html";
 // bundle (dist/server.js) does not pull in the client-side ext-apps package.
 export const MCP_APP_MIME = "text/html;profile=mcp-app";
 
+// MCP Apps capability extension id (SEP-1865). Mirrors ext-apps' EXTENSION_ID;
+// hardcoded locally for the same reason as MCP_APP_MIME (no ext-apps import in
+// the server bundle).
+export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
+
+/**
+ * Advertise MCP Apps support in the server's `initialize` capabilities.
+ *
+ * THIRD render layer (2026-06-05 Cowork field report). Layers 1+2 already shipped:
+ * each view-opener tool DEF carries `_meta.ui.resourceUri` (registry.ts) and the
+ * UI resource is served with MCP_APP_MIME (below). But a host checks whether the
+ * SERVER itself speaks MCP Apps — `capabilities.extensions["io.modelcontextprotocol/ui"]`
+ * in the initialize result — BEFORE it renders any `_meta.ui` iframe. Without this
+ * key every view is inert: the field test saw all views invisible until the
+ * declaration was added. (Note: ext-apps' own helpers declare NO server-side
+ * extension — getUiCapability only READS the client's; the directions are
+ * orthogonal, so declaring server-side is purely additive.)
+ *
+ * Value: the spec's capability shape is `{ mimeTypes?: string[] }`, whose own
+ * schema description says it must include `text/html;profile=mcp-app`. We declare
+ * exactly the mime scholar serves rather than a bare `{}`, so a host that reads
+ * the sub-field is satisfied and a host that only checks presence is too.
+ *
+ * registerCapabilities MERGES (preserving the tools/resources capabilities the
+ * McpServer auto-registers) and MUST run before connect(); registerUiResource is
+ * always called pre-connect by buildServer, so folding the declaration in here
+ * makes "serve the UI resource ⟹ advertise the extension" true by construction.
+ */
+export function declareUiAppCapability(server: McpServer): void {
+  server.server.registerCapabilities({
+    extensions: { [UI_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME] } },
+  });
+}
+
 /**
  * Build the `_meta` block that links a view-opener tool to ui://scholar/app.html.
  *
@@ -82,6 +116,10 @@ function resolveUiHtmlPath(): string | null {
 }
 
 export function registerUiResource(server: McpServer, ctx: ServerContext): void {
+  // ── (0) advertise MCP Apps support so the host renders the views at all ────
+  // Must precede connect(); buildServer calls registerUiResource pre-connect.
+  declareUiAppCapability(server);
+
   // ── (1) ui://scholar/app.html ─────────────────────────────────────────────
   server.registerResource(
     "scholar-ui",
