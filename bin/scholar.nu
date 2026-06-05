@@ -68,10 +68,16 @@ def "resolve js" [...roots: string]: nothing -> string {
 
 # Run a `tool` from the `scholar` MCP server.
 # Parameters may be provided as the `json` argument or by piping in a string or record.
+#
+# Streams stay isolated: the server writes its JSON result to stdout and its
+# structured logs + error payload to stderr. Take the LAST non-empty line of
+# the relevant stream and deserialize once (deduplicated). On stdout this also
+# defends against a bunx provisioning preamble ("Saved lockfile") prepended to
+# the result; on stderr the error record trails the log lines.
 def main [
   tool: string # Name of the MCP server tool
   json: string = '{}' # Argument payload as a JSON string
-]: oneof<nothing, string, record> -> oneof<table, record> {
+]: oneof<nothing, string, list, record> -> oneof<table, list, record> {
   let json: string = match ($in | describe) {
     string => $in
     record => { $in | to json --raw }
@@ -88,21 +94,10 @@ def main [
 
   let output = run-external ...$args | complete | default 0 exit_code
 
-  # Streams stay isolated: the server writes its JSON result to stdout and its
-  # structured logs + error payload to stderr. Take the LAST non-empty line of
-  # the relevant stream and deserialize once (deduplicated). On stdout this also
-  # defends against a bunx provisioning preamble ("Saved lockfile") prepended to
-  # the result; on stderr the error record trails the log lines.
   let raw: string = (if $output.exit_code == 0 { $output.stdout? } else { $output.stderr? })
-    | default ''
-    | lines
-    | where ($it | str trim | is-not-empty)
-    | last
-    | default '{}'
+    | default '' | lines | where ($it | str trim | is-not-empty) | last | default '{}'
 
-  let parsed = try {
-    $raw | from json
-  } catch {
+  let parsed = try { $raw | from json } catch {
     error make --unspanned {
       msg: "unable to parse tool output as JSON"
       code: `scholar::main::json_decode_error`
@@ -168,11 +163,18 @@ def "main ingest" [
 }
 
 # Search papers (hybrid lexical + semantic via RRF — mode always-on, no mode arg).
-# still_indexing=true signals semantic is building; lexical results are returned in the interim.
 def "main query" [
-  q: string # The query string to match results to
-  --limit: int = 50 # Maximum number of entries to return
-]: nothing -> oneof<table, string> { main list --limit $limit --query $q }
+  query?: string # Query string to filter papers by
+  --label (-l): string = 'cli-query' # Descriptor to attach to the query result
+]: [
+  nothing -> oneof<table, string, nothing>
+  list<record<label: string, query: string>> -> oneof<table, string>
+  table<label: string, query: string> -> oneof<table, string>
+] {
+  append (if $query != null { {label: $label query: $query} } else { [] })
+  | compact
+  | if ($in | is-not-empty) { $in | main scholar.query }
+}
 
 # Generate digest on a scoped set of papers.
 # By default, all papers are included.
