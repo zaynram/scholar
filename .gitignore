@@ -1,5 +1,17 @@
 node_modules/
-build/
+# Build outputs are ignored, EXCEPT the prebuilt vec0 sqlite-vec extensions that
+# the source-sync marketplace install needs at runtime (resolveVec0Path's
+# <root>/build/vendor/sqlite-vec/vec0.{so,dll} rung). Git cannot re-include a file
+# under an ignored parent, so the path is un-ignored level-by-level. macOS
+# (.dylib) is intentionally absent — source-sync on mac boots but fails at the
+# first vector op (known partial; see HUMAN.md).
+build/*
+!build/vendor/
+build/vendor/*
+!build/vendor/sqlite-vec/
+build/vendor/sqlite-vec/*
+!build/vendor/sqlite-vec/vec0.so
+!build/vendor/sqlite-vec/vec0.dll
 dist/
 out/
 runtime/
