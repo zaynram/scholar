@@ -33,7 +33,10 @@ test('mcpServers.scholar uses the cross-OS node launcher (source-sync supersedes
     // SCHOLAR_RUNTIME_ROOT is NOT pinned in the committed env: launch.mjs derives
     // it cross-OS from CLAUDE_PLUGIN_DATA (the POSIX-only ${HOME} default would
     // break on Windows). Its absence here is the contract, not an oversight.
-    expect(scholar.env.SCHOLAR_RUNTIME_ROOT).toBeUndefined()
+    // Key-dynamic access: TS infers the committed env type WITHOUT this key, so a
+    // direct `.SCHOLAR_RUNTIME_ROOT` is a compile error — which is itself the proof
+    // it's absent. Cast to a record to assert that absence at runtime too.
+    expect((scholar.env as Record<string, string | undefined>).SCHOLAR_RUNTIME_ROOT).toBeUndefined()
     // Ollama model defaults are unchanged by the pivot.
     expect(scholar.env.SCHOLAR_OLLAMA_EMBED_MODEL).toBe('nomic-embed-text:v1.5')
     expect(scholar.env.SCHOLAR_OLLAMA_CHAT_MODEL).toBe('qwen3:8b')
