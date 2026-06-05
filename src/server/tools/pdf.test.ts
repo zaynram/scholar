@@ -8,6 +8,7 @@ import { test, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { refreshExtraction } from "./pdf.ts"
+import { parseGetTextResult } from "../pdf/lifecycle.ts"
 import { runRawDdl } from "#server/db/raw-ddl.ts"
 import { ensureVec0Path } from "%/util"
 
@@ -331,4 +332,58 @@ test("refresh-extraction: NO_ACTIVE_CORPUS guard when ctx.db is undefined", asyn
       { paper_id: "p1" },
     ),
   ).rejects.toThrow(/NO_ACTIVE_CORPUS/)
+})
+
+test("refresh-extraction: propagates a pdf get_text error envelope and writes ZERO chunks (Cowork field finding #2 — caller)", async () => {
+  // parseGetTextResult unit tests (lifecycle.test.ts) prove the SEAM throws on the
+  // vendor isError envelope. THIS pins the CALLER behavior the field report named:
+  // refreshExtraction must propagate that failure instead of chunking the error
+  // sentinel and reporting a bogus chunks_written:1. Highest fidelity short of a
+  // real spawn: getText runs the REAL parseGetTextResult on an isError envelope —
+  // exactly what the production lifecycle.ts getText does — so this exercises the
+  // wired path child-error → getText throws → caller propagates, not a hand-rolled
+  // stand-in. (Before the #2 fix, getText flattened the sentinel to a 1-line string,
+  // chunkText produced one chunk, and the transaction wrote it: chunks_written:1.)
+  const sqlite = freshExtractionDb()
+  sqlite.run(`INSERT INTO settings(key,value) VALUES
+    ('embed.model','"nomic-embed-text:v1.5"'),
+    ('embed.dim','768'),
+    ('chunk_vec.created','true')`)
+  runRawDdl(drizzle(sqlite))
+  sqlite.run(`INSERT INTO papers(id,key,title,imported_at)
+              VALUES ('perr','errpaper','Error paper','2026-05-22T00:00:00.000Z')`)
+
+  const errEnvelope = {
+    content: [{ type: "text", text: "No PDF is currently open for that viewUUID" }],
+    isError: true,
+  }
+  const ctx = fakeCtx(sqlite, {
+    paperId: "perr",
+    // parseGetTextResult throws synchronously on the isError envelope, so the
+    // async getText rejects with PDF_GET_TEXT_FAILED — the same rejection the
+    // real child handle produces.
+    text: async () => parseGetTextResult(errEnvelope),
+  })
+
+  await expect(
+    refreshExtraction(ctx, { paper_id: "perr" }),
+  ).rejects.toThrow(/PDF_GET_TEXT_FAILED/)
+
+  // The failure must short-circuit BEFORE the write transaction: zero chunks, zero
+  // chunk_vec rows. This is the "not chunks_written:1" assertion in concrete form.
+  const chunkN = (
+    sqlite
+      .query("SELECT COUNT(*) AS n FROM paper_chunks WHERE paper_id='perr'")
+      .get() as { n: number }
+  ).n
+  expect(chunkN).toBe(0)
+  const vecN = (
+    sqlite
+      .query(
+        `SELECT COUNT(*) AS n FROM chunk_vec
+         WHERE chunk_id IN (SELECT id FROM paper_chunks WHERE paper_id='perr')`,
+      )
+      .get() as { n: number }
+  ).n
+  expect(vecN).toBe(0)
 })
