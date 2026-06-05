@@ -20,7 +20,26 @@ import {
 import { join } from "node:path";
 import type { ServerContext } from "../tools/registry.ts";
 
-const APP_URI = "ui://scholar/app.html";
+export const APP_URI = "ui://scholar/app.html";
+
+// MCP Apps profile mime (SEP-1865). The host only renders a tool's UI iframe
+// when the referenced resource is served with this mime — plain "text/html" is
+// inert. Mirrors ext-apps' RESOURCE_MIME_TYPE; hardcoded locally so the server
+// bundle (dist/server.js) does not pull in the client-side ext-apps package.
+export const MCP_APP_MIME = "text/html;profile=mcp-app";
+
+/**
+ * Build the `_meta` block that links a view-opener tool to ui://scholar/app.html.
+ *
+ * Emits BOTH the modern nested key (`_meta.ui.resourceUri`) and the legacy flat
+ * key (`_meta["ui/resourceUri"]`) — the MCP Apps spec says hosts must check both,
+ * and ext-apps' `registerAppTool` normalizes the same way. Applied inside
+ * scholar's own `register` chokepoint (§7.6 snapshot-at-entry wrapper) rather
+ * than routing through `registerAppTool`, which would bypass that wrapper.
+ */
+export function viewMeta(uri: string): Record<string, unknown> {
+  return { ui: { resourceUri: uri }, "ui/resourceUri": uri };
+}
 
 const PLACEHOLDER_HTML = `<!DOCTYPE html><html><body>
   <p>Scholar UI not built. Run: <code>bun run build:ui</code></p>
@@ -31,7 +50,7 @@ export function registerUiResource(server: McpServer, ctx: ServerContext): void 
   server.registerResource(
     "scholar-ui",
     APP_URI,
-    { title: "Scholar UI", mimeType: "text/html" },
+    { title: "Scholar UI", mimeType: MCP_APP_MIME },
     async (uri) => {
       // Lazy load — no module-load coupling to build:ui artifact.
       const htmlPath = join(
@@ -51,7 +70,7 @@ export function registerUiResource(server: McpServer, ctx: ServerContext): void 
           throw e;
         });
       return {
-        contents: [{ uri: uri.href, mimeType: "text/html", text: html }],
+        contents: [{ uri: uri.href, mimeType: MCP_APP_MIME, text: html }],
       };
     },
   );

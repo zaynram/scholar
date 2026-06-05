@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import { rawClient } from "../db/raw-client.ts";
 import { nowIso, ulid } from "../db/nowIso.ts";
 import { wrapUntrusted, sanitizeText } from "../ingest/primitives.ts";
+import { APP_URI, viewMeta } from "../ui/resource.ts";
 import {
   ollama,
   DEFAULT_CHAT_MODEL,
@@ -195,12 +196,16 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
   _register(
     "scholar.digest.show",
     {
+      // §9 amendment 2026-06-04: optional scope_key lets the opener carry the
+      // digest's ViewInput discriminant id; absent → the panel defaults scope.
       description: "Open the digest panel view.",
-      inputSchema: z.object({}).passthrough(),
+      inputSchema: z.object({ scope_key: z.string().min(1).optional() }).passthrough(),
+      _meta: viewMeta(APP_URI),
     },
-    async () => ({
-      openView: { resource: "ui://scholar/app.html", route: "/digest" },
-    }),
+    async (args) => {
+      const { scope_key } = (args ?? {}) as { scope_key?: string };
+      return { view: "digest", ...(scope_key ? { scope_key } : {}) };
+    },
   );
   // scholar.digest.change-since-last-open consumes snapshot rows produced by
   // the corpus plan's scholar.snapshot.take and feeds the diff into

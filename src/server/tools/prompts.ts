@@ -19,6 +19,7 @@ import crypto from "node:crypto";
 import { rawClient } from "../db/raw-client.ts";
 import { nowIso } from "../db/nowIso.ts";
 import { wrapUntrusted, sanitizeText } from "../ingest/primitives.ts";
+import { APP_URI, viewMeta } from "../ui/resource.ts";
 import {
   ollama,
   DEFAULT_CHAT_MODEL,
@@ -174,11 +175,15 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
   _register(
     "scholar.prompts.show",
     {
+      // §9 amendment 2026-06-04: optional paper_id lets the opener carry the
+      // prompts ViewInput discriminant id; absent → the per-scope prompt set.
       description: "Open the reading-prompts view.",
-      inputSchema: z.object({}).passthrough(),
+      inputSchema: z.object({ paper_id: z.string().min(1).optional() }).passthrough(),
+      _meta: viewMeta(APP_URI),
     },
-    async () => ({
-      openView: { resource: "ui://scholar/app.html", route: "/prompts" },
-    }),
+    async (args) => {
+      const { paper_id } = (args ?? {}) as { paper_id?: string };
+      return { view: "prompts", ...(paper_id ? { paper_id } : {}) };
+    },
   );
 };

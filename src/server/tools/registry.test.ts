@@ -8,10 +8,25 @@
 // handler was unconditionally serializing every result into a `text` content
 // block, losing the typed view-opener payload that hosts want under
 // `structuredContent`. The new test captures the wrapper at registration time
-// and asserts it emits `structuredContent` when the handler returns an
-// `openView` payload, and keeps the legacy text-only shape otherwise.
+// and asserts it emits `structuredContent` when the handler returns a `view`
+// payload, and keeps the legacy text-only shape otherwise.
+//
+// §9 amendment (2026-06-04): the view-opener contract was unified onto the
+// `ViewInput` discriminant (`{view, ...ids}` in structuredContent) — retiring the
+// old `{openView:{resource,route}}` shape — and each view-opener tool DEF now
+// carries `_meta.ui.resourceUri` (both modern + legacy keys) so the host renders
+// the iframe. These tests pin both halves.
 import { test, expect } from "bun:test";
 import { registerAll, type ToolRegistry } from "./registry.ts";
+import { APP_URI } from "../ui/resource.ts";
+
+const VIEW_OPENERS = [
+  "scholar.dashboard",
+  "scholar.paper.show",
+  "scholar.digest.show",
+  "scholar.prompts.show",
+  "scholar.progress.show",
+];
 
 function fakeCtx() {
   return {
@@ -53,11 +68,11 @@ test("registerAll invokes every tool module's registerTools and returns a Map<st
   expect(registry.size).toBeGreaterThan(0);
 });
 
-test("MCP wrapper emits structuredContent for view-opener results (openView)", async () => {
+test("MCP wrapper emits structuredContent for view-opener results (view discriminant)", async () => {
   // Capture the SDK-facing wrapper functions registered by every tool module.
   // The wrapper is what runs when the MCP host invokes a tool; if it doesn't
-  // promote `openView` into `structuredContent`, the host can never recognize
-  // the open-view intent (it only sees stringified JSON inside a text block).
+  // promote the `view` payload into `structuredContent`, the host can never
+  // deliver it to the App (it only sees stringified JSON inside a text block).
   const wrappers = new Map<string, (args: unknown) => Promise<unknown>>();
   const fakeServer = {
     registerTool: (
@@ -70,20 +85,40 @@ test("MCP wrapper emits structuredContent for view-opener results (openView)", a
   } as unknown as Parameters<typeof registerAll>[0];
   registerAll(fakeServer, fakeCtx());
 
-  // scholar.paper.show returns { openView: { resource, route } } — the
-  // canonical view-opener shape; wrapper must surface it as structuredContent.
+  // scholar.paper.show returns { view: "paper", paper_id } — the unified
+  // ViewInput shape (§9 amendment); wrapper must surface it as structuredContent.
   const showWrapper = wrappers.get("scholar.paper.show");
   expect(showWrapper, "scholar.paper.show must be registered").toBeDefined();
   const result = (await showWrapper!({ paper_id: "p1" })) as {
     content: Array<{ type: string; text: string }>;
-    structuredContent?: { openView?: { resource: string; route: string } };
+    structuredContent?: { view?: string; paper_id?: string };
   };
-  expect(result.structuredContent).toMatchObject({
-    openView: { resource: "ui://scholar/app.html", route: "/paper/p1" },
-  });
+  expect(result.structuredContent).toMatchObject({ view: "paper", paper_id: "p1" });
   // Backwards-compat: the legacy text block stays so hosts that don't read
   // structuredContent still get the payload as JSON.
   expect(result.content?.[0]?.type).toBe("text");
+});
+
+test("view-opener tool defs carry _meta.ui.resourceUri (both modern + legacy keys)", () => {
+  // The host renders the app iframe only when the triggering tool's definition
+  // declares the UI resource it opens. Pin all five view-opener defs.
+  const defs = new Map<string, { _meta?: Record<string, unknown> }>();
+  const fakeServer = {
+    registerTool: (name: string, def: { _meta?: Record<string, unknown> }) => {
+      defs.set(name, def);
+    },
+  } as unknown as Parameters<typeof registerAll>[0];
+  registerAll(fakeServer, fakeCtx());
+
+  for (const name of VIEW_OPENERS) {
+    const def = defs.get(name);
+    expect(def, `${name} must be registered`).toBeDefined();
+    const meta = def!._meta as
+      | { ui?: { resourceUri?: string }; "ui/resourceUri"?: string }
+      | undefined;
+    expect(meta?.ui?.resourceUri, `${name} _meta.ui.resourceUri`).toBe(APP_URI);
+    expect(meta?.["ui/resourceUri"], `${name} legacy _meta["ui/resourceUri"]`).toBe(APP_URI);
+  }
 });
 
 test("MCP wrapper leaves non-view-opener results as text-only", async () => {

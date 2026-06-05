@@ -24,6 +24,7 @@ import { allPdfRoots } from "../db/default-pdf-root.ts";
 import { writeRuntimeConfig } from "../util/runtime-config.ts";
 import { nowIso } from "../db/nowIso.ts";
 import { rawClient } from "../db/raw-client.ts";
+import { APP_URI, viewMeta } from "../ui/resource.ts";
 import { z } from "zod";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -492,8 +493,11 @@ async function handleDashboard(_args: unknown, ctx: ServerContext): Promise<unkn
     ctx.log.info("scholar.dashboard: no corpus configured, first-run wizard should be triggered");
   }
 
-  // View-opener per §7.6 table: returns structuredContent for the host to open.
-  return { view: "dashboard", resource: "ui://scholar/app.html" };
+  // View-opener (§9 amendment 2026-06-04): returns the ViewInput discriminant;
+  // the registry wrapper promotes it to structuredContent, the App reads it off
+  // `ontoolresult`. The ui:// link rides the tool def's `_meta.ui` (below), not
+  // this payload.
+  return { view: "dashboard" };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -562,7 +566,11 @@ export const registerTools: RegisterTools = (_server, _ctx, _register) => {
   );
   _register(
     "scholar.dashboard",
-    { description: "Open the scholar dashboard view.", inputSchema: z.object({}) },
+    {
+      description: "Open the scholar dashboard view.",
+      inputSchema: z.object({}),
+      _meta: viewMeta(APP_URI),
+    },
     handleDashboard,
   );
 };

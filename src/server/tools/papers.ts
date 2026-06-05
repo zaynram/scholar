@@ -23,6 +23,7 @@ import { z } from "zod";
 import { rawClient } from "../db/raw-client.ts";
 import { toTightFloat32 } from "../db/sqlite-vec.ts";
 import { nowIso } from "../db/nowIso.ts";
+import { APP_URI, viewMeta } from "../ui/resource.ts";
 import {
   ollama,
   DEFAULT_EMBED_MODEL,
@@ -258,22 +259,20 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
     },
   );
 
-  // View-openers per §7.6 owner table — the actual ui:// resource registration
-  // lives in frontends; this plan provides the openView contract.
+  // View-openers (§9 amendment 2026-06-04): emit the ViewInput discriminant in
+  // structuredContent (promoted by the registry wrapper); the ui:// link rides
+  // each def's `_meta.ui` (viewMeta). Retired the old `{openView:{resource,route}}`
+  // shape — the route string carried no paper_id the App.tsx consumer could read.
   _register(
     "scholar.paper.show",
     {
       description: "Open the paper detail view for the given paper_id.",
       inputSchema: z.object({ paper_id: z.string().min(1) }),
+      _meta: viewMeta(APP_URI),
     },
     async (args) => {
       const { paper_id } = (args ?? {}) as { paper_id: string };
-      return {
-        openView: {
-          resource: "ui://scholar/app.html",
-          route: `/paper/${paper_id}`,
-        },
-      };
+      return { view: "paper", paper_id };
     },
   );
   _register(
@@ -281,9 +280,8 @@ export const registerTools: RegisterTools = (_server, ctx, _register) => {
     {
       description: "Open the reader-progress view.",
       inputSchema: z.object({}).passthrough(),
+      _meta: viewMeta(APP_URI),
     },
-    async () => ({
-      openView: { resource: "ui://scholar/app.html", route: "/progress" },
-    }),
+    async () => ({ view: "progress" }),
   );
 };

@@ -7,7 +7,7 @@ import { test, expect } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { registerUiResource } from "./resource.ts";
+import { registerUiResource, viewMeta, APP_URI, MCP_APP_MIME } from "./resource.ts";
 import type { ServerContext } from "../tools/registry.ts";
 
 // Minimal ctx mock with a pdf stub. Cycle 6.9 only exercises ctx.pdf for the
@@ -54,15 +54,33 @@ test("ui://scholar/app.html is enumerable and readable via MCP protocol", async 
   const resourceList = await client.listResources();
   const found = resourceList.resources.find((r) => r.uri === "ui://scholar/app.html");
   expect(found).toBeDefined();
-  expect(found?.mimeType).toBe("text/html");
+  // MCP Apps render gate (§9 amendment 2026-06-04): the host only renders the
+  // iframe when the resource is served with the profile mime, not plain text/html.
+  expect(found?.mimeType).toBe("text/html;profile=mcp-app");
 
   const result = await client.readResource({ uri: "ui://scholar/app.html" });
   expect(result.contents).toHaveLength(1);
-  const appContent = result.contents[0] as { text?: string; blob?: string };
+  const appContent = result.contents[0] as { text?: string; blob?: string; mimeType?: string };
   expect(typeof appContent.text).toBe("string");
+  // The read content item carries the profile mime too (content-item value is
+  // what the host actually inspects on resources/read).
+  expect(appContent.mimeType).toBe("text/html;profile=mcp-app");
 
   await client.close();
   await server.close();
+});
+
+// §9 amendment (2026-06-04): viewMeta builds the tool _meta that links a
+// view-opener tool to ui://scholar/app.html. Both the modern nested key and the
+// legacy flat key are emitted (hosts must check both — ext-apps registerAppTool
+// normalizes the same way). MCP_APP_MIME is the profile mime constant.
+test("viewMeta emits both modern and legacy ui resourceUri keys", () => {
+  expect(APP_URI).toBe("ui://scholar/app.html");
+  expect(MCP_APP_MIME).toBe("text/html;profile=mcp-app");
+  expect(viewMeta(APP_URI)).toEqual({
+    ui: { resourceUri: APP_URI },
+    "ui/resourceUri": APP_URI,
+  });
 });
 
 // Task 8b: ui://scholar/pdf/<paper_id> URI scheme — per chore 9d78da3.
