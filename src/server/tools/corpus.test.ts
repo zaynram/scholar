@@ -6,6 +6,7 @@ import { test, expect, describe, beforeEach, afterEach, mock, spyOn } from "bun:
 import { mkdtempSync, rmSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sql } from "drizzle-orm";
 import { buildServer, type BuiltServer } from "../index.ts";
 import { openWithPragmas, applyMigrations } from "../db/migrations.ts";
 import { reopenPersistedCorpus } from "./corpus.ts";
@@ -335,6 +336,71 @@ test("reopenPersistedCorpus stays silent when no corpus has ever been activated 
   expect(result).toBeUndefined();
   expect(warn).not.toHaveBeenCalled();
   warn.mockRestore();
+});
+
+test("reopenPersistedCorpus rehydrates ctx.db from the on-disk corpus DB across a simulated process restart (Bug #3b real-path discriminator)", async () => {
+  // The two #3b unit tests above hand-set `ctx.db = undefined` to prove the
+  // SYMPTOM surface (db_open:false / diagnostic warns). They do NOT exercise the
+  // real rehydration PATH — which is exactly the gap the Cowork field report
+  // flagged: "query/digest still require manual re-activation" after a restart.
+  // This test opens a SECOND server against the SAME on-disk runtimeRoot, with a
+  // FRESH config-DB handle (a new openWithPragmas on the same file, NOT the
+  // shared `configDb` the harness injected into Server A), and asserts that
+  // reopenPersistedCorpus actually re-opens the per-corpus DB the prior session
+  // wrote and recovers its rows. If this goes RED, the field symptom reproduces
+  // locally and #3 needs a root-cause fix, not just diagnostics.
+
+  // ── Server A (the beforeEach `built`): create + activate, seed one paper ──
+  await createCorpus("restart-real");
+  await dispatch("scholar.corpus.activate", { slug: "restart-real" });
+  expect(built.ctx.db).toBeDefined();
+  // Seed directly into the live corpus handle so there is durable on-disk content
+  // to recover. Auto-commit (no explicit txn) flushes it to the DB file before B
+  // opens its own connection.
+  built.ctx.db!.run(sql`
+    INSERT INTO papers (id, key, title, imported_at)
+    VALUES ('p-restart-1', 'restart-key-1', 'Seeded Across Restart', '2026-06-05T00:00:00Z')
+  `);
+
+  // ── Server B: a fresh process simulation on the SAME runtimeRoot ──
+  // A new openWithPragmas handle on the same config-DB file reads A's persisted
+  // activeCorpusId + corpora rows back off disk — no shared in-memory state. B
+  // never calls activate; reopenPersistedCorpus is the only recovery path.
+  const freshConfigDb = openWithPragmas(join(dir, "dbs", "scholar-config.db"));
+  const builtB = buildServer({
+    runtimeRoot: dir,
+    openConfigDb: () => freshConfigDb,
+    spawnPdfChild: () => ({
+      interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+      getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
+      currentRoots: () => [],
+      setRoots: async () => {},
+      displayPdf: async () => ({ viewUUID: "stub-view-uuid" }),
+      isHealthy: () => ({ alive: false, lastOkAt: null, stdioOpen: false }),
+    }),
+  });
+
+  expect(builtB.ctx.db).toBeUndefined(); // fresh process: nothing open yet
+  const reopened = reopenPersistedCorpus(builtB.ctx, dir);
+
+  // The real path must recover the slug AND open the on-disk handle …
+  expect(reopened).toBe("restart-real");
+  expect(builtB.ctx.db).toBeDefined();
+  // … and that handle must see the row Server A committed to the per-corpus file.
+  const rows = builtB.ctx.db!.all(
+    sql`SELECT key, title FROM papers`,
+  ) as { key: string; title: string }[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ key: "restart-key-1", title: "Seeded Across Restart" });
+
+  // Production read-path proof: corpus.status on B reports the recovered count,
+  // not the misleading 0 of #3 — db_open:true, paper_count:1, no manual activate.
+  const status = (await builtB.dispatch("scholar.corpus.status", { slug: "restart-real" })) as {
+    db_open: boolean;
+    paper_count: number;
+  };
+  expect(status.db_open).toBe(true);
+  expect(status.paper_count).toBe(1);
 });
 
 test("corpus.reset-init clears initOnce slot allowing re-create after failure", async () => {
