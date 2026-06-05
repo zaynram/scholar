@@ -51,10 +51,15 @@ export class OllamaUnavailableError extends Error {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 // S3 roadmap batch (2026-05-27): per-call timeouts so a hung Ollama process
-// can't stall callers indefinitely. Defaults align with the audit's budgets
-// (embed: 60s, chat: 120s). Env-overridable to keep tests fast.
+// can't stall callers indefinitely. Env-overridable to keep tests fast.
+//
+// Defect #5 (2026-06-05): the chat budget was raised 120s → 300s. Field report
+// (Cowork, 88-paper corpus) measured a warm digest at 146s — past the old 120s
+// ceiling — so the default aborted a digest that would otherwise have succeeded.
+// 300s gives headroom for large corpora / slower CPUs; it is a ceiling, not a
+// wait, and stays env-overridable via SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS.
 const DEFAULT_EMBED_TIMEOUT_MS = 60_000;
-const DEFAULT_CHAT_TIMEOUT_MS = 120_000;
+const DEFAULT_CHAT_TIMEOUT_MS = 300_000;
 
 class OllamaClientImpl implements OllamaClient {
   // baseUrl() is a method (not a stored property) so env-var changes made by

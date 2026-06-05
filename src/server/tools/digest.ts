@@ -147,10 +147,16 @@ export async function generateDigest(
   } catch (err) {
     if (err instanceof OllamaUnavailableError) {
       ctx.log.warn("Ollama unavailable for digest; returning placeholder", { error: err.message });
-      return {
-        body_md:
-          "Ollama unavailable; configure or start ollama, or opt into Claude fallback per-request (use_claude: true).",
-      };
+      // Defect #5 (2026-06-05): the client already distinguishes a TIMEOUT
+      // ("Ollama timed out after Xms") from an UNREACHABLE host ("cannot reach
+      // Ollama"); surface that distinction instead of a flat "unavailable" so the
+      // user knows whether to start ollama vs. raise the chat budget. Note we
+      // return WITHOUT persisting — a failed generation never caches a digest row.
+      const timedOut = /timed out/i.test(err.message);
+      const body_md = timedOut
+        ? `Ollama timed out before the digest finished (${err.message}). Large corpora can exceed the chat budget — raise SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS, or opt into Claude per-request (use_claude: true).`
+        : `Ollama is unreachable (${err.message}). Start or configure ollama, or opt into Claude per-request (use_claude: true).`;
+      return { body_md };
     }
     throw err;
   }

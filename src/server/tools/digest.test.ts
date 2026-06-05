@@ -36,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   server?.stop(true);
   delete process.env.SCHOLAR_OLLAMA_URL;
+  delete process.env.SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS;
 });
 
 function seededDb() {
@@ -122,12 +123,36 @@ test("digest.generate (opt-in askClaude): returns sentinel and does NOT call Oll
   expect(result.body_md).toBe("");
 });
 
-test("digest.generate (Ollama offline, no opt-in): returns degraded placeholder", async () => {
+// Defect #5 (2026-06-05): the degraded placeholder must distinguish a chat
+// TIMEOUT (the real failure on an 88-paper digest: 146s warm > the old 120s
+// budget) from an UNREACHABLE ollama. The client already carries the distinction
+// (client.ts: "Ollama timed out after Xms" vs "cannot reach Ollama"); the digest
+// handler previously flattened both into one "unavailable" string.
+test("digest.generate (Ollama unreachable, no opt-in): placeholder names unreachable, not a timeout", async () => {
   const sqlite = seededDb();
-  // Point to a closed port.
+  // Point to a closed port → connection-refused → "cannot reach Ollama".
   process.env.SCHOLAR_OLLAMA_URL = "http://127.0.0.1:1";
   const result = await generateDigest(fakeCtx(sqlite), { scope_key: "all" });
-  expect(result.body_md).toMatch(/Ollama unavailable/i);
+  expect(result.body_md).toMatch(/unreachable|cannot reach/i);
+  expect(result.body_md).toMatch(/ollama/i);
+  expect(result.body_md).not.toMatch(/timed out/i);
+});
+
+test("digest.generate (Ollama chat times out): placeholder names the timeout + the tunable, not unreachable", async () => {
+  const sqlite = seededDb();
+  // Swap the canned-response server for one that hangs, and shrink the chat
+  // budget so AbortSignal.timeout fires fast → "Ollama timed out after 250ms".
+  server?.stop(true);
+  server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) });
+  process.env.SCHOLAR_OLLAMA_URL = `http://127.0.0.1:${server.port}`;
+  process.env.SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS = "250";
+  const result = await generateDigest(fakeCtx(sqlite), { scope_key: "all" });
+  expect(result.body_md).toMatch(/timed out/i);
+  expect(result.body_md).toMatch(/SCHOLAR_OLLAMA_CHAT_TIMEOUT_MS/);
+  expect(result.body_md).not.toMatch(/unreachable|cannot reach/i);
+  // A failed generation must never persist a (placeholder) digest row.
+  const count = (sqlite.query("SELECT COUNT(*) AS c FROM digests").get() as { c: number }).c;
+  expect(count).toBe(0);
 });
 
 test("digest.generate: NO_ACTIVE_CORPUS guard", async () => {
