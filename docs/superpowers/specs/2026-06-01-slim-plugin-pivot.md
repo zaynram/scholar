@@ -154,7 +154,16 @@ enumerated with its failure symptom in **HUMAN.md §5**.
 > (`src/ui/lib/app.ts`) was rewritten off the host-injected `window.mcp`/`window.cowork`
 > globals onto `@modelcontextprotocol/ext-apps` `App` over `PostMessageTransport`,
 > reading the view from the `ontoolresult` tool-*result* notification. The dep is
-> client-only (absent from `dist/server.js`). The **only** unproven leg is the live
+> client-only (absent from `dist/server.js`). **Packaging correction (`f91de0e`):**
+> source-conformance was necessary but not sufficient — a packaging defect made
+> every bundle serve the "UI not built" placeholder (`resource.ts` read a dev-only
+> path that resolves outside the plugin root; the build staged Bun's multi-file
+> loader the sandboxed iframe can't fetch). Fixed and **verified against the real
+> artifacts**: build now stages one self-contained `ui/app.html` (gated in both
+> `required[]` manifests), `resource.ts` resolves it via a `CLAUDE_PLUGIN_ROOT`
+> ladder, and all three rebuilt bundles ship `ui/app.html` only (0 external
+> `<script src>`), pinned by a real-SDK `readResource` test
+> (`src/server/ui/resource.test.ts`). The **only** unproven leg is the live
 > render on Claude Desktop — the one-shot `ontoolresult` delivery can't be exercised
 > from Linux (the register-before-connect ordering it depends on is asserted in-test
 > in `src/ui/lib/app.test.ts`). Tracked in **HUMAN.md §5 leg 6**.
@@ -204,10 +213,17 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   `node_modules/koffi`), *or* tree-kill the pdf child from the cmd-side launcher.
   Not done blind here — koffi's native-binding resolution cannot be validated off
   the target.
-- **UI bundling**: `build:ui` emits `ui/index.html` + a `chunk-*.js` (two files,
-  pre-existing behavior — not single-file as CLAUDE.md §14.1 implies). Both are
-  packaged; if the MCP UI resource requires a single inline file, the UI build
-  config (not the slim pivot) needs a follow-up.
+- **UI bundling** — *RESOLVED 2026-06-04 (`f91de0e`).* This bullet predicted the
+  defect: `build:ui` emits a multi-file `ui/index.html` + `chunk-*.js`, and the
+  sandboxed MCP-App iframe (SEP-1865) cannot fetch sibling chunks — so the
+  packaged UI rendered as the "UI not built" placeholder. The follow-up landed:
+  the build now stages one self-contained `ui/app.html` (Bun's multi-file output
+  inlined via the shared `buildInlinedUI` helper in `scripts/build-ui.ts`, gated
+  in both the `.plugin` and `.mcpb` `required[]` manifests), and
+  `src/server/ui/resource.ts` resolves it via a `CLAUDE_PLUGIN_ROOT`-anchored
+  ladder. Verified against the real artifacts (all three rebuilt bundles ship
+  `ui/app.html` only, 0 external `<script src>`) and pinned by a real-SDK
+  `readResource` test (`src/server/ui/resource.test.ts`).
 - **MCP connect timeout**: first launch blocks on the bun download (~tens of MB).
   If Claude Code imposes a short MCP spawn/connect timeout, the SessionStart
   pre-warm mitigates but does not guarantee; confirm the timeout is generous.

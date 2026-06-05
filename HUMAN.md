@@ -110,8 +110,11 @@ The Claude Desktop distribution is built and structurally proven. The Windows
 *render* leg — flagged in an earlier draft as non-conformant at source — is now
 **source-conformant** (leg 6 below): scholar speaks the mcp-apps host-render
 protocol (both layers) and the UI bundle carries the `@modelcontextprotocol/ext-apps`
-bridge. What remains is purely a **live-render check on Desktop** — the one-shot
-notification delivery can't be simulated from Linux. See leg 6.
+bridge. A follow-on **packaging defect** (the bundle served a placeholder, not the
+real UI) was also found and fixed afterward (`f91de0e`) and **verified against the
+real artifacts** — see the *Packaging correction* under leg 6. What remains is
+purely a **live-render check on Desktop** — the one-shot notification delivery
+can't be simulated from Linux. See leg 6.
 
 **Build it** (on any host with `bun` + the `mcpb` CLI):
 ```
@@ -204,12 +207,39 @@ be checked on Windows — each with the symptom to watch for:
    notification once right after the `ui/initialize` handshake — is **asserted
    in-test** (`src/ui/lib/app.test.ts`).
 
+   **Packaging correction (2026-06-04, after this leg was first flipped to
+   "source-conformant").** That source-conformance claim was necessary but **not
+   sufficient**: a packaging defect meant every shipped bundle served the "Scholar
+   UI not built" placeholder, so the iframe would have rendered empty regardless of
+   the protocol work above. `src/server/ui/resource.ts` read a dev-only path
+   (`build/ui/app.html`, which from the bundled `dist/server.js` resolves *outside*
+   the plugin root → never exists in a deployed plugin → ENOENT → placeholder), and
+   `build-plugin.ts` staged Bun's *multi-file* loader (`ui/index.html` +
+   `chunk-*.js`) the sandboxed iframe can't fetch anyway. The source suite stayed
+   green because it exercised the dev path — the verify-against-the-real-artifact
+   trap. **Fixed in `f91de0e`:** build now stages one self-contained `ui/app.html`
+   (via a shared inliner, gated in both the `.plugin` and `.mcpb` `required[]`
+   manifests) and `resource.ts` resolves it through a `CLAUDE_PLUGIN_ROOT`-anchored
+   ladder. **Verified against the real artifacts** (not the dev path): all three
+   rebuilt bundles (`scholar-linux.plugin`, `scholar-win32.plugin`, `scholar.mcpb`)
+   ship `ui/app.html` **only** — no `index.html`/chunks — with 0 external
+   `<script src>`, one inlined module block, and the `<title>Scholar</title>`
+   marker; a new real-SDK `readResource` test (`src/server/ui/resource.test.ts`)
+   stages the UI through build-plugin's own `buildUI`, points `CLAUDE_PLUGIN_ROOT`
+   at it, and asserts the served HTML is the staged single-file bundle
+   (sentinel-proven, so resolution went through the ladder, not the dev fallback)
+   and not the placeholder.
+
    **What is your leg (only checkable on live Desktop):** that the host actually
    renders the iframe and the one-shot `ontoolresult` is delivered *and caught* —
    i.e. the handshake-then-notification timing on the real host. *symptom:* the
-   panel renders but stays **blank/empty** (iframe appears, no view) → the
-   notification was missed (one-shot race) or `structuredContent` didn't carry the
-   `view` key; *symptom:* iframe **never appears** → the host didn't honor
+   panel shows **"Scholar UI not built"** → the bundle didn't reach
+   `<root>/ui/app.html` (should not happen post-`f91de0e`; re-check the artifact
+   actually carries `ui/app.html` and the host set `CLAUDE_PLUGIN_ROOT`);
+   *symptom:* the panel renders but stays **blank/empty** (iframe appears, real UI
+   chrome but no view) → the notification was missed (one-shot race) or
+   `structuredContent` didn't carry the `view` key; *symptom:* iframe **never
+   appears** → the host didn't honor
    `_meta.ui.resourceUri` / the profile mime (re-check the manifest reached Desktop
    and the tool list shows `_meta`). The `cowork.askClaude` "Use Claude instead"
    toggle is **expected to be absent** on standard Desktop (no Cowork global) — the
