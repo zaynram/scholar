@@ -250,7 +250,7 @@ Child process supervisor: spawn / SIGTERM / restart / health check, keyed to cor
 Registers `ui://scholar/app.html` and serves the single-file React bundle.
 
 ### 5.21 src/ui/App.tsx
-React root; wires the App SDK lifecycle (`ontoolinput`, `ontoolresult`, `onhostcontextchanged`).
+React root; dispatches on the `ViewInput` discriminant delivered via `app.ontoolresult` (the view payload rides the tool *result* `structuredContent`, not `ontoolinput`) and consumes `onhostcontextchanged` for theming. See the §9 MCP Apps conformance amendment (2026-06-04).
 
 ### 5.22 src/ui/views/CorpusDashboard.tsx
 Scope picker, filters, search, paper-card list.
@@ -268,7 +268,7 @@ Per-paper or per-scope reading-questions panel.
 Chart.js progress charts. (uPlot is documented as a swap candidate in §17 if bundle-budget measurement in cycle 6.9 triggers — see §14.1.)
 
 ### 5.27 src/ui/lib/app.ts
-App SDK wrapper, host-styles wiring, callServerTool helper.
+Drives the `@modelcontextprotocol/ext-apps` `App` over `PostMessageTransport`; host-styles wiring; `callServerTool` / `readServerResource` / `sendMessage` / `askClaude`-degrade helpers. Registers `ontoolresult`/`onhostcontextchanged` **before** `connect()` (one-shot delivery). See the §9 MCP Apps conformance amendment (2026-06-04).
 
 ### 5.28 src/vendor/pdf-server/dist/index.js
 Unmodified `@modelcontextprotocol/server-pdf@1.7.2` dist, vendored for offline distribution. Re-vendoring on upstream bump is a `bun pm pack` → unpack → diff — no source patch to preserve.
@@ -964,7 +964,74 @@ export const settings = sqliteTable("settings", {
 
 ## 9. MCP App Views
 
-The single bundled HTML resource (`ui://scholar/app.html`) dispatches on the `view` field in tool input/result `structuredContent`. The five views:
+The single bundled HTML resource (`ui://scholar/app.html`) dispatches on the `view` field carried in each view-opener tool's **result `structuredContent`**. The five views:
+
+> **MCP Apps conformance amendment (2026-06-04).** The original §9/§11/§253 prose
+> predated the finalized MCP Apps protocol (SEP-1865) and described a render
+> handshake that no host implements. v1.0 shipped three *mutually incompatible*
+> view vocabularies — `corpus.dashboard` emitted `{view, resource}`, the other
+> openers emitted `{openView: {resource, route}}` (a route string carrying no
+> ids), and the UI consumer (`App.tsx`) read a third shape (`ViewInput`) off the
+> wrong channel (`ontoolinput`, the tool-*input* notification). End to end the
+> viewer could never render. This amendment is a *deliberate spec edit* (not a
+> freeze allowance) authorizing the correction; it is the authoritative contract
+> and supersedes the inline prose below and at §11/§253 where they conflict. The
+> reference is scholar's own version-matched vendored `pdf-server@1.7.2`
+> (`src/vendor/pdf-server/`) and the `@modelcontextprotocol/ext-apps` package
+> `.d.ts` (pinned in `package.json`). Six load-bearing contract elements:
+>
+> 1. **Single view payload — `ViewInput` in `structuredContent`.** Every
+>    view-opener tool returns its discriminant as `structuredContent` matching
+>    the `ViewInput` union (`src/ui/lib/app.ts`):
+>    `{view:"dashboard", corpus_id?}` · `{view:"paper", paper_id}` ·
+>    `{view:"digest", scope_key?}` · `{view:"prompts", paper_id?}` ·
+>    `{view:"progress"}`. The retired `openView`/`route` and bare-`{view,resource}`
+>    shapes are gone. `digest.show` gains an optional `scope_key` input and
+>    `prompts.show` an optional `paper_id` input so the emitted payload can carry
+>    the discriminant's id; absence is handled view-side. The registry wrapper
+>    (`registry.ts`) promotes the handler return to `structuredContent` when
+>    `"view" in result` (was `"openView" in result`) and still emits the legacy
+>    `content` text block for non-Apps hosts.
+> 2. **Tool-side render trigger — `_meta.ui.resourceUri`.** Each of the five
+>    view-opener tool *definitions* declares `_meta.ui.resourceUri =
+>    "ui://scholar/app.html"`. For host back-compat both the modern nested key
+>    (`_meta.ui.resourceUri`) **and** the legacy flat key
+>    (`_meta["ui/resourceUri"]`) are emitted — mirroring ext-apps' `registerAppTool`
+>    normalization — via a small `viewMeta(uri)` helper applied inside scholar's
+>    own `register` chokepoint (NOT by routing through `registerAppTool`, which
+>    would bypass the §7.6 snapshot-at-entry handler wrapper). Without this
+>    `_meta`, the host never fetches the resource and the iframe never renders.
+> 3. **Resource mime — `text/html;profile=mcp-app`.** `ui://scholar/app.html` is
+>    served with the MCP Apps profile mime (the `RESOURCE_MIME_TYPE` constant),
+>    not plain `text/html`. **Scoped to `app.html` only** — the sibling
+>    `ui://scholar/pdf/{paper_id}` resource stays `application/pdf`.
+> 4. **Client bridge — ext-apps `App` over postMessage.** `src/ui/lib/app.ts`
+>    drives the official `@modelcontextprotocol/ext-apps` `App` over
+>    `PostMessageTransport(window.parent, window.parent)`, not host-injected
+>    `window.mcp`/`window.cowork` globals (a Cowork-ism no standard host
+>    populates). The view discriminant arrives on **`app.ontoolresult`** (the
+>    tool-*result* notification), read from `params.structuredContent` — NOT
+>    `ontoolinput`. **`ontoolresult` for the triggering call is a one-shot event
+>    fired right after the `ui/initialize` handshake**; the handler MUST be
+>    registered *before* `app.connect()` or the notification is missed and the
+>    panel renders blank with mime/`_meta`/payload all correct. `callServerTool`,
+>    `sendMessage`, `createSamplingMessage`, and `onhostcontextchanged` map to the
+>    `App` methods of the same name.
+> 5. **PDF bytes — `app.readServerResource`.** The paper-detail PDF read maps to
+>    `App.readServerResource({uri: "ui://scholar/pdf/{paper_id}"})` (host-proxied
+>    `resources/read`), which the `App` class exposes directly.
+> 6. **`askClaude` degrades, does not hard-depend.** The `cowork.askClaude` global
+>    is host-specific; `isAskClaudeAvailable()` feature-detects it and the toggle
+>    is hidden when absent (§11), so the Ollama-only path is exercised end to end
+>    on a standard host. A conformant *port* onto `App.createSamplingMessage`
+>    (gated on `getHostCapabilities()?.sampling`) is noted as future work, not v1.
+>
+> **Capability negotiation (resolved blind spot).** No server-side capability
+> advertisement is required at `initialize`. The reference registers app-tools
+> unconditionally; ext-apps' `getUiCapability` is an *optional* server-side
+> degradation helper (decide app-tool vs text-only based on the client's declared
+> `extensions`) that the reference does not use. Tool `_meta.ui.resourceUri` plus
+> the profile mime is necessary and sufficient for the host to render.
 
 ### 9.1 Corpus dashboard (`view: "dashboard"`)
 
@@ -1072,6 +1139,15 @@ askClaude?: {
 ```
 
 On seeing `structuredContent.askClaude`, the UI calls `window.cowork.askClaude(askClaude.prompt, askClaude.data)` (a host-provided global in the MCP App iframe) and renders the result. This sentinel shape is the contract shared between the producers (`src/server/tools/digest.ts`, `prompts.ts`) and the consumer (`src/ui/views/DigestPanel.tsx`). It keeps Claude API usage off the default path while preserving an explicit escape hatch.
+
+> **Bridge amendment (2026-06-04).** The `cowork.askClaude` global is read through
+> the ext-apps `App` bridge's feature-detect (`isAskClaudeAvailable()`), not a
+> hand-rolled `window.mcp` channel — see the §9 MCP Apps conformance amendment,
+> element 6. On a standard Claude Desktop host (no Cowork global) the toggle is
+> hidden per the **Host-capability detection** subsection below and the
+> Ollama-only path runs end to end; the sentinel producer/consumer contract above
+> is otherwise unchanged. A conformant port onto `App.createSamplingMessage` is
+> future work, not v1.
 
 **Host-capability detection (Integration F8).** `window.cowork.askClaude` is a Cowork-host-provided global; raw Claude Code, MCP Inspector, and other hosts do not expose it. The UI feature-detects with `typeof window.cowork?.askClaude === "function"` on mount:
 
