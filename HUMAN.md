@@ -185,8 +185,35 @@ be checked on Windows — each with the symptom to watch for:
    resource mime to `text/html;profile=mcp-app`; the existing `structuredContent.view`
    dispatch keeps working *inside* the iframe. SDK 1.29.0 already passes `_meta`
    through to the tool listing (`@modelcontextprotocol/sdk` `mcp.js:86`), so it is
-   viable. Until it lands, install + launch can be exercised but the UI/PDF panels
-   stay blank.
+   viable. **But that is only layer 1 (render/discovery).** Until it lands, install +
+   launch can be exercised but the UI/PDF panels stay blank.
+
+   **Layer 2 — the in-iframe runtime bridge — is also non-conformant (confirmed
+   2026-06-04), and is the bigger piece.** Even after layer 1 renders the iframe, the
+   React app inside must *receive* its `structuredContent.view` payload and *call*
+   server tools over the host bridge. The finalized protocol does this with the
+   `@modelcontextprotocol/ext-apps` `App` class — `new App()`, `await app.connect()`,
+   `app.ontoolresult = cb`, `app.callServerTool({name, arguments})`,
+   `app.updateModelContext(...)` — all **JSON-RPC over `postMessage(window.parent)`**
+   (confirmed: SEP-1865 + the blog API + the reference `mcp-app.html`, which uses
+   `postMessage`/`window.parent`/`notifications/*`/`tools/call`). Scholar's
+   `src/ui/lib/app.ts` instead assumes a **host-injected `window.mcp` global with
+   property-handlers** ("OPTION B", attributed to scholar spec §253): it reads
+   `window.mcp.ontoolinput` (canonical is `app.ontoolresult` — different name *and*
+   object), `window.mcp.callTool(name, args)` (canonical is
+   `app.callServerTool({name, arguments})`), and a Cowork-only `window.cowork.askClaude`
+   (not in the standard). So scholar's UI is listening on a channel the Desktop host
+   never populates — the panel would render but stay inert / payload-less.
+   **Layer 2 is a real client rework, not an additive tweak:** rewrite `lib/app.ts`
+   onto the `ext-apps` `App` bridge, adapt `App.tsx` + `DigestPanel.tsx` + their
+   tests, and add the `@modelcontextprotocol/ext-apps` dependency. Together with the
+   spec §9/§11/§253 amendment this is a planned thread (likely re-enter the
+   spec-pipeline), not an ad-hoc edit. *Caveat (salient uncertainty):* scholar's
+   spec §253 cites a "window.mcp" property-handler option that may have come from an
+   earlier mcp-apps draft or an internal Cowork-host assumption; against the
+   *current* finalized protocol + the version-matched pdf-server reference it is
+   non-conformant, but this is a reading of the evidence, not something exercised on
+   live Desktop.
 7. **Clean shutdown / no orphaned lock** — `launch.cmd` runs `bun.exe` as a *child*
    of cmd.exe (no exec-replace on Windows). *symptom:* after quitting/restarting
    Desktop, the next launch refuses with `SCHOLAR_LOCKED`. The pid-liveness reclaim
