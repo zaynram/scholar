@@ -16,6 +16,7 @@
         "build:vec": "bun --silent scripts/build-vec0",
         "build": "bun --silent scripts/build-plugin",
         "build:linux": "SCHOLAR_BUILD_WIN=0 bun --silent run build",
+        "build:mcpb": "SCHOLAR_PACKAGE=mcpb bun --silent run build",
         "measure-bundle": "bun --silent scripts/measure-bundle"
     },
     "dependencies": {

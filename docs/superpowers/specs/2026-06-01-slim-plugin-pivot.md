@@ -103,6 +103,56 @@ runs the server. A `SessionStart` hook pre-warms `ensure-bun` (latency only —
 the launcher is the correctness gate, because SessionStart does not block MCP
 spawn). On Linux the launcher `exec`s into bun (no orphaned wrapper).
 
+## Claude Desktop `.mcpb` packaging target (maintenance addendum 2026-06-04)
+
+A **second** packaging target was added in maintenance mode: a Claude Desktop
+Extension (`.mcpb`) alongside the Claude Code `.plugin`. Reason: scholar's PDF
+viewer is an **MCP App** (UI resource rendered in a Desktop iframe) that the
+Claude Code terminal cannot render — Claude Desktop is the only consumer of that
+leg. This addendum records the *implementation*; it is **not** a ratified design.
+The fuller packaging spec (target matrix, supported-OS policy, signing, sideload
+vs. marketplace distribution) is human design work and remains unwritten — flagged
+so the next spec pass owns it rather than inheriting it as an accidental default.
+
+Design intent (deliberately minimal — no new launch surface):
+- One staging tree, two emitters. `SCHOLAR_PACKAGE=mcpb` (`scripts/build-plugin.ts`)
+  forces the win32 target and, instead of `.claude-plugin/plugin.json` + an fflate
+  zip, writes a root **`manifest.json`** (mcpb schema **0.2** — the tool's broadly-
+  compatible default; the manifest uses no version-specific field so 0.1–0.4 all
+  validate) and packs via the official **`mcpb` CLI** (`mcpb validate` gate →
+  `mcpb pack` → `out/scholar.mcpb`, ~2.9 MB / 20 files). Pure `buildMcpbManifest`
+  is unit-pinned; `mcpb validate` is the authoritative schema gate.
+- **The win32 launcher is not modified.** `server.type:"binary"`, command
+  `cmd.exe /c ${__dirname}\bin\launch.cmd`. The manifest `env` aliases the two vars
+  the launcher already reads — `CLAUDE_PLUGIN_ROOT := ${__dirname}` and
+  `CLAUDE_PLUGIN_DATA := ${user_config.data_dir}` — so the launch chain runs
+  byte-identical to the Code plugin. `SCHOLAR_BUN_PATH`/`SCHOLAR_VEC0_PATH`/
+  `SCHOLAR_PDF_ENTRYPOINT` are intentionally unset: their defaults derive from
+  `CLAUDE_PLUGIN_ROOT` (vec0, pdf entry) and `process.execPath` (the provisioned
+  bun that `launch.cmd` runs `server.js` with). `data_dir` is collected at install
+  via `user_config` (directory, required); Ollama URL/models are optional fields.
+
+Proven on Linux (2026-06-04): manifest validates against the real `mcpb` schema
+(0.1–0.4), packs + unpacks to the correct structure (manifest at root; launcher,
+`dist/server.js`, `dist/pdf-server/{index.js,mcp-app.html}`, `vec0.dll`, `ui/`,
+`nu/`, migrations present; no `.claude-plugin/` cruft), and the source
+path-resolution chain reads the two aliased vars. **Not proven** (Windows-only):
+Desktop accepting the manifest, spawning `cmd.exe`/`type:binary`, `${…}`
+substitution, bun provisioning, and vec0 ABI under the provisioned bun — each
+enumerated with its failure symptom in **HUMAN.md §5**.
+
+> **Known gap — the mcp-apps viewer render is *not* merely Windows-unproven; it is
+> non-conformant at the source level (confirmed 2026-06-04).** Per SEP-1865 the
+> Desktop host renders a tool's UI iframe only when the tool declares
+> `_meta.ui.resourceUri` and the resource is served as `text/html;profile=mcp-app`;
+> scholar declares neither (it uses the spec §9/§11 `structuredContent.view`/`resource`
+> model, which the host does not read for rendering). So the headline leg — the reason
+> Desktop is the target — will not render until a conformance fix lands. The fix is
+> additive (point the five view-opener tools' `_meta.ui.resourceUri` at
+> `ui://scholar/app.html`, flip the mime; `structuredContent.view` dispatch keeps
+> working inside the iframe) but it is a **spec §9/§11 amendment**, so it is a
+> deliberate design decision, not a silent code edit. Tracked in **HUMAN.md §5 leg 6**.
+
 ## Resolved (was open, now verified on Linux)
 
 - **bun pin vs vec0 ABI** — `loadExtension(vec0)` + a `vec0` virtual table
@@ -117,14 +167,17 @@ spawn). On Linux the launcher `exec`s into bun (no orphaned wrapper).
 ## Still open (require Windows-hardware validation — cannot verify from WSL)
 
 - **Windows launch orphan**: `cmd.exe /c launch.cmd` has no exec-replace, so
-  `bun.exe` runs as a child of cmd. If Claude Code does not tree-kill the MCP
-  process on shutdown, bun may orphan. Verify tree-kill; mitigate with a Job
-  Object on the cmd side if observed. **Note:** the chained "orphan holds
-  `runtime/scholar.lock` → next session `SCHOLAR_LOCKED`" DoS is **moot today** —
-  the single-active-session flock is a frozen v1 *spec* invariant (CLAUDE.md) but
-  is **not yet implemented** (`grep` of `src/server/index.ts` finds no lock
-  acquisition). When that flock is wired, harden it against a stale holder
-  (liveness/staleness check) so a dead-but-lock-holding PID cannot wedge startup.
+  `bun.exe` runs as a child of cmd. If the host does not tree-kill the MCP process
+  on shutdown, bun may orphan. Verify tree-kill; mitigate with a Job Object on the
+  cmd side if observed. **Update 2026-06-04:** the chained "orphan holds
+  `runtime/scholar.lock` → next session `SCHOLAR_LOCKED`" path is **now live** — the
+  single-active-session lock *is* implemented (a **pidfile**, not literal flock:
+  `src/server/session-lock.ts`, `O_EXCL` create + `process.kill(pid,0)` liveness
+  reclaim; see CLAUDE.md + `docs/audits/2026-06-04-invariant-enforcement.md` Δ1/Δ3).
+  It is already hardened against a stale holder: a dead PID's lockfile is reclaimed
+  on next start. The residual risk is only OS **pid reuse** (a live unrelated
+  process at the recorded pid blocks reclaim). On `.mcpb`/Desktop this is HUMAN.md
+  §5 leg 7 — confirm a Desktop restart recovers cleanly.
 - **ensure-bun.ps1**: the PowerShell download/extract path is unexecuted on the
   dev host. Validate `Invoke-WebRequest`/`Expand-Archive` + the lock-dir guard.
 - **koffi.node (win32-x64) — KNOWN REGRESSION (decided: accept + document).**

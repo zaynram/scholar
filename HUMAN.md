@@ -89,6 +89,110 @@ root). So the provisioning + spawn + migrate + activate spine is no longer an
 assumption — the **only** unproven leg is the PDF *viewer* (`displayPdf`/`getText`,
 step 7), which can only be exercised by a human at the desktop.
 
+> **Note (2026-06-04):** the PDF viewer is an **MCP App** the Claude Code terminal
+> can't render — the actual home for that leg is **Claude Desktop** via the `.mcpb`
+> extension. See **§5** for the build + install + the Windows verification legs
+> (the viewer-render check there is the same leg as step 7). **Caveat:** that render
+> leg is now known to be **non-conformant at the source level** — scholar doesn't
+> yet declare the mcp-apps `_meta.ui.resourceUri` / `text/html;profile=mcp-app`
+> contract, so the panel won't render on Desktop *or* anywhere until the (additive)
+> conformance fix lands. See **§5 leg 6** for the gap and the fix.
+
+---
+
+## 5. Install + verify the `.mcpb` on Claude Desktop (Windows)  ⟵ NEW 2026-06-04
+
+The Claude Desktop distribution is built and structurally proven. The Windows
+*launch* legs can only be exercised by you on the target machine — but the
+headline *render* leg is already known to fail at the **source** level (leg 6
+below): scholar does not yet speak the mcp-apps host-render protocol, so the
+PDF/UI panels will not appear until a small conformance fix lands. The packaging
+is correct and shippable; the feature it carries is not yet wired to render. See
+leg 6 for the exact gap and the (additive) fix.
+
+**Build it** (on any host with `bun` + the `mcpb` CLI):
+```
+bun run build:mcpb        # -> out/scholar.mcpb (win32, ~2.9 MB, 20 files)
+```
+The build runs `mcpb validate` then `mcpb pack`. The manifest is `manifest.json`
+at the bundle root (mcpb schema **0.2**), `server.type:"binary"`, command
+`cmd.exe /c ${__dirname}\bin\launch.cmd`. It does **not** modify the launcher: the
+manifest `env` aliases the two vars `launch.cmd`/`ensure-bun.ps1` already read —
+`CLAUDE_PLUGIN_ROOT := ${__dirname}` and `CLAUDE_PLUGIN_DATA := ${user_config.data_dir}`
+— so the win32 launch chain runs byte-identical to the Claude Code plugin.
+
+**Install it:** Claude Desktop → Settings → Extensions → *Install Extension…* →
+pick `out/scholar.mcpb` (or double-click the file). At install you'll be prompted
+for the **Scholar data directory** (default `%USERPROFILE%\scholar`) and, optionally,
+the Ollama URL/model tags. The data dir must be writable — it holds the provisioned
+bun runtime, the SQLite DBs, downloaded PDFs, and snapshots.
+
+**Prereqs on the Windows box:** Ollama running and reachable at the configured URL,
+with `nomic-embed-text:v1.5` + `qwen3:8b` pulled (same as §1). If Ollama is on a
+different host, set the Ollama URL field at install.
+
+### What is proven vs. what is your leg
+
+Proven from Linux: the manifest validates against the real `mcpb` schema (0.1–0.4
+all pass — no version-specific field), packs + unpacks to the correct structure
+(manifest at root; `bin/launch.cmd`, `dist/server.js`, `dist/pdf-server/{index.js,
+mcp-app.html}`, `build/vendor/sqlite-vec/vec0.dll`, `ui/`, `nu/`, migrations all
+present; no `.claude-plugin/` cruft), and the source path-resolution chain reads
+the two aliased vars (vec0 + pdf entry off `CLAUDE_PLUGIN_ROOT`, bun off
+`process.execPath`). **None of that proves Desktop runs it.** These legs can only
+be checked on Windows — each with the symptom to watch for:
+
+1. **Desktop accepts manifest_version 0.2** — *symptom:* the Install dialog rejects
+   the extension up front. *Fix:* bump `MCPB_MANIFEST_VERSION` in
+   `scripts/build-plugin.ts` (0.2 → 0.3 → 0.4), `bun run build:mcpb`, reinstall.
+2. **Desktop spawns `cmd.exe`/`type:"binary"`** — *symptom:* extension installs but
+   the MCP never connects ("server failed to start"). Means Desktop won't launch an
+   arbitrary command for this extension type.
+3. **Variable substitution** (`${__dirname}`, `${user_config.data_dir}`, `${HOME}`)
+   — *symptom:* `ensure-bun: CLAUDE_PLUGIN_DATA unset` on stderr, or launch.cmd
+   can't find `dist\server.js`. Means a `${…}` token wasn't expanded. (`${HOME}`
+   is confirmed a documented mcpb substitution var, usable in `user_config`
+   defaults — mcpb `MANIFEST.md` — and Desktop maps it to the Windows user
+   profile, so the `data_dir` default `${HOME}\scholar` is portable, not a bug.)
+4. **bun provisioning** (ensure-bun.ps1 downloads bun-windows-x64 **1.3.11** into
+   `%CLAUDE_PLUGIN_DATA%\bun`) — *symptom:* long first-launch then `bun.exe` not
+   found; or PowerShell blocked by ExecutionPolicy (the hook passes
+   `-ExecutionPolicy Bypass`, but Desktop spawns via cmd.exe, not the hook). Check
+   `%data_dir%\bun\bun.exe --version` prints `1.3.11`.
+5. **vec0.dll loads under the provisioned bun** (the ABI is **never probed on
+   Linux** — the win32 dll is fetched from npm as-is) — *symptom:* corpus
+   create/activate throws on vec load / `loadVecAndProbeDim` (SQLite ABI mismatch
+   between bun 1.3.11's bundled SQLite and the dll).
+6. **mcp-apps PDF viewer renders** — *the headline reason Desktop is the target,*
+   and **known non-conformant at the source level (confirmed 2026-06-04).** This is
+   no longer a "verify on Windows" item — it is a tracked source fix. Per SEP-1865
+   (the finalized mcp-apps spec) and the version-matched vendored pdf-server
+   (v1.7.2, scholar's own child and an in-tree proof of the correct shape), the host
+   renders a tool's UI in a sandboxed iframe **only** when (a) the tool declares
+   `_meta: { ui: { resourceUri: "ui://…" } }` at registration and (b) the resource
+   is served with mimeType `text/html;profile=mcp-app`. Scholar does **neither**: no
+   tool carries `_meta.ui.resourceUri` (the UI tools return ad-hoc
+   `openView`/`resource` fields in the *result body* — `corpus.ts:496`,
+   `papers.ts:273,286`, `digest.ts:202`, `prompts.ts:181` — which the host does not
+   read for rendering; they only mean something *inside* an already-rendered iframe,
+   which never gets created), and `src/server/ui/resource.ts:34` serves
+   `ui://scholar/app.html` as plain `text/html`. There is **no
+   `structuredContent.resource` fallback** in the protocol. So the panel **will not
+   render as-is.** This faithfully implements spec §9/§11 (the `structuredContent.view`
+   dispatch model) — so the fix is a deliberate spec §9/§11 amendment, not a code bug.
+   **The fix is additive and contained** (no foundation/§7.6 touch): point all five
+   view-opener tools' `_meta.ui.resourceUri` at `ui://scholar/app.html` and flip the
+   resource mime to `text/html;profile=mcp-app`; the existing `structuredContent.view`
+   dispatch keeps working *inside* the iframe. SDK 1.29.0 already passes `_meta`
+   through to the tool listing (`@modelcontextprotocol/sdk` `mcp.js:86`), so it is
+   viable. Until it lands, install + launch can be exercised but the UI/PDF panels
+   stay blank.
+7. **Clean shutdown / no orphaned lock** — `launch.cmd` runs `bun.exe` as a *child*
+   of cmd.exe (no exec-replace on Windows). *symptom:* after quitting/restarting
+   Desktop, the next launch refuses with `SCHOLAR_LOCKED`. The pid-liveness reclaim
+   in `session-lock.ts` should clear a stale `runtime\scholar.lock` on the next
+   start (unless the OS reused the pid) — confirm a restart recovers cleanly.
+
 ---
 
 ## 3. Reconcile the spec-pipeline registry XSDs upstream  (dropped chore)

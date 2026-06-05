@@ -13,8 +13,17 @@
 // The bun runtime is NOT shipped — it is provisioned into ${CLAUDE_PLUGIN_DATA}
 // by ensure-bun at first launch. No compiled binary, no bundled runtime.
 //
-// Run:        bun scripts/build-plugin.ts            (Windows target, default)
+// Two package targets share one staging tree:
+//   - Claude Code plugin  (default): emits .claude-plugin/plugin.json + zips to
+//     out/scholar.plugin via fflate.
+//   - Claude Desktop .mcpb (SCHOLAR_PACKAGE=mcpb): emits a top-level manifest.json
+//     (mcpb schema) and packs via the `mcpb` CLI to out/scholar.mcpb. Forces the
+//     win32 target — the in-app PDF viewer is an MCP App the Code terminal can't
+//     render, so Desktop is the only consumer and only the win32 launcher ships.
+//
+// Run:        bun scripts/build-plugin.ts            (Claude Code plugin, win32)
 // Linux pkg:  SCHOLAR_BUILD_WIN=0 bun scripts/build-plugin.ts
+// Desktop:    SCHOLAR_PACKAGE=mcpb bun scripts/build-plugin.ts   (-> out/scholar.mcpb)
 
 import util, { OUTPUT } from './util'
 import { stageMigrations } from './stage-migrations'
@@ -29,16 +38,27 @@ import {
 } from 'node:fs'
 import { join, relative } from 'node:path'
 
-const WIN = process.env.SCHOLAR_BUILD_WIN !== '0'
+const MCPB = process.env.SCHOLAR_PACKAGE === 'mcpb'
+// mcpb (Claude Desktop extension) forces the win32 target regardless of
+// SCHOLAR_BUILD_WIN — see the header note for why Desktop is the sole consumer.
+const WIN = MCPB || process.env.SCHOLAR_BUILD_WIN !== '0'
 const NAME = WIN ? 'win32' : 'linux'
 const VEC0_EXT = WIN ? 'dll' : 'so'
 const DIR = util.subpath('build', NAME) // staging tree — an exact mirror of the package
+
+// mcpb manifest schema version. All of 0.1–0.4 validate against this manifest
+// (it uses no version-specific field), so we ship the mcpb tool's broadly-
+// compatible DEFAULT (0.2) to minimise Claude Desktop install-time version
+// rejection. Fallback ladder if a given Desktop wants a specific one: 0.2 → 0.3
+// → 0.4 (flip this one constant; re-validate with `mcpb validate`).
+const MCPB_MANIFEST_VERSION = '0.2'
 
 // ── Version invariant ─────────────────────────────────────────────────────────
 // bundledBunVersion (the bun release ensure-bun provisions) and bunSqliteVersion
 // (the SQLite the vec0 ABI targets) must both be populated. Different facts about
 // the same release; both load-bearing for the pinned-runtime / vec0 ABI contract.
 function readPkg(): {
+    version?: string
     scholar?: { bundledBunVersion?: string; bunSqliteVersion?: string }
 } {
     return JSON.parse(readFileSync(util.subpath('package.json'), 'utf8'))
@@ -199,6 +219,95 @@ function generateManifest(): void {
     Bun.write(join(DIR, '.claude-plugin', 'plugin.json'), JSON.stringify(manifest, null, 2))
 }
 
+// ── Generate the Claude Desktop .mcpb manifest.json ───────────────────────────
+// Pure construction (exported for build-plugin.test.ts; `mcpb validate` is the
+// real gate). Metadata (name/description/author/license/keywords) is passed
+// through from the Claude Code plugin.json base; the server/compatibility/
+// user_config blocks are Desktop-specific.
+//
+// Launcher is NOT modified: the manifest aliases the two vars launch.cmd +
+// ensure-bun.ps1 already read — CLAUDE_PLUGIN_ROOT := ${__dirname} (extension
+// dir) and CLAUDE_PLUGIN_DATA := the user-chosen data directory — so the win32
+// launch chain runs byte-identical to the Claude Code plugin. SCHOLAR_BUN_PATH /
+// SCHOLAR_VEC0_PATH / SCHOLAR_PDF_ENTRYPOINT are intentionally unset: their
+// defaults derive from CLAUDE_PLUGIN_ROOT (vec0, pdf entry) and process.execPath
+// (the provisioned bun that launch.cmd runs server.js with).
+export function buildMcpbManifest(
+    base: Record<string, unknown>,
+    version: string,
+): Record<string, unknown> {
+    const DIRNAME = '${__dirname}'
+    const DATA = '${user_config.data_dir}'
+    return {
+        manifest_version: MCPB_MANIFEST_VERSION,
+        name: (base.name as string) ?? 'scholar',
+        display_name: 'Scholar',
+        version,
+        description: (base.description as string) ?? 'Literature review workspace.',
+        author: (base.author as Record<string, unknown>) ?? { name: 'zayn' },
+        license: (base.license as string) ?? 'MIT',
+        keywords: (base.keywords as string[]) ?? [],
+        server: {
+            type: 'binary',
+            entry_point: 'bin/launch.cmd',
+            mcp_config: {
+                command: 'cmd.exe',
+                args: ['/c', `${DIRNAME}\\bin\\launch.cmd`],
+                env: {
+                    CLAUDE_PLUGIN_ROOT: DIRNAME,
+                    CLAUDE_PLUGIN_DATA: DATA,
+                    SCHOLAR_RUNTIME_ROOT: `${DATA}\\runtime`,
+                    SCHOLAR_OLLAMA_URL: '${user_config.ollama_url}',
+                    SCHOLAR_OLLAMA_EMBED_MODEL: '${user_config.ollama_embed_model}',
+                    SCHOLAR_OLLAMA_CHAT_MODEL: '${user_config.ollama_chat_model}',
+                },
+            },
+        },
+        compatibility: { platforms: ['win32'] },
+        user_config: {
+            data_dir: {
+                type: 'directory',
+                title: 'Scholar data directory',
+                description:
+                    'Where Scholar stores the provisioned Bun runtime, per-corpus ' +
+                    'SQLite databases, downloaded PDFs, and snapshots. Must be writable.',
+                default: '${HOME}\\scholar',
+                required: true,
+            },
+            ollama_url: {
+                type: 'string',
+                title: 'Ollama URL',
+                description: 'Base URL of your local Ollama server (embeddings + chat).',
+                default: 'http://127.0.0.1:11434',
+                required: false,
+            },
+            ollama_embed_model: {
+                type: 'string',
+                title: 'Ollama embedding model',
+                description:
+                    'Model tag for semantic-search embeddings. Pull it in Ollama first.',
+                default: 'nomic-embed-text:v1.5',
+                required: false,
+            },
+            ollama_chat_model: {
+                type: 'string',
+                title: 'Ollama chat model',
+                description:
+                    'Model tag for digests and reading prompts. Pull it in Ollama first.',
+                default: 'qwen3:8b',
+                required: false,
+            },
+        },
+    }
+}
+
+function generateMcpbManifest(): void {
+    const base = JSON.parse(readFileSync(util.subpath('.claude-plugin', 'plugin.json'), 'utf8'))
+    const version = readPkg().version ?? '0.0.0'
+    const manifest = buildMcpbManifest(base, version)
+    Bun.write(join(DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
+}
+
 // ── Skills ────────────────────────────────────────────────────────────────────
 function stageSkills(): void {
     const src = util.subpath('skills')
@@ -262,9 +371,48 @@ async function assemble(): Promise<void> {
     }
 }
 
+// ── Assemble + pack the .mcpb via the official mcpb CLI ───────────────────────
+// Uses the `mcpb` binary (not a hand-rolled zip) so the artifact is exactly what
+// Claude Desktop expects: manifest.json at root, validated against the mcpb
+// schema, format owned by the tool. No .claude-plugin/plugin.json is staged in
+// this mode (generateMcpbManifest replaces generateManifest), so the bundle
+// carries no Claude Code cruft.
+async function assembleMcpb(): Promise<void> {
+    const required = [
+        'manifest.json',
+        'dist/server.js',
+        'dist/migrations/meta/_journal.json',
+        'dist/pdf-server/index.js',
+        'dist/pdf-server/mcp-app.html',
+        `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
+        'bin/launch.cmd',
+        'bin/ensure-bun.ps1',
+    ]
+    const missing = required.filter(r => !existsSync(join(DIR, r)))
+    if (missing.length)
+        util.abort('SCHOLAR_BUILD_MISSING_ARTIFACT', `missing: ${missing.join(', ')}`)
+
+    if (!Bun.which('mcpb'))
+        util.abort(
+            'SCHOLAR_MCPB_MISSING',
+            'the `mcpb` CLI is not on PATH. Install it (`bun add -g @anthropic-ai/mcpb` ' +
+                'or `npm i -g @anthropic-ai/mcpb`) and re-run SCHOLAR_PACKAGE=mcpb.'
+        )
+
+    mkdirSync(OUTPUT, { recursive: true })
+    const out = join(OUTPUT, 'scholar.mcpb')
+    // `mcpb pack` re-validates, but gate first for a crisp error on schema drift.
+    await util.sh`mcpb validate ${join(DIR, 'manifest.json')}`
+    await util.sh`mcpb pack ${DIR} ${out}`
+    const mb = (Bun.file(out).size / 1024 / 1024).toFixed(1)
+    process.stdout.write(`scholar.mcpb (${mb} MB) -> ${out}\n`)
+}
+
 // ── Orchestrator ──────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-    process.stdout.write(`[scholar] slim plugin build (${NAME})\n`)
+    process.stdout.write(
+        `[scholar] ${MCPB ? '.mcpb extension' : 'slim plugin'} build (${NAME})\n`
+    )
     rmSync(DIR, { recursive: true, force: true })
     mkdirSync(DIR, { recursive: true })
     assertVersionInvariant()
@@ -273,9 +421,11 @@ async function main(): Promise<void> {
     await buildUI()
     await stageVec0()
     stageBin()
-    generateManifest()
+    if (MCPB) generateMcpbManifest()
+    else generateManifest()
     stageSkills()
-    await assemble()
+    if (MCPB) await assembleMcpb()
+    else await assemble()
     process.stdout.write(`[scholar] build complete\n`)
 }
 
