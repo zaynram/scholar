@@ -13,10 +13,9 @@
     "license": "MIT",
     "mcpServers": {
         "scholar": {
-            "command": "/bin/sh",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/launch.sh"],
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs"],
             "env": {
-                "SCHOLAR_RUNTIME_ROOT": "${HOME}/mcp-data/scholar/runtime",
                 "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",
                 "SCHOLAR_OLLAMA_EMBED_MODEL": "nomic-embed-text:v1.5",
                 "SCHOLAR_OLLAMA_CHAT_MODEL": "qwen3:8b"
@@ -29,7 +28,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "sh \"${CLAUDE_PLUGIN_ROOT}/bin/ensure-bun.sh\""
+                        "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs\" --provision-only"
                     }
                 ]
             }
