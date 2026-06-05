@@ -20,6 +20,7 @@ import {
   spawnPdfChild,
   sanitizeRoots,
   buildClientCapabilities,
+  parseGetTextResult,
   type PdfChildHandle,
 } from "./lifecycle.ts";
 import { makeFixtureRoot } from "%/util/pdf-fixture";
@@ -52,6 +53,37 @@ const E2E = process.env.SCHOLAR_PDF_E2E === "1";
 // =========================================================================
 // PURE-LOGIC FIXTURES (no spawn — always run)
 // =========================================================================
+
+test("parseGetTextResult flattens success content to a string", () => {
+  const r = {
+    content: [
+      { type: "text", text: "page one " },
+      { type: "image", data: "..." },
+      { type: "text", text: "page two" },
+    ],
+  };
+  expect(parseGetTextResult(r)).toBe("page one page two");
+});
+
+test("parseGetTextResult passes a bare string through", () => {
+  expect(parseGetTextResult("already a string")).toBe("already a string");
+});
+
+test("parseGetTextResult THROWS on the vendor isError envelope (no error text ingested as document text)", () => {
+  // The vendor returns failures as {content:[{type:text,text:<msg>}], isError:true};
+  // callTool passes it through. Without this throw, refreshExtraction would chunk
+  // the sentinel and report a bogus chunks_written:1 (Cowork field report).
+  const errEnvelope = {
+    content: [{ type: "text", text: "No PDF is currently open for that viewUUID" }],
+    isError: true,
+  };
+  expect(() => parseGetTextResult(errEnvelope)).toThrow(/PDF_GET_TEXT_FAILED/);
+  expect(() => parseGetTextResult(errEnvelope)).toThrow(/No PDF is currently open/);
+});
+
+test("parseGetTextResult throws a labelled error even when isError carries no message", () => {
+  expect(() => parseGetTextResult({ isError: true, content: [] })).toThrow(/PDF_GET_TEXT_FAILED/);
+});
 
 test("buildClientCapabilities advertises roots.listChanged=true (load-bearing per §7.2)", () => {
   const caps = buildClientCapabilities();

@@ -87,6 +87,42 @@ function fileUrlToPath(uri: string): string {
   return new URL(uri).pathname.replace(/^\/([A-Za-z]):/, "$1:");
 }
 
+/**
+ * Parse the vendor's `interact{action:"get_text"}` result into a plain string,
+ * THROWING when the child signalled failure.
+ *
+ * Bug (Cowork field report 2026-06-05): the vendor returns failures as the
+ * standard MCP error envelope `{ content:[{type:"text",text:<msg>}], isError:true }`
+ * (see vendor/pdf-server processInteractCommand), and the SDK's `callTool` does
+ * NOT throw on `isError` — it is an in-band tool error meant for the model to
+ * read. The previous flatten-only code returned that error text as if it were
+ * document text, so refreshExtraction chunked + embedded the one-line sentinel
+ * and reported a bogus `chunks_written: 1`, silently poisoning the corpus. Detect
+ * `isError` and propagate instead.
+ *
+ * Pure (no transport) so it is unit-testable directly, mirroring `sanitizeRoots`
+ * / `buildClientCapabilities`.
+ */
+export function parseGetTextResult(r: unknown): string {
+  if (typeof r === "string") return r;
+  if (r && typeof r === "object") {
+    const obj = r as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+    const flat = Array.isArray(obj.content)
+      ? obj.content
+          .filter((c) => c.type === "text" && typeof c.text === "string")
+          .map((c) => c.text!)
+          .join("")
+      : "";
+    if (obj.isError === true) {
+      throw new Error(
+        `PDF_GET_TEXT_FAILED: ${flat || "pdf child get_text returned an error with no message"}`,
+      );
+    }
+    if (Array.isArray(obj.content)) return flat;
+  }
+  return JSON.stringify(r);
+}
+
 // =========================================================================
 // Supervised spawn implementation.
 // =========================================================================
@@ -276,17 +312,12 @@ export async function spawnPdfChild(opts: SpawnOpts): Promise<PdfChildHandle> {
         undefined,
         { timeout: opts.timeoutMs ?? 120_000 },
       );
+      // The child responded, so it is alive even if extraction failed — keep the
+      // liveness stamp. parseGetTextResult flattens the success content and THROWS
+      // on the vendor's isError envelope (callTool does not), so a failed extract
+      // never gets ingested as document text.
       lastOkAt = Date.now();
-      // The upstream get_text returns structured content; flatten to a string.
-      if (typeof r === "string") return r;
-      const content = (r as { content?: Array<{ type: string; text?: string }> }).content;
-      if (Array.isArray(content)) {
-        return content
-          .filter((c) => c.type === "text" && typeof c.text === "string")
-          .map((c) => c.text!)
-          .join("");
-      }
-      return JSON.stringify(r);
+      return parseGetTextResult(r);
     },
     async displayPdf(source, opts) {
       // Vendor `display_pdf` is a separate vendor tool (NOT an interact action).
