@@ -17,6 +17,9 @@
 // carries `_meta.ui.resourceUri` (both modern + legacy keys) so the host renders
 // the iframe. These tests pin both halves.
 import { test, expect } from "bun:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerAll, type ToolRegistry } from "./registry.ts";
 import { APP_URI } from "../ui/resource.ts";
 
@@ -118,6 +121,43 @@ test("view-opener tool defs carry _meta.ui.resourceUri (both modern + legacy key
       | undefined;
     expect(meta?.ui?.resourceUri, `${name} _meta.ui.resourceUri`).toBe(APP_URI);
     expect(meta?.["ui/resourceUri"], `${name} legacy _meta["ui/resourceUri"]`).toBe(APP_URI);
+  }
+});
+
+test("real SDK serializes view-opener _meta.ui.resourceUri into the tools/list wire response", async () => {
+  // Strongest source-ceiling proof (advisor pre-done check, 2026-06-04). The
+  // fakeServer test above proves scholar's `register` chokepoint *forwards*
+  // `def._meta` to `registerTool`; this one proves the REAL
+  // @modelcontextprotocol/sdk McpServer actually serializes that `_meta` onto
+  // the `tools/list` wire — the leg previously verified only by reading the SDK
+  // source (mcp.js). We register every tool onto a real McpServer, drive a real
+  // Client over a linked in-memory transport, and assert the listed descriptors
+  // carry the UI link. If the host never sees `resourceUri`, no iframe is ever
+  // created — so this is the discovery half of Layer-1 conformance, exercised
+  // against the real artifact rather than a fakeServer stand-in.
+  const server = new McpServer({ name: "scholar-test", version: "0.0.0" });
+  registerAll(server, fakeCtx());
+
+  const client = new Client({ name: "registry-test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    for (const name of VIEW_OPENERS) {
+      const tool = byName.get(name);
+      expect(tool, `${name} must appear in tools/list`).toBeDefined();
+      const meta = tool!._meta as
+        | { ui?: { resourceUri?: string }; "ui/resourceUri"?: string }
+        | undefined;
+      expect(meta?.ui?.resourceUri, `${name} wire _meta.ui.resourceUri`).toBe(APP_URI);
+      expect(meta?.["ui/resourceUri"], `${name} wire legacy _meta["ui/resourceUri"]`).toBe(APP_URI);
+    }
+  } finally {
+    await client.close();
+    await server.close();
   }
 });
 
