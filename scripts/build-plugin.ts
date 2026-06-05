@@ -5,7 +5,7 @@
 //   - dist/server.js                  scholar server, `bun build --target=bun` (no --compile)
 //   - dist/pdf-server/{index.js,mcp-app.html}   pdf-server@1.7.2 rebundled standalone
 //   - build/vendor/sqlite-vec/vec0.<ext>        platform vec0 (so | dll)
-//   - ui/index.html                   single-file UI bundle
+//   - ui/app.html                     single-file inlined UI bundle (MCP-App)
 //   - nu/scholar.nu                   nu CLI module
 //   - bin/<launcher set>              M2 launcher + ensure-bun provisioner
 //   - .claude-plugin/plugin.json      GENERATED per-OS (M2 command/args + hooks)
@@ -27,6 +27,7 @@
 
 import util, { OUTPUT } from './util'
 import { stageMigrations } from './stage-migrations'
+import { buildInlinedUI } from './build-ui'
 import { zipSync } from 'fflate'
 import {
     existsSync,
@@ -94,10 +95,18 @@ async function buildPdf(): Promise<void> {
 }
 
 // ── UI single-file bundle ─────────────────────────────────────────────────────
-async function buildUI(): Promise<void> {
-    process.env.UI_OUTDIR = join(DIR, 'ui')
-    mkdirSync(process.env.UI_OUTDIR, { recursive: true })
-    await util.sh`bun run build:ui`.env(process.env)
+// Ships ONE self-contained ui/app.html — NOT Bun's multi-file loader
+// (index.html + chunk-*.js). The MCP-App iframe (SEP-1865) runs sandboxed and
+// cannot fetch sibling chunks, so a multi-file UI renders blank. src/server/ui/
+// resource.ts serves <root>/ui/app.html via its CLAUDE_PLUGIN_ROOT-anchored
+// ladder. Exported (with a configurable target dir) so resource.test.ts can
+// stage the UI exactly as the build ships it and prove resolution end-to-end —
+// the build->serve wiring gap this fix closes.
+export async function buildUI(targetDir: string = DIR): Promise<void> {
+    const uiDir = join(targetDir, 'ui')
+    mkdirSync(uiDir, { recursive: true })
+    const html = await buildInlinedUI({ chunkDir: join(uiDir, '_chunks'), minify: true })
+    await Bun.write(join(uiDir, 'app.html'), html)
 }
 
 // ── vec0 shared library (per-OS) ──────────────────────────────────────────────
@@ -346,6 +355,7 @@ async function assemble(): Promise<void> {
         'dist/pdf-server/index.js',
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
+        'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
         WIN ? 'bin/launch.cmd' : 'bin/launch.sh',
     ]
     const missing = required.filter(r => !(r in fileMap))
@@ -385,6 +395,7 @@ async function assembleMcpb(): Promise<void> {
         'dist/pdf-server/index.js',
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
+        'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
         'bin/launch.cmd',
         'bin/ensure-bun.ps1',
     ]

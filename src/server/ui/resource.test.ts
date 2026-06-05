@@ -3,10 +3,14 @@
 // with: (a) ui://scholar/app.html serving the single-file React bundle,
 // (b) ui://scholar/pdf/<paper_id> serving per-paper PDF bytes via resources/read
 // (Task 8b + chore 9d78da3).
-import { test, expect } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildUI } from "^scripts/build-plugin.ts";
 import { registerUiResource, viewMeta, APP_URI, MCP_APP_MIME } from "./resource.ts";
 import type { ServerContext } from "../tools/registry.ts";
 
@@ -148,4 +152,102 @@ test("ui://scholar/pdf/<paper_id> degrades gracefully when ctx.pdf is unavailabl
     await client.close();
     await server.close();
   }
+});
+
+// ── Real-artifact proof (2026-06-04) ──────────────────────────────────────────
+//
+// The defect this guards: resource.ts read a DEV-only path (build/ui/app.html,
+// which resolves OUTSIDE the plugin root) while the shipped bundle staged Bun's
+// multi-file loader (ui/index.html + chunk-*.js). Every shipped bundle served
+// the "Scholar UI not built" placeholder — and even had it found the loader, the
+// sandboxed MCP-App iframe (SEP-1865) can't fetch sibling chunks. The
+// enumerable-and-readable test above stayed green because it only asserts the
+// content is a string (the placeholder is also a string) and exercises the dev
+// path — the verify-against-the-real-artifact trap, exactly.
+//
+// This block refuses that trap. It stages the UI through build-plugin's OWN
+// buildUI (the exact code the shipped artifact runs) into a bundle-shaped temp
+// dir, points CLAUDE_PLUGIN_ROOT at it, and drives a real SDK Client to
+// readResource(ui://scholar/app.html). A sentinel injected into the STAGED file
+// (absent from the dev build/ui/app.html) proves resolution went through the
+// CLAUDE_PLUGIN_ROOT rung of resource.ts's ladder rather than the dev fallback.
+//
+// Residual leg (named, not run): the NO-env bundle fallback rung
+// (`join(import.meta.dir, "..", "ui", "app.html")`) is correct only when
+// import.meta.dir = <root>/dist in the real bundle; a source-run test has
+// import.meta.dir = src/server/ui (absent), so it is proven by bundle-layout
+// reasoning, not exercised here. The shipped manifest always sets
+// CLAUDE_PLUGIN_ROOT, so the rung this test pins is the one production uses.
+describe("ui://scholar/app.html — real-artifact resolution (CLAUDE_PLUGIN_ROOT ladder)", () => {
+  // Injected into the staged ui/app.html ONLY — never present in the dev
+  // build/ui/app.html. The discriminator that resolution went through the fixed
+  // CLAUDE_PLUGIN_ROOT ladder rung, not the dev fallback.
+  const SENTINEL = "<!--__SCHOLAR_STAGED_SENTINEL__-->";
+
+  let stageRoot: string;
+  let prevPluginRoot: string | undefined;
+  let prevUiHtml: string | undefined;
+
+  beforeAll(async () => {
+    stageRoot = mkdtempSync(join(tmpdir(), "scholar-ui-resource-"));
+    // Stage the UI exactly as the shipped bundle does — through build-plugin's
+    // own buildUI — so this proves the build->serve WIRING, not the helper in
+    // isolation (the trap lived precisely in that wiring gap).
+    await buildUI(stageRoot); // writes <stageRoot>/ui/app.html (single-file inlined)
+    const appHtml = join(stageRoot, "ui", "app.html");
+    const staged = (await Bun.file(appHtml).text()) + "\n" + SENTINEL + "\n";
+    await Bun.write(appHtml, staged);
+
+    prevPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+    prevUiHtml = process.env.SCHOLAR_UI_HTML;
+    delete process.env.SCHOLAR_UI_HTML; // ensure the override rung does not shortcut
+    process.env.CLAUDE_PLUGIN_ROOT = stageRoot;
+  });
+
+  afterAll(() => {
+    if (prevPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = prevPluginRoot;
+    if (prevUiHtml === undefined) delete process.env.SCHOLAR_UI_HTML;
+    else process.env.SCHOLAR_UI_HTML = prevUiHtml;
+    rmSync(stageRoot, { recursive: true, force: true });
+  });
+
+  test("readResource serves the staged single-file UI from <root>/ui/app.html (not the dev path, not the placeholder)", async () => {
+    const server = new McpServer({ name: "scholar-ui-test", version: "0.0.0" });
+    registerUiResource(server, mockCtxWithPdf());
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "ui-resource-test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+    try {
+      const res = await client.readResource({ uri: APP_URI });
+      const entry = res.contents[0] as { text?: string; mimeType?: string };
+      expect(entry?.mimeType, "must be served with the MCP-App profile mime").toBe(MCP_APP_MIME);
+      const html = String(entry?.text ?? "");
+
+      // (a) Resolution went through CLAUDE_PLUGIN_ROOT (the fixed ladder) —
+      //     proven by the sentinel only the staged file carries. The old code
+      //     ignored CLAUDE_PLUGIN_ROOT and read the dev build/ui/app.html.
+      expect(html, "served UI must come from <root>/ui/app.html").toContain(SENTINEL);
+      // (b) The real UI, not the "Scholar UI not built" placeholder.
+      expect(html).toContain("<title>Scholar</title>");
+      expect(html).not.toContain("Scholar UI not built");
+      // (c) Self-contained — the discriminator vs the multi-file loader (the
+      //     actual defect). Strip inlined module bodies first so JS string
+      //     literals like '<link href=' inside the bundle don't false-trigger
+      //     the external-ref guards; the closing tags inside those bodies are
+      //     escaped to `<\/script>`, so the non-greedy strip stops at the real one.
+      const shell = html.replace(/<script type="module">[\s\S]*?<\/script>/g, "");
+      expect(shell, "no external <script src> (sandboxed iframe can't fetch chunks)").not.toMatch(
+        /<script[^>]*\bsrc=/,
+      );
+      expect(shell, "no external <link href> (sandboxed iframe can't fetch assets)").not.toMatch(
+        /<link[^>]*\bhref=/i,
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
