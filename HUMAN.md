@@ -165,6 +165,16 @@ be checked on Windows — each with the symptom to watch for:
    found; or PowerShell blocked by ExecutionPolicy (the hook passes
    `-ExecutionPolicy Bypass`, but Desktop spawns via cmd.exe, not the hook). Check
    `%data_dir%\bun\bun.exe --version` prints `1.3.11`.
+   **Field-confirmed 2026-06-05 (Cowork):** on a *brand-new* data dir the first
+   connect can time out *during* this download — the ~110 MB fetch overran the
+   host's 30 s MCP connect budget (`Connection timeout triggered after 30027ms`),
+   so the host abandoned the connection one-shot (the SessionStart pre-warm and the
+   spawn fired the same second, so neither had provisioned bun yet). *Symptom:*
+   first launch on a fresh install reports "server failed to start" / no tools;
+   **fix: just restart once** — warm boot reuses the provisioned bun (~2 s) and
+   connects. A durable fix is a user-directed design call tracked in
+   slim-plugin-pivot.md → "MCP connect timeout" (the ABI-safe option is
+   exact-version system-bun reuse, **not** the "≥ pin" the field report suggested).
 5. **vec0.dll loads under the provisioned bun** (the ABI is **never probed on
    Linux** — the win32 dll is fetched from npm as-is) — *symptom:* corpus
    create/activate throws on vec load / `loadVecAndProbeDim` (SQLite ABI mismatch

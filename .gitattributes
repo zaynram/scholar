@@ -1,0 +1,6 @@
+# Windows batch launcher must materialize with CRLF on every checkout, or
+# cmd.exe mis-parses the rem block (byte-offset misalignment → '<cmd>' is not
+# recognized noise on every launch). Confirmed via Cowork field test 2026-06-05.
+# Scoped to *.cmd ONLY — the POSIX launchers (launch.sh, ensure-bun.sh) must
+# stay LF, so do NOT add a blanket `* text=auto eol=crlf` rule here.
+*.cmd text eol=crlf

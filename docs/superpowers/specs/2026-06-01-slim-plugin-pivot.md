@@ -224,6 +224,38 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   ladder. Verified against the real artifacts (all three rebuilt bundles ship
   `ui/app.html` only, 0 external `<script src>`) and pinned by a real-SDK
   `readResource` test (`src/server/ui/resource.test.ts`).
-- **MCP connect timeout**: first launch blocks on the bun download (~tens of MB).
-  If Claude Code imposes a short MCP spawn/connect timeout, the SessionStart
-  pre-warm mitigates but does not guarantee; confirm the timeout is generous.
+- **MCP connect timeout — REPRODUCED 2026-06-05 (Cowork field test); fix is a
+  user-directed design call.** First launch blocks on the bun download (~110 MB
+  windows-x64). Confirmed on a fresh `scholar-inline` data dir: the SessionStart
+  pre-warm and the MCP spawn fired in the *same second*, so `ensure-bun.ps1` ran
+  the download inside the host's 30 s connect budget and blew it (log:
+  `Connection timeout triggered after 30027ms` vs `timeout of 30000ms`). One-shot,
+  no retry; the host abandons the connection. **Self-heals on restart** — warm
+  boot is `Test-Ok → exit 0` (~2 s), well inside budget, and connects cleanly.
+  Fix options, ascending invasiveness: (a) **fail-fast** in `launch.cmd` when bun
+  is absent — a clear error beats a silent 30 s hang, but it only makes cold start
+  legible, it does not remove it; (b) **generous first-run budget** — document /
+  ship a larger `MCP_TIMEOUT` so the cold download fits (safe, but a real hang now
+  surfaces slower; uncertain the plugin manifest can set the client-side
+  `MCP_TIMEOUT` — verify); (c) **exact-version system-bun reuse** — if a
+  `bun --version` on PATH *equals the pin* (`1.3.11`; one exists at `~\.bun\bin`),
+  launch with it instead of downloading. ⚠️ Must be **exact-equality, NOT** the
+  "`≥ pin`" the field diagnosis suggested: the pin exists for the **vec0 /
+  `bun:sqlite` native ABI** (CLAUDE.md load-bearing invariant), so a
+  newer-but-different bun can load an incompatible `sqlite-vec` and fail later at a
+  far harder-to-diagnose point than a clean timeout. Not implemented blind — pick
+  the approach, then validate on Windows.
+- **`launch.cmd` CRLF + non-ASCII — RESOLVED 2026-06-05 (Cowork field test).**
+  The shipped `bin/launch.cmd` was LF-only with em-dashes in its `rem` header.
+  cmd.exe seeks batch files by byte offset assuming CRLF, so LF-only lines
+  misalign and chop the leading bytes off subsequent `rem` keywords — the field
+  log showed `'bin' is not recognized` + `'m'` ×9 stderr noise on every launch.
+  This is **noise-removal / parse-hardening, NOT** the cold-start fix above (the
+  parser re-syncs before the real provision/launch commands, so lines 18/20 still
+  executed on the observed build). Fix: `bin/launch.cmd` rewritten CRLF + ASCII,
+  pinned by a new `.gitattributes` (`*.cmd text eol=crlf`, scoped so the POSIX
+  `.sh` launchers stay LF). Verified against the real artifacts — `bin/launch.cmd`
+  extracted from the rebuilt `out/scholar.plugin` (win32) and `out/scholar.mcpb`
+  is 20/20 CRLF with no non-ASCII; the linux `.plugin` is unaffected (ships
+  `launch.sh`). The one leg that can only run on the target — does cmd.exe stop
+  emitting the noise — is the user's next Cowork session.
