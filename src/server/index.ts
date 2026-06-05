@@ -17,6 +17,7 @@ import {
 } from "./tools/registry.ts";
 import { registerUiResource } from "./ui/resource.ts";
 import { reopenPersistedCorpus, resolveRuntimeRoot } from "./tools/corpus.ts";
+import { allPdfRoots } from "./db/default-pdf-root.ts";
 import { acquireSessionLock } from "./session-lock.ts";
 import { openWithPragmas, applyMigrations } from "./db/migrations.ts";
 import {
@@ -365,10 +366,39 @@ async function runServer(runtimeRoot: string): Promise<void> {
   // buildServer) so teardown can reap the child by pid.
   const spawnPdf = await resolvePdfSpawnFactory();
   const pdfChild = spawnPdf?.();
-  const { server } = buildServer({
+  const { server, ctx } = buildServer({
     runtimeRoot,
     spawnPdfChild: pdfChild ? () => pdfChild : undefined,
   });
+
+  // Defect #4 (2026-06-05, Cowork field report): the long-lived server is the
+  // analog of runCli's Bug #2b — buildServer starts with ctx.db === undefined and
+  // corpus.activate is the only path that opens it. Without this rehydrate, a
+  // server restart answered every active-corpus tool with NO_ACTIVE_CORPUS until
+  // the user manually re-activated. Replay the durable half of activate so a
+  // corpus activated in a prior session is open from first request. No-op when
+  // nothing is persisted; corpus.activate still mutates ctx.db on demand later.
+  const rehydrated = reopenPersistedCorpus(ctx, runtimeRoot);
+  // reopenPersistedCorpus is deliberately CLI-pure (durable DB half only) — it
+  // omits pdf.setRoots because the CLI runs on the throwing pdf stub. runServer
+  // owns the LIVE child (spawned just above with initialRoots:[]), so push the
+  // rehydrated corpus's roots here too — otherwise a restarted session has an open
+  // db but an empty-roots child, and scholar.pdf.open fails with a roots violation
+  // until manual re-activation (the same class of bug as #4, one layer down).
+  // Best-effort, mirroring handleActivate: a missing/degraded child must not abort
+  // startup; pdf features then surface their own error and roots re-push on the
+  // next activate / child respawn.
+  if (rehydrated) {
+    const roots = allPdfRoots(ctx.configDb, rehydrated);
+    try {
+      await ctx.pdf.setRoots(roots);
+    } catch (err) {
+      ctx.log.warn(
+        "runServer: pdf root push on rehydrate failed (corpus open; pdf features degraded until child available)",
+        { slug: rehydrated, err: String(err) },
+      );
+    }
+  }
 
   // F1 fix (2026-06-04): graceful teardown on every exit path. Without this the
   // server hangs on stdin EOF (StdioServerTransport has no 'end' handler; the pdf

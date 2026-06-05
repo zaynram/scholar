@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEntryArgv, buildServer } from "./index.ts";
 import { reopenPersistedCorpus } from "./tools/corpus.ts";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 test("(a) parseEntryArgv: no --call → server mode", () => {
   expect(parseEntryArgv([])).toEqual({ mode: "server" });
@@ -127,6 +129,62 @@ test("(d) integration: fresh --call to an active-corpus tool re-opens the persis
     expect(searched.exitCode).toBe(0);
     expect(JSON.parse(searched.stdout)).toMatchObject({ hits: expect.any(Array) });
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// ─── (f) Defect #4: runServer rehydrates the persisted active corpus into ctx.db ───
+//
+// The long-lived stdio server (runServer) is the analog of runCli's Bug #2b. A server
+// built fresh on restart has ctx.db === undefined; without an explicit rehydrate it answers
+// every active-corpus tool with NO_ACTIVE_CORPUS until the user manually re-activates —
+// reproduced via Cowork on Windows (88-paper corpus, every restart). 2026-06-05.
+//
+// Probe choice: papers.search snapshots ctx.db and throws NO_ACTIVE_CORPUS when it's unset
+// (same discriminator as (d)). corpus.status CANNOT witness this — its NO_ACTIVE_CORPUS
+// throw keys off the config-persisted activeCorpusId, which survives restart regardless of
+// whether ctx.db was rehydrated. papers.search degrades gracefully when Ollama is absent
+// (lexical-only), so the only thing that makes it throw here is the unrehydrated db.
+//
+// Faithful artifact (verify-against-the-real-artifact + the index.test.ts:328 stand-in
+// lesson): spawn the REAL `bun run src/server/index.ts` in server mode over a stdio MCP
+// transport — NOT buildServer in-process — because the bug lives in runServer's wiring,
+// which an in-process buildServer seam would never exercise.
+test("(f) integration: a fresh stdio server re-opens the persisted active corpus (no NO_ACTIVE_CORPUS)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "scholar-server-reopen-"));
+  // Prior session: create + activate durably persists activeCorpusId (two single-shot procs).
+  const created = await callCli(
+    dir,
+    "scholar.corpus.create",
+    JSON.stringify({ slug: "t", display_name: "T", initial_pdf_root: dir }),
+  );
+  expect(created.exitCode).toBe(0);
+  const activated = await callCli(dir, "scholar.corpus.activate", JSON.stringify({ slug: "t" }));
+  expect(activated.exitCode).toBe(0);
+
+  // Fresh long-lived server over the SAME runtime root (server mode → runServer).
+  const transport = new StdioClientTransport({
+    command: "bun",
+    args: ["run", "src/server/index.ts"],
+    cwd: process.cwd(),
+    env: { ...process.env, SCHOLAR_RUNTIME_ROOT: dir },
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "scholar-test", version: "0.0.0" }, { capabilities: {} });
+  try {
+    await client.connect(transport);
+    const result = (await client.callTool({
+      name: "scholar.papers.search",
+      arguments: { q: "anything" },
+    })) as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+
+    const text = (result.content ?? []).map((c) => c.text ?? "").join("");
+    // RED before fix: ctx.db unset → search throws NO_ACTIVE_CORPUS (isError result).
+    expect(text).not.toContain("NO_ACTIVE_CORPUS");
+    expect(result.isError ?? false).toBe(false);
+    expect(JSON.parse(text)).toMatchObject({ hits: expect.any(Array) });
+  } finally {
+    await client.close().catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }
 }, 30_000);
