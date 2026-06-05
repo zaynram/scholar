@@ -207,11 +207,31 @@ export function reopenPersistedCorpus(
 ): string | undefined {
   if (ctx.db) return ctx.config.activeCorpusId(); // already open (defensive; runCli never hits this)
   const slug = ctx.config.activeCorpusId();
+  // No persisted active corpus is the NORMAL fresh-install / never-activated
+  // state — stay silent so the diagnostic warns below don't cry wolf on every
+  // clean startup.
   if (!slug) return undefined;
+  // Bug #3b diagnostic (Cowork field report 2026-06-05): when an activeCorpusId
+  // IS persisted but rehydration still can't open the DB, every active-corpus
+  // tool (query, digest, papers, pdf) keeps failing NO_ACTIVE_CORPUS until a
+  // manual re-activate. The old code returned undefined SILENTLY in two of the
+  // three failure branches, leaving no trace of *why* rehydration gave up. Warn
+  // on each anomalous branch (id persisted but unusable) so the next field run
+  // pinpoints the cause — this is the diagnostic, not a root-cause fix (the
+  // wiring in runServer/runCli already calls this once at startup; the symptom
+  // implies one of these branches fires, and we couldn't reproduce which from
+  // static analysis).
   const row = ctx.config.corpora().find(c => c.id === slug);
-  if (!row || row.archived_at) return undefined;
+  if (!row) {
+    ctx.log.warn("reopenPersistedCorpus: persisted activeCorpusId has no matching corpus row; leaving ctx.db unset", { slug });
+    return undefined;
+  }
+  if (row.archived_at) {
+    ctx.log.warn("reopenPersistedCorpus: persisted active corpus is archived; leaving ctx.db unset", { slug, archived_at: row.archived_at });
+    return undefined;
+  }
   if (!existsSync(corpusDbPath(slug, runtimeRoot))) {
-    ctx.log.warn("reopenPersistedCorpus: persisted active corpus DB file missing; leaving ctx.db unset", { slug });
+    ctx.log.warn("reopenPersistedCorpus: persisted active corpus DB file missing; leaving ctx.db unset", { slug, path: corpusDbPath(slug, runtimeRoot) });
     return undefined;
   }
   ctx.db = openCorpusDb(slug, runtimeRoot);
@@ -415,9 +435,19 @@ async function handleStatus(args: unknown, ctx: ServerContext): Promise<unknown>
   const row = ctx.config.corpora().find(c => c.id === targetSlug);
   if (!row) throw new CorpusError("CORPUS_NOT_FOUND", `Corpus not found: "${targetSlug}"`);
 
-  // Paper count — available only if this corpus is currently the active (open) one.
+  // Paper count + db_open (Bug #3 — Cowork field report 2026-06-05). The old code
+  // returned a SILENT paper_count:0 whenever the target's DB wasn't open in THIS
+  // process (e.g. a restart whose startup rehydration found nothing to open) —
+  // indistinguishable from a genuinely empty corpus. We count only when the target
+  // IS the active corpus AND its DB is open here, and we surface `db_open` so a 0
+  // is never ambiguous. paper_count stays a number (no contract break). We do NOT
+  // rehydrate here: reopenPersistedCorpus already runs once at server/CLI startup —
+  // re-running it per status call would just repeat a failed open and re-log; if
+  // the DB is unset by now, db_open:false reports that outcome truthfully.
+  const isActive = ctx.config.activeCorpusId() === targetSlug;
+  const dbOpen = isActive && _db !== undefined;
   let paperCount = 0;
-  if (ctx.config.activeCorpusId() === targetSlug && _db) {
+  if (isActive && _db) {
     const rows = _db.all(sql`SELECT COUNT(*) AS cnt FROM papers`) as { cnt: number }[];
     paperCount = rows[0]?.cnt ?? 0;
   }
@@ -429,6 +459,7 @@ async function handleStatus(args: unknown, ctx: ServerContext): Promise<unknown>
     last_opened_at: row.last_opened_at,
     archived_at: row.archived_at,
     paper_count: paperCount,
+    db_open: dbOpen,
   };
 }
 
