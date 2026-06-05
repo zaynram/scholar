@@ -16,9 +16,8 @@
 // tree-shake, no shared-peer deduplication. When over_budget=true,
 // remediation_recommended is NULL — human review required.
 
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { buildUI } from "./build-ui.ts";
+import { mkdir } from "node:fs/promises";
+import { buildInlinedUI } from "./build-ui.ts";
 
 const THRESHOLD_KB = 4608;
 const BUNDLE_PATH = "build/ui/app.html";
@@ -26,63 +25,21 @@ const BUDGET_PATH = "build/ui/bundle-budget.json";
 const CHUNK_DIR = "build/ui/_chunks";
 
 await mkdir("build/ui", { recursive: true });
-if (existsSync(CHUNK_DIR)) await rm(CHUNK_DIR, { recursive: true, force: true });
-await mkdir(CHUNK_DIR, { recursive: true });
 
-// ── Step 1: Bun HTML bundler emits HTML + JS chunk(s) into CHUNK_DIR ─────────
+// ── Steps 1+2: build + inline into a single-file bundle (shared helper) ───────
+// buildInlinedUI (scripts/build-ui.ts) is the single source of inlining truth,
+// shared with build-plugin.ts so the measured artifact and the shipped
+// ui/app.html are produced by identical logic and cannot drift.
 console.log("Building UI bundle…");
+let html: string;
 try {
-  await buildUI({ outdir: CHUNK_DIR, minify: true });
+  html = await buildInlinedUI({ chunkDir: CHUNK_DIR, minify: true });
 } catch (err) {
   console.error(String(err));
   process.exit(1);
 }
 
-// ── Step 2: Inline JS chunks into the HTML, producing a single-file bundle ───
-// Find the HTML output + the JS chunk(s) it references.
-const chunkFiles = await readdir(CHUNK_DIR);
-const htmlChunk = chunkFiles.find((f) => f.endsWith(".html"));
-if (!htmlChunk) {
-  console.error(`Expected an .html file in ${CHUNK_DIR}; found: ${chunkFiles.join(", ")}`);
-  process.exit(1);
-}
-let html = await Bun.file(`${CHUNK_DIR}/${htmlChunk}`).text();
-
-// Replace each <script src="./chunk.js"></script> with <script>{contents}</script>.
-const SCRIPT_RE = /<script[^>]*\bsrc=["']\.?\/?([^"']+\.js)["'][^>]*>\s*<\/script>/g;
-html = html.replace(SCRIPT_RE, (_match, srcPath: string) => {
-  const fullPath = `${CHUNK_DIR}/${srcPath}`;
-  if (!existsSync(fullPath)) {
-    // Leaving the <script src> reference in place and then deleting CHUNK_DIR
-    // would ship a single-file HTML that 404s at runtime — fail loudly instead.
-    console.error(`SCHOLAR_BUILD_CHUNK_MISSING: chunk referenced by HTML not found: ${fullPath}`);
-    process.exit(1);
-  }
-  // Use Bun.file().text() synchronously is not possible; we resolve below.
-  // For this regex.replace, return a placeholder + collect paths.
-  return `__INLINE__${srcPath}__/INLINE__`;
-});
-
-// Resolve placeholders sequentially (regex.replace doesn't support async).
-const placeholderRe = /__INLINE__(.+?)__\/INLINE__/g;
-const replacements: Array<{ marker: string; replacement: string }> = [];
-let m: RegExpExecArray | null;
-while ((m = placeholderRe.exec(html)) !== null) {
-  const srcPath = m[1]!;
-  const fullPath = `${CHUNK_DIR}/${srcPath}`;
-  const jsText = await Bun.file(fullPath).text();
-  // Escape </script> inside JS to prevent premature script-tag termination.
-  const safeJs = jsText.replace(/<\/script>/gi, "<\\/script>");
-  replacements.push({ marker: m[0], replacement: `<script type="module">${safeJs}</script>` });
-}
-for (const { marker, replacement } of replacements) {
-  html = html.replace(marker, replacement);
-}
-
 await Bun.write(BUNDLE_PATH, html);
-
-// Cleanup chunk dir (no longer needed once inlined).
-await rm(CHUNK_DIR, { recursive: true, force: true });
 
 const totalBytes = (await Bun.file(BUNDLE_PATH).arrayBuffer()).byteLength;
 const totalKb = Math.round(totalBytes / 1024);
