@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer, type BuiltServer } from "../index.ts";
 import { openWithPragmas, applyMigrations } from "../db/migrations.ts";
+import { reopenPersistedCorpus } from "./corpus.ts";
 import type { PdfChild } from "./registry.ts";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -282,6 +283,58 @@ test("corpus.status returns counts and last_opened_at", async () => {
     paper_count: number;
   };
   expect(result).toMatchObject({ paper_count: expect.any(Number) });
+});
+
+test("corpus.status reports db_open:true with a numeric count for the active, open corpus (Bug #3)", async () => {
+  await createCorpus("open-status");
+  await dispatch("scholar.corpus.activate", { slug: "open-status" });
+  const result = await dispatch("scholar.corpus.status", { slug: "open-status" }) as {
+    paper_count: number;
+    db_open: boolean;
+  };
+  expect(result.db_open).toBe(true);
+  expect(result.paper_count).toEqual(expect.any(Number));
+});
+
+test("corpus.status reports db_open:false (not a misleading 0) when the active corpus DB isn't open in this process (Bug #3)", async () => {
+  await createCorpus("restart-sim");
+  await dispatch("scholar.corpus.activate", { slug: "restart-sim" });
+  // Simulate a fresh process / failed startup rehydration: activeCorpusId is still
+  // persisted in config, but ctx.db is unset (no open handle this process).
+  built.ctx.db = undefined;
+  const result = await dispatch("scholar.corpus.status", { slug: "restart-sim" }) as {
+    paper_count: number;
+    db_open: boolean;
+  };
+  // The old code returned paper_count:0 SILENTLY here — indistinguishable from an
+  // empty corpus. db_open:false now disambiguates the 0.
+  expect(result.db_open).toBe(false);
+  expect(result.paper_count).toBe(0);
+});
+
+test("reopenPersistedCorpus warns (not silently) when a persisted activeCorpusId has no corpus row (Bug #3b diagnostic)", () => {
+  const warn = spyOn(built.ctx.log, "warn");
+  // Anomalous state: an activeCorpusId is persisted but points at a corpus that
+  // doesn't exist. The old code returned undefined with NO trace; the diagnostic
+  // warn is what lets the next field run pinpoint why rehydration gave up.
+  built.ctx.db = undefined;
+  built.ctx.config.set("activeCorpusId", "ghost-slug-never-created");
+  const result = reopenPersistedCorpus(built.ctx, dir);
+  expect(result).toBeUndefined();
+  expect(built.ctx.db).toBeUndefined();
+  expect(warn).toHaveBeenCalled();
+  warn.mockRestore();
+});
+
+test("reopenPersistedCorpus stays silent when no corpus has ever been activated (normal fresh install)", () => {
+  const warn = spyOn(built.ctx.log, "warn");
+  // No activeCorpusId persisted (fresh harness) — the NORMAL state must NOT warn,
+  // or the diagnostic cries wolf on every clean startup.
+  built.ctx.db = undefined;
+  const result = reopenPersistedCorpus(built.ctx, dir);
+  expect(result).toBeUndefined();
+  expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
 });
 
 test("corpus.reset-init clears initOnce slot allowing re-create after failure", async () => {
