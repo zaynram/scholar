@@ -136,18 +136,20 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors", () => {
   //   {scope_key})..."; (spec §8.2): scope_key text notNull.
   // ──────────────────────────────────────────────────────────────────────────
 
-  test("SA3 scope_key enum: tool-call args carry scope_key matching the four-pattern enum", async () => {
+  test("SA3 scope_key enum: tool-call args carry scope_key matching the (post-#6) panel-forwardable enum", async () => {
     const { createRoot } = await import("react-dom/client");
     const { createElement, act } = await import("react");
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
     fake.callServerToolImpl = async () => ({ structuredContent: { body_md: "ok" } });
 
+    // Defect #6 (2026-06-05) scrub: the panel can only forward scopes it can
+    // satisfy without selection-state. `stale` (unimplemented) and `selection:`
+    // (needs paper_ids the panel doesn't carry) were removed from the advertised
+    // enum — forwarding either would only ever produce a fail-closed server error.
     const validScopeKeys = [
       "all",
-      "stale",
       "section:introduction",
-      "selection:abc123hash",
     ] as const;
 
     for (const scopeKey of validScopeKeys) {

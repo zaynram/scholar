@@ -43,7 +43,7 @@ function seededDb() {
   const sqlite = new Database(":memory:");
   sqlite.run(`CREATE TABLE papers (
     id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
-    authors TEXT, abstract TEXT,
+    authors TEXT, abstract TEXT, section TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     priority INTEGER NOT NULL DEFAULT 0,
     imported_at TEXT NOT NULL, status_touched_at TEXT
@@ -53,9 +53,9 @@ function seededDb() {
     body_md TEXT NOT NULL, generated_at TEXT NOT NULL,
     model TEXT, paper_count INTEGER
   )`);
-  sqlite.run(`INSERT INTO papers(id,key,title,abstract,imported_at) VALUES
-    ('p1','foo','Foo paper','We study foo.','2026-01-01T00:00:00.000Z'),
-    ('p2','bar','Bar paper','Bar is an extension of foo.','2026-01-01T00:00:00.000Z')`);
+  sqlite.run(`INSERT INTO papers(id,key,title,abstract,section,imported_at) VALUES
+    ('p1','foo','Foo paper','We study foo.','intro','2026-01-01T00:00:00.000Z'),
+    ('p2','bar','Bar paper','Bar is an extension of foo.','methods','2026-01-01T00:00:00.000Z')`);
   return sqlite;
 }
 
@@ -162,4 +162,88 @@ test("digest.generate: NO_ACTIVE_CORPUS guard", async () => {
   await expect(
     generateDigest(ctx as unknown as Parameters<typeof generateDigest>[0], { scope_key: "all" }),
   ).rejects.toThrow(/NO_ACTIVE_CORPUS/);
+});
+
+// ── Defect #6 (2026-06-05): scope_key was IGNORED — every scope ran
+// `SELECT ... FROM papers` with no WHERE and persisted the row under the RAW
+// scope_key, so a `section:x` request digested the whole corpus and cached it
+// under `section:x` (cache poisoning). The handler now resolves rows + a
+// canonical effective scope_key per scope BEFORE any LLM/persist, and fails
+// CLOSED on unsupported scopes instead of falling back to all-papers. ──────────
+
+test("digest.generate (section:<label>): filters to that section and persists under it", async () => {
+  const sqlite = seededDb();
+  const result = await generateDigest(fakeCtx(sqlite), { scope_key: "section:intro" });
+  expect(result.scope_key).toBe("section:intro");
+
+  // Only p1 ('intro') reached the prompt — p2 ('methods') did not.
+  const body = chatBody as { messages: Array<{ role: string; content: string }> };
+  const userMsg = body.messages.find((m) => m.role === "user")!;
+  expect(userMsg.content).toContain("Foo paper");
+  expect(userMsg.content).not.toContain("Bar paper");
+
+  const row = sqlite.query(
+    "SELECT scope_key, paper_count FROM digests",
+  ).get() as { scope_key: string; paper_count: number };
+  expect(row.scope_key).toBe("section:intro");
+  expect(row.paper_count).toBe(1);
+});
+
+test("digest.generate (selection + paper_ids): filters to the ids, server-derives a canonical selection:<hash>", async () => {
+  const sqlite = seededDb();
+  const result = await generateDigest(fakeCtx(sqlite), {
+    scope_key: "selection",
+    paper_ids: ["p2"],
+  });
+  // Server-derived canonical key — NOT a caller-supplied cosmetic hash.
+  expect(result.scope_key).toMatch(/^selection:[0-9a-f]{16}$/);
+
+  const body = chatBody as { messages: Array<{ role: string; content: string }> };
+  const userMsg = body.messages.find((m) => m.role === "user")!;
+  expect(userMsg.content).toContain("Bar paper");
+  expect(userMsg.content).not.toContain("Foo paper");
+
+  const row = sqlite.query(
+    "SELECT scope_key, paper_count FROM digests",
+  ).get() as { scope_key: string; paper_count: number };
+  expect(row.scope_key).toBe(result.scope_key!);
+  expect(row.paper_count).toBe(1);
+});
+
+test("digest.generate (selection key is order-independent over the id set)", async () => {
+  const a = await generateDigest(fakeCtx(seededDb()), { scope_key: "selection", paper_ids: ["p1", "p2"] });
+  const b = await generateDigest(fakeCtx(seededDb()), { scope_key: "selection", paper_ids: ["p2", "p1"] });
+  expect(a.scope_key).toMatch(/^selection:[0-9a-f]{16}$/);
+  expect(a.scope_key).toBe(b.scope_key!);
+});
+
+test("digest.generate (selection without paper_ids): fails closed, no Ollama call, no persist", async () => {
+  const sqlite = seededDb();
+  chatBody = "untouched";
+  await expect(
+    generateDigest(fakeCtx(sqlite), { scope_key: "selection" }),
+  ).rejects.toThrow(/SELECTION_REQUIRES_IDS/);
+  expect(chatBody).toBe("untouched");
+  const count = (sqlite.query("SELECT COUNT(*) AS c FROM digests").get() as { c: number }).c;
+  expect(count).toBe(0);
+});
+
+test("digest.generate (stale): fails closed as UNIMPLEMENTED_SCOPE — no all-papers fallback", async () => {
+  const sqlite = seededDb();
+  chatBody = "untouched";
+  await expect(
+    generateDigest(fakeCtx(sqlite), { scope_key: "stale" }),
+  ).rejects.toThrow(/UNIMPLEMENTED_SCOPE/);
+  expect(chatBody).toBe("untouched");
+});
+
+test("digest.generate (empty scope): fails closed as NO_PAPERS_IN_SCOPE, no persist", async () => {
+  const sqlite = seededDb();
+  chatBody = "untouched";
+  await expect(
+    generateDigest(fakeCtx(sqlite), { scope_key: "section:ghost" }),
+  ).rejects.toThrow(/NO_PAPERS_IN_SCOPE/);
+  expect(chatBody).toBe("untouched");
+  const count = (sqlite.query("SELECT COUNT(*) AS c FROM digests").get() as { c: number }).c;
+  expect(count).toBe(0);
 });

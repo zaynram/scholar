@@ -55,7 +55,7 @@ function App() {
     case "digest":
       return (
         <DigestPanel
-          scopeKey={view.scope_key as import("./views/DigestPanel.tsx").ScopeKey}
+          scopeKey={(view.scope_key ?? "all") as import("./views/DigestPanel.tsx").ScopeKey}
           digest={null}
           onAction={() => {}}
         />

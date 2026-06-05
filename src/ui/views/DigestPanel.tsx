@@ -3,7 +3,8 @@
 //
 // Contract (extraction-003 lines 1485-1486, 1496, 1563-1566, 1572):
 //   scholar.digest.generate args:
-//     scope_key: string  (SA3: "all" | "section:<label>" | "stale" | "selection:<hash>")
+//     scope_key: string  (SA3 post-#6: "all" | "section:<label>"; selection is
+//       tool-only — it needs paper_ids the panel doesn't carry; stale unimplemented)
 //     use_claude?: boolean  (SA4: opt-in per request; DEFAULT FALSE per CLAUDE.md)
 //   Result:
 //     body_md: string  (renamed from digest_md per extraction-003 line 1496)
@@ -20,12 +21,15 @@ import {
   type AskClaudePayload,
 } from "../lib/app.ts";
 
-// SA3 enum — spec §9.3 line 935 / §8.2 line 841.
-export type ScopeKey =
-  | "all"
-  | `section:${string}`
-  | "stale"
-  | `selection:${string}`;
+// SA3 enum — the scope_keys this panel can forward and have the server honor.
+// Defect #6 (2026-06-05) scrub: the panel only ever forwards the scope_key it is
+// opened with and carries NO selection-state, so it can't supply paper_ids — a
+// `selection:` digest would fail closed (SELECTION_REQUIRES_IDS), and `stale` is
+// unimplemented server-side (UNIMPLEMENTED_SCOPE). Both were removed from the
+// advertised enum so a host-opened panel doesn't surface fail-closed noise for a
+// scope the UI can never satisfy. Selection digests are driven directly through
+// the scholar.digest.generate tool (scope_key:'selection' + paper_ids), not here.
+export type ScopeKey = "all" | `section:${string}`;
 
 export type DigestResult =
   | { type: "text"; body: string }
