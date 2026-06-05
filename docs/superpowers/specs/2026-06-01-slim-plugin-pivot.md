@@ -154,7 +154,7 @@ enumerated with its failure symptom in **HUMAN.md §5**.
 > (`src/ui/lib/app.ts`) was rewritten off the host-injected `window.mcp`/`window.cowork`
 > globals onto `@modelcontextprotocol/ext-apps` `App` over `PostMessageTransport`,
 > reading the view from the `ontoolresult` tool-*result* notification. The dep is
-> client-only (absent from `dist/server.js`). **Packaging correction (`f91de0e`):**
+> client-only (absent from `dist/server.js`). **Packaging correction (`306e3f8`):**
 > source-conformance was necessary but not sufficient — a packaging defect made
 > every bundle serve the "UI not built" placeholder (`resource.ts` read a dev-only
 > path that resolves outside the plugin root; the build staged Bun's multi-file
@@ -213,7 +213,7 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   `node_modules/koffi`), *or* tree-kill the pdf child from the cmd-side launcher.
   Not done blind here — koffi's native-binding resolution cannot be validated off
   the target.
-- **UI bundling** — *RESOLVED 2026-06-04 (`f91de0e`).* This bullet predicted the
+- **UI bundling** — *RESOLVED 2026-06-04 (`eda8026`+`306e3f8`).* This bullet predicted the
   defect: `build:ui` emits a multi-file `ui/index.html` + `chunk-*.js`, and the
   sandboxed MCP-App iframe (SEP-1865) cannot fetch sibling chunks — so the
   packaged UI rendered as the "UI not built" placeholder. The follow-up landed:

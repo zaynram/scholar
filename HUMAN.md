@@ -111,7 +111,7 @@ The Claude Desktop distribution is built and structurally proven. The Windows
 **source-conformant** (leg 6 below): scholar speaks the mcp-apps host-render
 protocol (both layers) and the UI bundle carries the `@modelcontextprotocol/ext-apps`
 bridge. A follow-on **packaging defect** (the bundle served a placeholder, not the
-real UI) was also found and fixed afterward (`f91de0e`) and **verified against the
+real UI) was also found and fixed afterward (`306e3f8`) and **verified against the
 real artifacts** — see the *Packaging correction* under leg 6. What remains is
 purely a **live-render check on Desktop** — the one-shot notification delivery
 can't be simulated from Linux. See leg 6.
@@ -217,7 +217,7 @@ be checked on Windows — each with the symptom to watch for:
    `build-plugin.ts` staged Bun's *multi-file* loader (`ui/index.html` +
    `chunk-*.js`) the sandboxed iframe can't fetch anyway. The source suite stayed
    green because it exercised the dev path — the verify-against-the-real-artifact
-   trap. **Fixed in `f91de0e`:** build now stages one self-contained `ui/app.html`
+   trap. **Fixed in `eda8026`+`306e3f8`:** build now stages one self-contained `ui/app.html`
    (via a shared inliner, gated in both the `.plugin` and `.mcpb` `required[]`
    manifests) and `resource.ts` resolves it through a `CLAUDE_PLUGIN_ROOT`-anchored
    ladder. **Verified against the real artifacts** (not the dev path): all three
@@ -234,7 +234,7 @@ be checked on Windows — each with the symptom to watch for:
    renders the iframe and the one-shot `ontoolresult` is delivered *and caught* —
    i.e. the handshake-then-notification timing on the real host. *symptom:* the
    panel shows **"Scholar UI not built"** → the bundle didn't reach
-   `<root>/ui/app.html` (should not happen post-`f91de0e`; re-check the artifact
+   `<root>/ui/app.html` (should not happen post-`306e3f8`; re-check the artifact
    actually carries `ui/app.html` and the host set `CLAUDE_PLUGIN_ROOT`);
    *symptom:* the panel renders but stays **blank/empty** (iframe appears, real UI
    chrome but no view) → the notification was missed (one-shot race) or
