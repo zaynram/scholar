@@ -89,26 +89,29 @@ root). So the provisioning + spawn + migrate + activate spine is no longer an
 assumption — the **only** unproven leg is the PDF *viewer* (`displayPdf`/`getText`,
 step 7), which can only be exercised by a human at the desktop.
 
-> **Note (2026-06-04):** the PDF viewer is an **MCP App** the Claude Code terminal
-> can't render — the actual home for that leg is **Claude Desktop** via the `.mcpb`
-> extension. See **§5** for the build + install + the Windows verification legs
-> (the viewer-render check there is the same leg as step 7). **Caveat:** that render
-> leg is now known to be **non-conformant at the source level** — scholar doesn't
-> yet declare the mcp-apps `_meta.ui.resourceUri` / `text/html;profile=mcp-app`
-> contract, so the panel won't render on Desktop *or* anywhere until the (additive)
-> conformance fix lands. See **§5 leg 6** for the gap and the fix.
+> **Note (2026-06-04, updated):** the PDF viewer is an **MCP App** the Claude Code
+> terminal can't render — the actual home for that leg is **Claude Desktop** via the
+> `.mcpb` extension. See **§5** for the build + install + the Windows verification
+> legs (the viewer-render check there is the same leg as step 7). The mcp-apps
+> conformance gap flagged earlier is now **fixed at the source level** (commits
+> `eb236d1` spec §9/§11/§253 amendment, `4c9aa40` server render layer, `f3c4aa9`
+> client ext-apps bridge): both the host-render contract (`_meta.ui.resourceUri` +
+> `text/html;profile=mcp-app`) and the in-iframe bridge (`@modelcontextprotocol/ext-apps`
+> `App` over postMessage, `ontoolresult` carrier) are implemented and unit-pinned.
+> The **only** remaining unproven leg is the actual live render on Claude Desktop —
+> the one-shot `ontoolresult` delivery can't be exercised from Linux. See **§5 leg 6**.
 
 ---
 
 ## 5. Install + verify the `.mcpb` on Claude Desktop (Windows)  ⟵ NEW 2026-06-04
 
 The Claude Desktop distribution is built and structurally proven. The Windows
-*launch* legs can only be exercised by you on the target machine — but the
-headline *render* leg is already known to fail at the **source** level (leg 6
-below): scholar does not yet speak the mcp-apps host-render protocol, so the
-PDF/UI panels will not appear until a small conformance fix lands. The packaging
-is correct and shippable; the feature it carries is not yet wired to render. See
-leg 6 for the exact gap and the (additive) fix.
+*launch* legs can only be exercised by you on the target machine. The headline
+*render* leg — flagged in an earlier draft as non-conformant at source — is now
+**source-conformant** (leg 6 below): scholar speaks the mcp-apps host-render
+protocol (both layers) and the UI bundle carries the `@modelcontextprotocol/ext-apps`
+bridge. What remains is purely a **live-render check on Desktop** — the one-shot
+notification delivery can't be simulated from Linux. See leg 6.
 
 **Build it** (on any host with `bun` + the `mcpb` CLI):
 ```
@@ -163,57 +166,57 @@ be checked on Windows — each with the symptom to watch for:
    Linux** — the win32 dll is fetched from npm as-is) — *symptom:* corpus
    create/activate throws on vec load / `loadVecAndProbeDim` (SQLite ABI mismatch
    between bun 1.3.11's bundled SQLite and the dll).
-6. **mcp-apps PDF viewer renders** — *the headline reason Desktop is the target,*
-   and **known non-conformant at the source level (confirmed 2026-06-04).** This is
-   no longer a "verify on Windows" item — it is a tracked source fix. Per SEP-1865
-   (the finalized mcp-apps spec) and the version-matched vendored pdf-server
-   (v1.7.2, scholar's own child and an in-tree proof of the correct shape), the host
-   renders a tool's UI in a sandboxed iframe **only** when (a) the tool declares
-   `_meta: { ui: { resourceUri: "ui://…" } }` at registration and (b) the resource
-   is served with mimeType `text/html;profile=mcp-app`. Scholar does **neither**: no
-   tool carries `_meta.ui.resourceUri` (the UI tools return ad-hoc
-   `openView`/`resource` fields in the *result body* — `corpus.ts:496`,
-   `papers.ts:273,286`, `digest.ts:202`, `prompts.ts:181` — which the host does not
-   read for rendering; they only mean something *inside* an already-rendered iframe,
-   which never gets created), and `src/server/ui/resource.ts:34` serves
-   `ui://scholar/app.html` as plain `text/html`. There is **no
-   `structuredContent.resource` fallback** in the protocol. So the panel **will not
-   render as-is.** This faithfully implements spec §9/§11 (the `structuredContent.view`
-   dispatch model) — so the fix is a deliberate spec §9/§11 amendment, not a code bug.
-   **The fix is additive and contained** (no foundation/§7.6 touch): point all five
-   view-opener tools' `_meta.ui.resourceUri` at `ui://scholar/app.html` and flip the
-   resource mime to `text/html;profile=mcp-app`; the existing `structuredContent.view`
-   dispatch keeps working *inside* the iframe. SDK 1.29.0 already passes `_meta`
-   through to the tool listing (`@modelcontextprotocol/sdk` `mcp.js:86`), so it is
-   viable. **But that is only layer 1 (render/discovery).** Until it lands, install +
-   launch can be exercised but the UI/PDF panels stay blank.
+6. **mcp-apps PDF viewer renders** — *the headline reason Desktop is the target.*
+   **Source-conformant as of 2026-06-04** (commits `eb236d1` spec amendment,
+   `4c9aa40` server layer, `f3c4aa9` client layer). This is back to being a
+   *verify-on-Windows* item: the source now speaks the finalized mcp-apps protocol
+   (SEP-1865), proven against scholar's own version-matched vendored pdf-server
+   (v1.7.2) and the `@modelcontextprotocol/ext-apps` `.d.ts`. Both layers were
+   fixed:
 
-   **Layer 2 — the in-iframe runtime bridge — is also non-conformant (confirmed
-   2026-06-04), and is the bigger piece.** Even after layer 1 renders the iframe, the
-   React app inside must *receive* its `structuredContent.view` payload and *call*
-   server tools over the host bridge. The finalized protocol does this with the
-   `@modelcontextprotocol/ext-apps` `App` class — `new App()`, `await app.connect()`,
-   `app.ontoolresult = cb`, `app.callServerTool({name, arguments})`,
-   `app.updateModelContext(...)` — all **JSON-RPC over `postMessage(window.parent)`**
-   (confirmed: SEP-1865 + the blog API + the reference `mcp-app.html`, which uses
-   `postMessage`/`window.parent`/`notifications/*`/`tools/call`). Scholar's
-   `src/ui/lib/app.ts` instead assumes a **host-injected `window.mcp` global with
-   property-handlers** ("OPTION B", attributed to scholar spec §253): it reads
-   `window.mcp.ontoolinput` (canonical is `app.ontoolresult` — different name *and*
-   object), `window.mcp.callTool(name, args)` (canonical is
-   `app.callServerTool({name, arguments})`), and a Cowork-only `window.cowork.askClaude`
-   (not in the standard). So scholar's UI is listening on a channel the Desktop host
-   never populates — the panel would render but stay inert / payload-less.
-   **Layer 2 is a real client rework, not an additive tweak:** rewrite `lib/app.ts`
-   onto the `ext-apps` `App` bridge, adapt `App.tsx` + `DigestPanel.tsx` + their
-   tests, and add the `@modelcontextprotocol/ext-apps` dependency. Together with the
-   spec §9/§11/§253 amendment this is a planned thread (likely re-enter the
-   spec-pipeline), not an ad-hoc edit. *Caveat (salient uncertainty):* scholar's
-   spec §253 cites a "window.mcp" property-handler option that may have come from an
-   earlier mcp-apps draft or an internal Cowork-host assumption; against the
-   *current* finalized protocol + the version-matched pdf-server reference it is
-   non-conformant, but this is a reading of the evidence, not something exercised on
-   live Desktop.
+   - **Layer 1 (host render/discovery) — DONE.** All five view-opener tools
+     (`scholar.{dashboard,paper.show,digest.show,prompts.show,progress.show}`) now
+     declare `_meta.ui.resourceUri = "ui://scholar/app.html"` (both the modern
+     nested key and the legacy `_meta["ui/resourceUri"]`, via a `viewMeta()` helper
+     applied inside scholar's own `register` chokepoint), and
+     `src/server/ui/resource.ts` serves `ui://scholar/app.html` as
+     `text/html;profile=mcp-app` (the pdf resource stays `application/pdf`). The
+     three incompatible view vocabularies were unified onto one `ViewInput`
+     discriminant carried in the result `structuredContent`; the registry wrapper
+     promotes it on `"view" in result`. Capability negotiation needs nothing
+     server-side (the reference registers app-tools unconditionally).
+   - **Layer 2 (in-iframe runtime bridge) — DONE.** `src/ui/lib/app.ts` was
+     rewritten off the host-injected `window.mcp`/`window.cowork` globals (a
+     Cowork-ism no standard host populates) onto the `@modelcontextprotocol/ext-apps`
+     `App` over `PostMessageTransport(window.parent, window.parent)`. The view
+     discriminant arrives on **`app.ontoolresult`** (the tool-*result* notification;
+     the v1.0 code read `ontoolinput`, the input channel) via
+     `params.structuredContent`; `callServerTool`/`readServerResource`/`sendMessage`
+     map to the `App` methods. The dep `@modelcontextprotocol/ext-apps@1.7.3` is
+     client-only (verified absent from `dist/server.js`).
+
+   **What is proven from Linux (the source ceiling):** source-conformant on both
+   layers; `bun run build:server` (2.46 MB, ext-apps-free), `build:ui` (the real
+   ext-apps `App` bundles for the browser target → `build/ui/app.html`, 1.41 MB),
+   and `build:mcpb` (→ `out/scholar.mcpb`, 3.0 MB, 20 files) all succeed; full suite
+   green (`bun test src tests`); tsc clean. The **one-shot ordering** — `lib/app.ts`
+   registers `ontoolresult` *before* `app.connect()`, because the host fires that
+   notification once right after the `ui/initialize` handshake — is **asserted
+   in-test** (`src/ui/lib/app.test.ts`).
+
+   **What is your leg (only checkable on live Desktop):** that the host actually
+   renders the iframe and the one-shot `ontoolresult` is delivered *and caught* —
+   i.e. the handshake-then-notification timing on the real host. *symptom:* the
+   panel renders but stays **blank/empty** (iframe appears, no view) → the
+   notification was missed (one-shot race) or `structuredContent` didn't carry the
+   `view` key; *symptom:* iframe **never appears** → the host didn't honor
+   `_meta.ui.resourceUri` / the profile mime (re-check the manifest reached Desktop
+   and the tool list shows `_meta`). The `cowork.askClaude` "Use Claude instead"
+   toggle is **expected to be absent** on standard Desktop (no Cowork global) — the
+   digest/prompts UI degrades to Ollama-only by design; that is not a failure.
+   *Caveat (salient uncertainty):* the conformance reading is grounded in SEP-1865 +
+   the version-matched pdf-server reference + the ext-apps `.d.ts`, but the live
+   render path has not been exercised on a real Claude Desktop from this environment.
 7. **Clean shutdown / no orphaned lock** — `launch.cmd` runs `bun.exe` as a *child*
    of cmd.exe (no exec-replace on Windows). *symptom:* after quitting/restarting
    Desktop, the next launch refuses with `SCHOLAR_LOCKED`. The pid-liveness reclaim

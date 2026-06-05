@@ -141,17 +141,23 @@ Desktop accepting the manifest, spawning `cmd.exe`/`type:binary`, `${…}`
 substitution, bun provisioning, and vec0 ABI under the provisioned bun — each
 enumerated with its failure symptom in **HUMAN.md §5**.
 
-> **Known gap — the mcp-apps viewer render is *not* merely Windows-unproven; it is
-> non-conformant at the source level (confirmed 2026-06-04).** Per SEP-1865 the
-> Desktop host renders a tool's UI iframe only when the tool declares
-> `_meta.ui.resourceUri` and the resource is served as `text/html;profile=mcp-app`;
-> scholar declares neither (it uses the spec §9/§11 `structuredContent.view`/`resource`
-> model, which the host does not read for rendering). So the headline leg — the reason
-> Desktop is the target — will not render until a conformance fix lands. The fix is
-> additive (point the five view-opener tools' `_meta.ui.resourceUri` at
-> `ui://scholar/app.html`, flip the mime; `structuredContent.view` dispatch keeps
-> working inside the iframe) but it is a **spec §9/§11 amendment**, so it is a
-> deliberate design decision, not a silent code edit. Tracked in **HUMAN.md §5 leg 6**.
+> **mcp-apps viewer render — source-conformant as of 2026-06-04** (was flagged here
+> as non-conformant at source; now fixed in commits `eb236d1` spec §9/§11/§253
+> amendment, `4c9aa40` server render layer, `f3c4aa9` client ext-apps bridge). Per
+> SEP-1865 the Desktop host renders a tool's UI iframe only when the tool declares
+> `_meta.ui.resourceUri` and the resource is served as `text/html;profile=mcp-app`.
+> Both layers now comply: (1) all five view-opener tools declare
+> `_meta.ui.resourceUri = "ui://scholar/app.html"` (modern + legacy keys via a
+> `viewMeta()` helper in scholar's `register` chokepoint) and the resource serves as
+> `text/html;profile=mcp-app`, with the three prior view vocabularies unified onto one
+> `ViewInput` discriminant in result `structuredContent`; (2) the in-iframe bridge
+> (`src/ui/lib/app.ts`) was rewritten off the host-injected `window.mcp`/`window.cowork`
+> globals onto `@modelcontextprotocol/ext-apps` `App` over `PostMessageTransport`,
+> reading the view from the `ontoolresult` tool-*result* notification. The dep is
+> client-only (absent from `dist/server.js`). The **only** unproven leg is the live
+> render on Claude Desktop — the one-shot `ontoolresult` delivery can't be exercised
+> from Linux (the register-before-connect ordering it depends on is asserted in-test
+> in `src/ui/lib/app.test.ts`). Tracked in **HUMAN.md §5 leg 6**.
 
 ## Resolved (was open, now verified on Linux)
 
