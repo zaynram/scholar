@@ -2,36 +2,33 @@
 // DOM-based dispatch wiring test. Exercises App.tsx's switch(view.view) — catches
 // typos like case "prompt" vs case "prompts" that renderToString tests miss.
 //
-// SDK mechanism: OPTION B (property-handler on window.mcp.ontoolinput) —
-// selected per spec §line 253 "wires the App SDK lifecycle (`ontoolinput`,
-// `ontoolresult`, `onhostcontextchanged`)" — property-style names, not events.
-// Cowork host convention is window.cowork.askClaude (property on global object),
-// same pattern.
-//
-// Uses registerDom/unregisterDom opt-in pattern (chore 859263d).
+// Mechanism (§9 conformance amendment 2026-06-04): the view discriminant arrives
+// on the ext-apps `App`'s `toolresult` notification, carried in the tool RESULT
+// `structuredContent`. We mock @modelcontextprotocol/ext-apps with a FakeApp
+// (app.testkit.ts), render <App/> (which wires initApp), then fire `toolresult`
+// for each view and assert the rendered data-view attribute.
 import { describe, beforeAll, afterAll, test, expect, beforeEach, afterEach } from "bun:test";
 import { registerDom, unregisterDom } from "%/util/preload.ts";
+import { installExtAppsMock, latestFakeApp, resetFakeApps } from "./lib/app.testkit.ts";
+
+// Install the ext-apps mock BEFORE App.tsx (-> lib/app.ts) is imported.
+installExtAppsMock();
 
 // React 18 act() environment flag — required for act() to flush state updates.
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("App.tsx — view dispatcher (OPTION B: property-handler)", () => {
+describe("App.tsx — view dispatcher (ext-apps toolresult carrier)", () => {
   beforeAll(registerDom);
   afterAll(unregisterDom);
 
   let container: HTMLDivElement;
   beforeEach(() => {
+    resetFakeApps();
     container = document.createElement("div");
     document.body.appendChild(container);
-    // Reset the mock MCP surface installed by lib/app.ts onToolInput.
-    (globalThis as Record<string, unknown>).mcp = {
-      callTool: async () => ({}),
-      readResource: async () => ({ contents: [] }),
-    };
   });
   afterEach(() => {
     document.body.removeChild(container);
-    delete (globalThis as Record<string, unknown>).mcp;
   });
 
   const VIEW_CASES: Array<{ input: { view: string } & Record<string, unknown>; attr: string }> = [
@@ -43,7 +40,7 @@ describe("App.tsx — view dispatcher (OPTION B: property-handler)", () => {
   ];
 
   for (const { input, attr } of VIEW_CASES) {
-    test(`App.tsx dispatches to ${input.view} view (property-handler mechanism)`, async () => {
+    test(`App.tsx dispatches to ${input.view} view (toolresult -> structuredContent)`, async () => {
       const { createRoot } = await import("react-dom/client");
       const { createElement, act } = await import("react");
       const { App } = await import("./App.tsx");
@@ -52,15 +49,16 @@ describe("App.tsx — view dispatcher (OPTION B: property-handler)", () => {
         createRoot(container).render(createElement(App, {}));
       });
 
-      // OPTION B: property-handler dispatch. The App's useEffect installs
-      // window.mcp.ontoolinput; invoking it triggers the React state update.
-      const mcp = (globalThis as Record<string, unknown>).mcp as {
-        ontoolinput?: (input: unknown) => void;
-      };
-      expect(typeof mcp.ontoolinput).toBe("function");
+      // App.tsx's useEffect wired initApp -> a FakeApp with a toolresult handler
+      // registered before connect. Delivering the notification drives the React
+      // state update, exactly as a real host would after the triggering call.
+      const app = latestFakeApp();
+      expect(app.log.indexOf("addEventListener:toolresult")).toBeLessThan(
+        app.log.indexOf("connect"),
+      );
 
       await act(async () => {
-        mcp.ontoolinput!(input);
+        app.fire("toolresult", { structuredContent: input });
       });
 
       expect(container.innerHTML).toContain(attr);

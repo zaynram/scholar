@@ -1,18 +1,18 @@
 // src/ui/App.tsx
 // React root. Dispatches on the `view` field emitted by view-opener tools
-// (scholar.{dashboard,paper.show,digest.show,prompts.show,progress.show} —
-// REGISTRATIONS owned by sibling plans corpus + extraction).
+// (scholar.{dashboard,paper.show,digest.show,prompts.show,progress.show}).
 //
-// App.tsx only CONSUMES view-input events via lib/app.ts's onToolInput
-// (OPTION B: property-handler on window.mcp.ontoolinput, per spec §line 253).
+// The view discriminant arrives on the ext-apps `App`'s `toolresult`
+// notification (the view rides each opener's tool RESULT structuredContent),
+// wired via lib/app.ts's initApp — which registers handlers BEFORE connect()
+// because toolresult is a one-shot event (§9 conformance amendment 2026-06-04).
 
 import { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import {
   type ViewInput,
   type HostContext,
-  onToolInput,
-  onHostContextChanged,
+  initApp,
 } from "./lib/app.ts";
 import { CorpusDashboard } from "./views/CorpusDashboard.tsx";
 import { PaperDetail } from "./views/PaperDetail.tsx";
@@ -25,12 +25,9 @@ function App() {
   const [hostCtx, setHostCtx] = useState<HostContext>({});
 
   useEffect(() => {
-    const unsub1 = onToolInput(setView);
-    const unsub2 = onHostContextChanged(setHostCtx);
-    return () => {
-      unsub1();
-      unsub2();
-    };
+    // initApp registers the toolresult/hostcontextchanged handlers BEFORE it
+    // connects (one-shot delivery) and returns a cleanup that detaches them.
+    return initApp({ onView: setView, onHostContext: setHostCtx });
   }, []);
 
   useEffect(() => {

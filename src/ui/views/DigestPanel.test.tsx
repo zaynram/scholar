@@ -1,11 +1,12 @@
 // src/ui/views/DigestPanel.test.tsx
-// SA2/SA3/SA4 Red tests for DigestPanel. (chore 1c9e0d3 PART C)
+// SA2/SA3/SA4 tests for DigestPanel.
 //
-// All five tests are written BEFORE DigestPanel exists; they fail at import time
-// (Red phase). Tests use the registerDom/unregisterDom opt-in (chore 859263d)
-// to exercise interactive behavior (button clicks, async callTool round-trips).
-//
-// Expected at Red: FAIL — Cannot find module './DigestPanel'.
+// Mechanism (§9 conformance amendment 2026-06-04): DigestPanel calls
+// callServerTool / isAskClaudeAvailable / askClaude from lib/app.ts. We mock
+// @modelcontextprotocol/ext-apps with a FakeApp (app.testkit.ts) and call
+// initApp() to establish the bridge, then configure the fake's tool response.
+// isAskClaudeAvailable/askClaude still read the `cowork` host global (the degrade
+// path is unchanged), so the SA2 host-present/absent cases set/unset it directly.
 import {
   describe,
   beforeAll,
@@ -14,41 +15,51 @@ import {
   afterEach,
   test,
   expect,
-  mock,
 } from "bun:test"
 import { registerDom, unregisterDom } from "%/util"
+import {
+  installExtAppsMock,
+  latestFakeApp,
+  resetFakeApps,
+  type FakeApp,
+} from "../lib/app.testkit.ts"
+
+// Install the ext-apps mock BEFORE lib/app.ts is (dynamically) imported.
+installExtAppsMock();
 
 // React 18: set IS_REACT_ACT_ENVIRONMENT so act() flushes state updates
-// synchronously and click handlers run their async callTool chains within
-// the act() boundary. Without this, useState updates batch and the SA3/SA4
-// tests race past their captures.
-(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+// synchronously and click handlers run their async callTool chains within act().
+(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", () => {
+describe("DigestPanel — SA2/SA3/SA4 verbatim anchors", () => {
   beforeAll(registerDom)
   afterAll(unregisterDom)
 
   let container: HTMLDivElement
-  beforeEach(() => {
+  let fake: FakeApp
+  beforeEach(async () => {
+    resetFakeApps()
     container = document.createElement("div");
     document.body.appendChild(container);
+    // Establish the bridge (sets lib/app.ts's _app to a FakeApp) — mirrors
+    // production where App.tsx's initApp runs before any view mounts.
+    const { initApp } = await import("../lib/app.ts");
+    initApp({ onView: () => {}, onHostContext: () => {} });
+    fake = latestFakeApp();
   })
   afterEach(() => {
     document.body.removeChild(container);
     delete (globalThis as Record<string, unknown>).cowork;
-    delete (globalThis as Record<string, unknown>).mcp;
   })
 
   // ──────────────────────────────────────────────────────────────────────────
   // SA2 — askClaude sentinel + host-capability detection
   //
-  // Anchor (spec §11 lines 1030-1035, verbatim per chore 1c9e0d3 PART C SA2):
-  //   "window.cowork.askClaude is a Cowork-host-provided global ... The UI
-  //    feature-detects with typeof window.cowork?.askClaude === 'function' on
-  //    mount ... Absent. The toggle is hidden entirely; in its place the UI
-  //    renders a single static note: 'Claude fallback unavailable in this host.'
-  //    Servers still receive askClaude: undefined in tool calls (the toggle
-  //    was never offered)."
+  // Anchor (spec §11, verbatim): "window.cowork.askClaude is a Cowork-host-
+  //   provided global ... feature-detects with typeof window.cowork?.askClaude
+  //   === 'function' ... Absent. The toggle is hidden entirely; in its place the
+  //   UI renders a single static note: 'Claude fallback unavailable in this
+  //   host.' Servers still receive askClaude: undefined in tool calls."
   // ──────────────────────────────────────────────────────────────────────────
 
   test("SA2 capability-detect: host-absent → static note rendered, 'Use Claude instead' toggle absent", async () => {
@@ -56,9 +67,8 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     const { createElement, act } = await import("react");
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
-    // No window.cowork set — host absent (capability detect must return false).
-    const mockCallTool = mock(async () => ({ body_md: "digest body" }));
-    (globalThis as Record<string, unknown>).mcp = { callTool: mockCallTool };
+    // No cowork global — host absent (capability detect must return false).
+    fake.callServerToolImpl = async () => ({ structuredContent: { body_md: "digest body" } });
 
     await act(async () => {
       createRoot(container).render(
@@ -70,34 +80,31 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
       );
     });
 
-    // Static note must be present.
     expect(container.innerHTML).toContain("Claude fallback unavailable in this host.");
-    // Toggle must NOT be present.
     expect(container.innerHTML).not.toContain("Use Claude instead");
   });
 
-  // Anchor (spec §11 lines 1015-1028, verbatim per chore 1c9e0d3 PART C SA2):
-  //   "On seeing structuredContent.askClaude, the UI calls
-  //    window.cowork.askClaude(askClaude.prompt, askClaude.data) (a host-provided
-  //    global in the MCP App iframe) and renders the result. This sentinel shape
-  //    is the contract shared between the producers (src/server/tools/digest.ts,
-  //    prompts.ts) and the consumer (src/ui/views/DigestPanel.tsx)."
-  test("SA2 sentinel-forwarding: host-present + structuredContent.askClaude → window.cowork.askClaude called", async () => {
+  // Anchor (spec §11, verbatim): "On seeing structuredContent.askClaude, the UI
+  //   calls window.cowork.askClaude(askClaude.prompt, askClaude.data) ... the
+  //   contract shared between the producers (digest.ts, prompts.ts) and the
+  //   consumer (DigestPanel.tsx)."
+  test("SA2 sentinel-forwarding: host-present + askClaude sentinel → cowork.askClaude called", async () => {
     const { createRoot } = await import("react-dom/client");
     const { createElement, act } = await import("react");
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
-    const askClaudeMock = mock(
-      async (_prompt: string, _data: unknown) => "Claude result",
-    );
-    (globalThis as Record<string, unknown>).cowork = { askClaude: askClaudeMock };
-
-    const sentinelPayload = {
-      prompt: "Summarize this corpus.",
-      data: { papers: [] },
+    const askClaudeCalls: Array<[string, unknown]> = [];
+    (globalThis as Record<string, unknown>).cowork = {
+      askClaude: async (prompt: string, data: unknown) => {
+        askClaudeCalls.push([prompt, data]);
+        return "Claude result";
+      },
     };
-    const mockCallTool = mock(async () => ({ askClaude: sentinelPayload }));
-    (globalThis as Record<string, unknown>).mcp = { callTool: mockCallTool };
+
+    const sentinelPayload = { prompt: "Summarize this corpus.", data: { papers: [] } };
+    fake.callServerToolImpl = async () => ({
+      content: [{ type: "text", text: JSON.stringify({ askClaude: sentinelPayload }) }],
+    });
 
     await act(async () => {
       createRoot(container).render(
@@ -109,34 +116,24 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
       );
     });
 
-    // Trigger generateDigest(false) — find "Generate (Ollama)" by text
-    // (the first <button> is the "Digest" tab-switcher, not the generator).
-    const buttons = container.querySelectorAll("button");
-    const generateBtn = Array.from(buttons).find((b) =>
+    // Trigger generateDigest(false) — find "Generate (Ollama)" by text (the first
+    // <button> is the "Digest" tab-switcher, not the generator).
+    const generateBtn = Array.from(container.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Generate (Ollama)"),
     );
     expect(generateBtn).toBeDefined();
     await act(async () => {
       generateBtn!.click();
     });
-    // Flush microtasks for the async callTool → askClaude chain.
     await act(async () => { });
 
-    expect(askClaudeMock).toHaveBeenCalledWith(
-      sentinelPayload.prompt,
-      sentinelPayload.data,
-    );
+    expect(askClaudeCalls[0]).toEqual([sentinelPayload.prompt, sentinelPayload.data]);
   });
 
   // ──────────────────────────────────────────────────────────────────────────
   // SA3 — scope_key enum (digest scope contract)
-  //
-  // Anchor (spec §9.3 line 935, verbatim per chore 1c9e0d3 PART C SA3):
-  //   "Defaults to the current scope. Shows the cached digest if recent;
-  //    otherwise calls app.callServerTool('digest.generate', {scope_key}) which
-  //    runs the Ollama chat model against a paperLine-style corpus slice
-  //    (preserving the Daisy prompt skeleton but rewriting it for Qwen)."
-  // Anchor (spec §8.2 line 841): `scope_key: text("scope_key").notNull()`
+  // Anchor (spec §9.3): "...calls app.callServerTool('digest.generate',
+  //   {scope_key})..."; (spec §8.2): scope_key text notNull.
   // ──────────────────────────────────────────────────────────────────────────
 
   test("SA3 scope_key enum: tool-call args carry scope_key matching the four-pattern enum", async () => {
@@ -144,14 +141,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     const { createElement, act } = await import("react");
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
-    let capturedArgs: Record<string, unknown> | null = null;
-    const mockCallTool = mock(
-      async (_name: string, args: Record<string, unknown>) => {
-        capturedArgs = args;
-        return { body_md: "ok" };
-      },
-    );
-    (globalThis as Record<string, unknown>).mcp = { callTool: mockCallTool };
+    fake.callServerToolImpl = async () => ({ structuredContent: { body_md: "ok" } });
 
     const validScopeKeys = [
       "all",
@@ -161,22 +151,15 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     ] as const;
 
     for (const scopeKey of validScopeKeys) {
-      capturedArgs = null;
       const localContainer = document.createElement("div");
       document.body.appendChild(localContainer);
       try {
         await act(async () => {
           createRoot(localContainer).render(
-            createElement(DigestPanel, {
-              scopeKey,
-              digest: null,
-              onAction: () => { },
-            }),
+            createElement(DigestPanel, { scopeKey, digest: null, onAction: () => { } }),
           );
         });
-        // Find "Generate (Ollama)" by text — first <button> is the tab switcher.
-        const buttons = localContainer.querySelectorAll("button");
-        const generateBtn = Array.from(buttons).find((b) =>
+        const generateBtn = Array.from(localContainer.querySelectorAll("button")).find((b) =>
           b.textContent?.includes("Generate (Ollama)"),
         );
         await act(async () => {
@@ -184,12 +167,10 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
         });
         await act(async () => { });
 
-        expect(capturedArgs).not.toBeNull();
-        expect((capturedArgs as unknown as Record<string, unknown>).scope_key).toBe(scopeKey);
-        // Must NOT use `since` (old field name — renamed to scope_key).
-        expect(capturedArgs).not.toHaveProperty("since");
-        // Must NOT include corpus_id (per-corpus ctx.db snapshot).
-        expect(capturedArgs).not.toHaveProperty("corpus_id");
+        const args = fake.callServerToolCalls.at(-1)?.arguments;
+        expect(args).toMatchObject({ scope_key: scopeKey });
+        expect(args).not.toHaveProperty("since"); // renamed to scope_key
+        expect(args).not.toHaveProperty("corpus_id"); // per-corpus ctx.db snapshot
       } finally {
         document.body.removeChild(localContainer);
       }
@@ -198,13 +179,8 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
 
   // ──────────────────────────────────────────────────────────────────────────
   // SA4 — use_claude opt-in (mechanical-LLM-default discipline)
-  //
-  // Anchor (CLAUDE.md Load-bearing invariants, verbatim per chore 1c9e0d3 PART C SA4):
-  //   "Mechanical LLM → local Ollama. Embeddings, digest, and reading-prompts
-  //    default to local Ollama. cowork.askClaude is an explicit per-request
-  //    opt-in only — never the default path."
-  // Anchor (spec §11 line 1361):
-  //   "Mechanical LLM work → Ollama by default; cowork.askClaude is opt-in only."
+  // Anchor (CLAUDE.md / spec §11): "Mechanical LLM → local Ollama ...
+  //   cowork.askClaude is an explicit per-request opt-in only — never the default."
   // ──────────────────────────────────────────────────────────────────────────
 
   test("SA4 default: 'Generate (Ollama)' fires tool call with use_claude=false (or omitted)", async () => {
@@ -212,28 +188,15 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     const { createElement, act } = await import("react");
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
-    let capturedArgs: Record<string, unknown> | null = null;
-    const mockCallTool = mock(
-      async (_name: string, args: Record<string, unknown>) => {
-        capturedArgs = args;
-        return { body_md: "ok" };
-      },
-    );
-    (globalThis as Record<string, unknown>).mcp = { callTool: mockCallTool };
+    fake.callServerToolImpl = async () => ({ structuredContent: { body_md: "ok" } });
 
     await act(async () => {
       createRoot(container).render(
-        createElement(DigestPanel, {
-          scopeKey: "all",
-          digest: null,
-          onAction: () => { },
-        }),
+        createElement(DigestPanel, { scopeKey: "all", digest: null, onAction: () => { } }),
       );
     });
 
-    // Find "Generate (Ollama)" by text — first <button> is the tab switcher.
-    const buttons = container.querySelectorAll("button");
-    const generateBtn = Array.from(buttons).find((b) =>
+    const generateBtn = Array.from(container.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Generate (Ollama)"),
     );
     await act(async () => {
@@ -241,9 +204,8 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     });
     await act(async () => { });
 
-    expect(capturedArgs).not.toBeNull();
-    const uc = (capturedArgs as unknown as Record<string, unknown>).use_claude;
-    // use_claude=false OR omitted — both equivalent at the server.
+    const args = (fake.callServerToolCalls.at(-1)?.arguments ?? {}) as Record<string, unknown>;
+    const uc = args.use_claude;
     expect(uc === false || uc === undefined).toBe(true);
   });
 
@@ -253,26 +215,13 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     const { DigestPanel } = await import("./DigestPanel.tsx");
 
     // Host must be present for the toggle to appear (SA2 discipline).
-    (globalThis as Record<string, unknown>).cowork = {
-      askClaude: async () => "Claude result",
-    };
+    (globalThis as Record<string, unknown>).cowork = { askClaude: async () => "Claude result" };
 
-    let capturedArgs: Record<string, unknown> | null = null;
-    const mockCallTool = mock(
-      async (_name: string, args: Record<string, unknown>) => {
-        capturedArgs = args;
-        return { body_md: "ok" };
-      },
-    );
-    (globalThis as Record<string, unknown>).mcp = { callTool: mockCallTool };
+    fake.callServerToolImpl = async () => ({ structuredContent: { body_md: "ok" } });
 
     await act(async () => {
       createRoot(container).render(
-        createElement(DigestPanel, {
-          scopeKey: "all",
-          digest: null,
-          onAction: () => { },
-        }),
+        createElement(DigestPanel, { scopeKey: "all", digest: null, onAction: () => { } }),
       );
     });
 
@@ -287,7 +236,7 @@ describe("DigestPanel — SA2/SA3/SA4 verbatim anchors (chore 1c9e0d3 PART C)", 
     });
     await act(async () => { });
 
-    expect(capturedArgs).not.toBeNull();
-    expect((capturedArgs as unknown as Record<string, unknown>).use_claude).toBe(true);
+    const args = (fake.callServerToolCalls.at(-1)?.arguments ?? {}) as Record<string, unknown>;
+    expect(args.use_claude).toBe(true);
   });
 });
