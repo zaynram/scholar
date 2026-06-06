@@ -114,7 +114,10 @@ not the 6.7 MB vendored pdf — were the bloat.
 > history.
 
 `scripts/build-plugin.ts` rewritten to the slim model; `SCHOLAR_BUILD_WIN`
-selects target. Both packages build on the Linux host:
+selects target. Both packages build on the Linux host (the 2026-06-01 sizes and
+`launch.{sh,cmd}` launchers named in the two bullets below are the **retired**
+shell-pair record, kept per the supersede banner above; the launcher is now the
+cross-OS `bun ${ROOT}/bin/launch.mjs`):
 
 - **linux** `scholar.plugin` 2.8 MB / 14 files — unzipped and launched via the
   generated manifest (`/bin/sh ${ROOT}/bin/launch.sh`) with a fresh
