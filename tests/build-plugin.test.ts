@@ -29,6 +29,8 @@ test('buildManifest(linux): bun launch.mjs + HOME runtime root + bun pre-warm', 
     expect(s.env.SCHOLAR_RUNTIME_ROOT).toBe('${HOME}/mcp-data/scholar/runtime')
     expect(s.env.SCHOLAR_OLLAMA_EMBED_MODEL).toBe('nomic-embed-text:v1.5')
     expect(s.env.SCHOLAR_OLLAMA_CHAT_MODEL).toBe('qwen3:8b')
+    // Pre-warm scoped to `startup` — not Setup, not every SessionStart trigger.
+    expect(m.hooks.SessionStart[0].matcher).toBe('startup')
     const hook = m.hooks.SessionStart[0].hooks[0].command
     expect(hook).toContain('launch.mjs')
     expect(hook).toContain('--provision-only')
@@ -47,6 +49,8 @@ test('buildManifest(win32): bun launch.mjs + USERPROFILE root + bun pre-warm', (
     )
     // Ollama defaults are platform-independent.
     expect(s.env.SCHOLAR_OLLAMA_EMBED_MODEL).toBe('nomic-embed-text:v1.5')
+    // Pre-warm scoped to `startup` — not Setup, not every SessionStart trigger.
+    expect(m.hooks.SessionStart[0].matcher).toBe('startup')
     const hook = m.hooks.SessionStart[0].hooks[0].command
     expect(hook).toContain('launch.mjs')
     expect(hook).toContain('--provision-only')

@@ -48,11 +48,26 @@ test('mcpServers.scholar uses the cross-OS bun launcher (source-sync supersedes 
     expect(scholar.env.SCHOLAR_OLLAMA_CHAT_MODEL).toBe('qwen3:8b')
 })
 
-test('SessionStart hook pre-warms the bun provisioner via the cross-OS shim', () => {
+test('SessionStart pre-warm is scoped to the startup matcher (not Setup, not every trigger)', () => {
     // The hook is a pre-warm only — launch.mjs (no flag) is the correctness gate,
     // because SessionStart does not block MCP spawn. Here it runs --provision-only
     // so the same shim resolves the sh-vs-powershell provisioner per-OS.
-    const cmd = pluginManifest.hooks?.SessionStart?.[0]?.hooks?.[0]?.command
+    //
+    // Scoped to `startup`: provisioning the pinned bun into CLAUDE_PLUGIN_DATA is a
+    // first-session concern, so it must NOT re-fire on resume/clear/compact (the
+    // bun already exists by then). The docs prescribe the SessionStart-into-
+    // CLAUDE_PLUGIN_DATA *mechanism* ("install a dependency once, reuse across
+    // sessions and updates") but their example is UNSCOPED, guarding idempotency
+    // with an in-hook `diff`. The `startup` narrowing is scholar's OWN call, not a
+    // doc prescription: ensure-bun is already idempotent + flock-guarded and
+    // launch.mjs (no flag) is the real correctness gate, so re-firing on
+    // resume/clear/compact buys nothing. The `Setup` event is deliberately NOT
+    // used: it fires only on explicit `claude --init-only` / `-p --init|--maintenance`
+    // ("for one-time preparation in CI or scripts"), never on install or normal
+    // startup — so it would skip the pre-warm for normal users entirely.
+    const group = pluginManifest.hooks?.SessionStart?.[0]
+    expect(group?.matcher).toBe('startup')
+    const cmd = group?.hooks?.[0]?.command
     expect(cmd).toContain('launch.mjs')
     expect(cmd).toContain('--provision-only')
 })
