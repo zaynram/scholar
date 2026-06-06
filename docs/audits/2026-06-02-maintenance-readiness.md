@@ -27,7 +27,7 @@ been run** against a live server. Everything else is tidiness.
 | Test suite (`bun test src tests`) | **324 pass / 4 skip / 1 todo / 0 fail** (329 across 43 files, ~13s) |
 | Build artifacts | `dist/server.js` 2.45 MB · `dist/pdf-server/{index.js 3.98 MB, mcp-app.html 4.42 MB}` present |
 | UI bundle (`measure-bundle`) | 1014 KB single-file, within budget |
-| Launch chain | `plugin.json` → `/bin/sh bin/launch.sh` → `ensure-bun.sh` (pins bun 1.3.11) → `exec bun dist/server.js` — statically sound, vec0-ABI pin intact |
+| Launch chain | `plugin.json` → `/bin/sh bin/launch.sh` → `ensure-bun.sh` (pins bun 1.3.11) → `exec bun dist/server.js` — statically sound, vec0-ABI pin intact. **(2026-06-02 snapshot — retired; see supersede note directly below.)** |
 
 > **Superseded 2026-06-06 (bun-launcher unification, PR #4).** The launch chain is
 > now `plugin.json` → `bun ${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs` →
