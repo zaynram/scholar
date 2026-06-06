@@ -7,7 +7,7 @@
 //   - build/vendor/sqlite-vec/vec0.<ext>        platform vec0 (so | dll)
 //   - ui/app.html                     single-file inlined UI bundle (MCP-App)
 //   - nu/scholar.nu                   nu CLI module
-//   - bin/<launcher set>              M2 launcher + ensure-bun provisioner
+//   - bin/launch.mjs + ensure-bun.{sh|ps1}      cross-OS launcher + per-OS provisioner
 //   - .claude-plugin/plugin.json      GENERATED per-OS (M2 command/args + hooks)
 //   - skills/**
 // The bun runtime is NOT shipped — it is provisioned into ${CLAUDE_PLUGIN_DATA}
@@ -19,7 +19,8 @@
 //   - Claude Desktop .mcpb (SCHOLAR_PACKAGE=mcpb): emits a top-level manifest.json
 //     (mcpb schema) and packs via the `mcpb` CLI to out/scholar.mcpb. Forces the
 //     win32 target — the in-app PDF viewer is an MCP App the Code terminal can't
-//     render, so Desktop is the only consumer and only the win32 launcher ships.
+//     render, so Desktop is the only consumer and only the win32 provisioner
+//     (ensure-bun.ps1) ships alongside the cross-OS launch.mjs.
 //
 // Run:        bun scripts/build-plugin.ts            (Claude Code plugin, win32)
 // Linux pkg:  SCHOLAR_BUILD_WIN=0 bun scripts/build-plugin.ts
@@ -161,29 +162,35 @@ function stageBin(): void {
         ? util.subpath('nu', 'scholar.nu')
         : util.subpath('bin', 'scholar.nu')
     copyFileSync(nu, join(DIR, 'nu', 'scholar.nu'))
-    const launchers = WIN
-        ? ['launch.cmd', 'ensure-bun.ps1']
-        : ['launch.sh', 'ensure-bun.sh']
+    // launch.mjs is the single cross-OS launcher (run via `bun`); only the
+    // ensure-bun provisioner it dispatches to is per-OS.
+    const launchers = ['launch.mjs', WIN ? 'ensure-bun.ps1' : 'ensure-bun.sh']
     for (const f of launchers)
         copyFileSync(util.subpath('bin', f), join(DIR, 'bin', f))
 }
 
 // ── Generate the per-OS plugin.json (M2 launch + pre-warm hook) ────────────────
 // Pure construction (exported for build-plugin.test.ts): given the base dev
-// manifest, produce the per-OS M2 manifest. win=true → cmd.exe/launch.cmd +
-// PowerShell pre-warm; win=false → /bin/sh/launch.sh + sh pre-warm. The `bin`
-// field (compiled-binary leftover) is stripped. No I/O — generateManifest wraps
-// this with the read/write so the launch-model logic is unit-testable.
+// manifest, produce the per-OS M2 manifest. The launcher is the single cross-OS
+// `bun ${ROOT}/bin/launch.mjs` (same shim the committed source-sync manifest
+// uses); only `win` still varies the per-OS runtime root and the ensure-bun
+// provisioner launch.mjs dispatches to. The `bin` field (compiled-binary
+// leftover) is stripped. No I/O — generateManifest wraps this with the
+// read/write so the launch-model logic is unit-testable.
 export function buildManifest(
     base: Record<string, unknown>,
     win: boolean,
 ): Record<string, unknown> {
     const ROOT = '${CLAUDE_PLUGIN_ROOT}'
+    // The built bundle still PINS the runtime root per-OS (legacy ${HOME}/
+    // ${USERPROFILE} layout); launch.mjs honors an already-set
+    // SCHOLAR_RUNTIME_ROOT, so this overrides its CLAUDE_PLUGIN_DATA-derived
+    // default. The committed source-sync manifest omits it and takes that default.
     const runtimeRoot = win
         ? '${USERPROFILE}\\mcp-data\\scholar\\runtime'
         : '${HOME}/mcp-data/scholar/runtime'
-    const command = win ? 'cmd.exe' : '/bin/sh'
-    const args = win ? ['/c', `${ROOT}\\bin\\launch.cmd`] : [`${ROOT}/bin/launch.sh`]
+    const command = 'bun'
+    const args = [`${ROOT}/bin/launch.mjs`]
 
     const manifest = {
         ...base,
@@ -200,17 +207,16 @@ export function buildManifest(
             },
         },
         // Pre-warm: start provisioning early. SessionStart does NOT block MCP
-        // spawn, so this is a latency optimization only — launch.{sh,cmd} is the
-        // correctness gate. ensure-bun is idempotent + lock-guarded.
+        // spawn, so this is a latency optimization only — `bun launch.mjs` (no
+        // flag) is the correctness gate. --provision-only runs the same shim,
+        // which dispatches to the per-OS ensure-bun (idempotent + lock-guarded).
         hooks: {
             SessionStart: [
                 {
                     hooks: [
                         {
                             type: 'command',
-                            command: win
-                                ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${ROOT}\\bin\\ensure-bun.ps1"`
-                                : `sh "${ROOT}/bin/ensure-bun.sh"`,
+                            command: `bun "${ROOT}/bin/launch.mjs" --provision-only`,
                         },
                     ],
                 },
@@ -234,13 +240,14 @@ function generateManifest(): void {
 // through from the Claude Code plugin.json base; the server/compatibility/
 // user_config blocks are Desktop-specific.
 //
-// Launcher is NOT modified: the manifest aliases the two vars launch.cmd +
+// Launcher is NOT modified: the manifest aliases the two vars launch.mjs +
 // ensure-bun.ps1 already read — CLAUDE_PLUGIN_ROOT := ${__dirname} (extension
 // dir) and CLAUDE_PLUGIN_DATA := the user-chosen data directory — so the win32
-// launch chain runs byte-identical to the Claude Code plugin. SCHOLAR_BUN_PATH /
+// launch chain runs byte-identical to the Claude Code plugin. The command is
+// `bun` (run via PATH, matching the source-sync manifest); SCHOLAR_BUN_PATH /
 // SCHOLAR_VEC0_PATH / SCHOLAR_PDF_ENTRYPOINT are intentionally unset: their
 // defaults derive from CLAUDE_PLUGIN_ROOT (vec0, pdf entry) and process.execPath
-// (the provisioned bun that launch.cmd runs server.js with).
+// (the provisioned bun that launch.mjs runs server.js with).
 export function buildMcpbManifest(
     base: Record<string, unknown>,
     version: string,
@@ -258,10 +265,10 @@ export function buildMcpbManifest(
         keywords: (base.keywords as string[]) ?? [],
         server: {
             type: 'binary',
-            entry_point: 'bin/launch.cmd',
+            entry_point: 'bin/launch.mjs',
             mcp_config: {
-                command: 'cmd.exe',
-                args: ['/c', `${DIRNAME}\\bin\\launch.cmd`],
+                command: 'bun',
+                args: [`${DIRNAME}\\bin\\launch.mjs`],
                 env: {
                     CLAUDE_PLUGIN_ROOT: DIRNAME,
                     CLAUDE_PLUGIN_DATA: DATA,
@@ -356,7 +363,7 @@ async function assemble(): Promise<void> {
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
         'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
-        WIN ? 'bin/launch.cmd' : 'bin/launch.sh',
+        'bin/launch.mjs',
     ]
     const missing = required.filter(r => !(r in fileMap))
     if (missing.length)
@@ -396,7 +403,7 @@ async function assembleMcpb(): Promise<void> {
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
         'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
-        'bin/launch.cmd',
+        'bin/launch.mjs',
         'bin/ensure-bun.ps1',
     ]
     const missing = required.filter(r => !existsSync(join(DIR, r)))

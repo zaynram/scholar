@@ -85,6 +85,34 @@ not the 6.7 MB vendored pdf — were the bloat.
 
 ## Build system (validated 2026-06-01)
 
+> **Superseded 2026-06-05 — bun-launcher unification.** The per-OS shell-pair
+> launcher described in this section (`/bin/sh launch.sh` | `cmd.exe /c
+> launch.cmd`) was retired. Both targets now launch via the single cross-OS shim
+> `bun ${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs` — the same command the committed
+> source-sync `.claude-plugin/plugin.json` uses. `bin/launch.{sh,cmd}` are
+> deleted; only `bin/launch.mjs` + the per-OS `ensure-bun.{sh,ps1}` provisioner
+> ship. Rationale: a bare `node` invocation no longer resolves reliably under
+> Claude Desktop (its "use bundled node" option was removed from settings), and
+> bun is the operator's systemwide convention across these servers. The generated
+> manifests were **re-verified against the real build artifacts 2026-06-06**:
+> linux `command:"bun" args:["${ROOT}/bin/launch.mjs"]`,
+> `SCHOLAR_RUNTIME_ROOT=${HOME}/mcp-data/scholar/runtime`; win32 identical bar
+> `SCHOLAR_RUNTIME_ROOT=${USERPROFILE}\mcp-data\scholar\runtime`; both stage only
+> `launch.mjs` + their `ensure-bun`. **Both** Linux entry paths were also driven
+> **end-to-end headless (2026-06-06)** under a non-pinned on-PATH bun 1.3.14, each
+> cold-provisioning the pinned 1.3.11 into a fresh `CLAUDE_PLUGIN_DATA` and returning
+> a clean single-line MCP `initialize` (pdf child `Ready`, graceful exit on stdin-EOF):
+> the **built-bundle** path (`dist/server.js` present) and the **source-sync from-src**
+> path (`CLAUDE_PLUGIN_ROOT` = the git-tracked ship set with no `dist/` and no
+> `node_modules`, where `launch.mjs` falls through to `src/server/index.ts` and the
+> pinned bun **cold-auto-installs the whole import graph** into the `BUN_INSTALL` cache
+> under `CLAUDE_PLUGIN_DATA` without writing a local `node_modules`). The second path is
+> exactly what the Cowork Linux sandbox runs, so the launcher's auto-install assumption
+> is validated, not assumed. The only unproven leg stays Windows bun-on-PATH at the
+> Desktop spawn. The dated 2026-06-01 record below (sizes,
+> `launch.sh`/`launch.cmd`) captures the retired shell-pair state and is kept as
+> history.
+
 `scripts/build-plugin.ts` rewritten to the slim model; `SCHOLAR_BUILD_WIN`
 selects target. Both packages build on the Linux host:
 
@@ -97,11 +125,18 @@ selects target. Both packages build on the Linux host:
   pin; Windows launcher set + `cmd.exe /c launch.cmd` manifest staged.
   **Structure validated; launch path requires Windows hardware.**
 
-Launch is **M2** (see `bin/`): an always-present shell (`/bin/sh` | `cmd.exe`)
-runs `launch.{sh,cmd}`, which calls the idempotent `ensure-bun` provisioner then
-runs the server. A `SessionStart` hook pre-warms `ensure-bun` (latency only —
-the launcher is the correctness gate, because SessionStart does not block MCP
-spawn). On Linux the launcher `exec`s into bun (no orphaned wrapper).
+Launch is **M2** (see `bin/`): on both OSes `bun` runs `bin/launch.mjs`, which
+calls the idempotent `ensure-bun` provisioner then spawns the pinned bun on the
+server entry. A `SessionStart` hook pre-warms `ensure-bun` via `bun launch.mjs
+--provision-only` (latency only — the launcher is the correctness gate, because
+SessionStart does not block MCP spawn). **Shape change (2026-06-05):** the old
+Linux launcher `exec`ed into bun, so the PID Claude Code spawned *became* the
+server (no wrapper); `bun launch.mjs` instead spawns the pinned bun as a **child**
+on both OSes — always a parent+child pair cross-OS. Mitigated, not a regression:
+the child inherits fd0 (sees stdin-EOF directly), `launch.mjs` forwards
+SIGINT/SIGTERM/SIGHUP, and `child.on("exit") → process.exit` ties parent liveness
+to the child; only a hard `SIGKILL` of the wrapper leaves the pidfile, reclaimed
+on next start by pid-liveness.
 
 ## Claude Desktop `.mcpb` packaging target (maintenance addendum 2026-06-04)
 
@@ -122,14 +157,15 @@ Design intent (deliberately minimal — no new launch surface):
   validate) and packs via the official **`mcpb` CLI** (`mcpb validate` gate →
   `mcpb pack` → `out/scholar.mcpb`, ~2.9 MB / 20 files). Pure `buildMcpbManifest`
   is unit-pinned; `mcpb validate` is the authoritative schema gate.
-- **The win32 launcher is not modified.** `server.type:"binary"`, command
-  `cmd.exe /c ${__dirname}\bin\launch.cmd`. The manifest `env` aliases the two vars
+- **The launcher is not mcpb-specific.** `server.type:"binary"` (`bun` is a
+  binary on PATH), command `bun` with args `[${__dirname}\bin\launch.mjs]`. The
+  manifest `env` aliases the two vars
   the launcher already reads — `CLAUDE_PLUGIN_ROOT := ${__dirname}` and
   `CLAUDE_PLUGIN_DATA := ${user_config.data_dir}` — so the launch chain runs
   byte-identical to the Code plugin. `SCHOLAR_BUN_PATH`/`SCHOLAR_VEC0_PATH`/
   `SCHOLAR_PDF_ENTRYPOINT` are intentionally unset: their defaults derive from
   `CLAUDE_PLUGIN_ROOT` (vec0, pdf entry) and `process.execPath` (the provisioned
-  bun that `launch.cmd` runs `server.js` with). `data_dir` is collected at install
+  bun that `launch.mjs` runs `server.js` with). `data_dir` is collected at install
   via `user_config` (directory, required); Ollama URL/models are optional fields.
 
 Proven on Linux (2026-06-04): manifest validates against the real `mcpb` schema
@@ -137,7 +173,7 @@ Proven on Linux (2026-06-04): manifest validates against the real `mcpb` schema
 `dist/server.js`, `dist/pdf-server/{index.js,mcp-app.html}`, `vec0.dll`, `ui/`,
 `nu/`, migrations present; no `.claude-plugin/` cruft), and the source
 path-resolution chain reads the two aliased vars. **Not proven** (Windows-only):
-Desktop accepting the manifest, spawning `cmd.exe`/`type:binary`, `${…}`
+Desktop accepting the manifest, spawning `bun`/`type:binary`, `${…}`
 substitution, bun provisioning, and vec0 ABI under the provisioned bun — each
 enumerated with its failure symptom in **HUMAN.md §5**.
 
@@ -181,10 +217,14 @@ enumerated with its failure symptom in **HUMAN.md §5**.
 
 ## Still open (require Windows-hardware validation — cannot verify from WSL)
 
-- **Windows launch orphan**: `cmd.exe /c launch.cmd` has no exec-replace, so
-  `bun.exe` runs as a child of cmd. If the host does not tree-kill the MCP process
-  on shutdown, bun may orphan. Verify tree-kill; mitigate with a Job Object on the
-  cmd side if observed. **Update 2026-06-04:** the chained "orphan holds
+- **Launch orphan (cross-OS, mitigated)**: `bun launch.mjs` spawns the pinned bun
+  as a child on both OSes — the prior Linux `exec`-replace is gone (see the M2
+  shape-change note above), so there is always a parent+child pair. If the host
+  does not tree-kill the MCP process tree on shutdown, the child bun may orphan.
+  Mitigated in `launch.mjs` (SIGINT/SIGTERM/SIGHUP forwarding + child-exit →
+  `process.exit` propagation); a Job Object is **not** added (no Linux equivalent —
+  would be over-engineering). Verify tree-kill on Windows hardware.
+  **Update 2026-06-04:** the chained "orphan holds
   `runtime/scholar.lock` → next session `SCHOLAR_LOCKED`" path is **now live** — the
   single-active-session lock *is* implemented (a **pidfile**, not literal flock:
   `src/server/session-lock.ts`, `O_EXCL` create + `process.kill(pid,0)` liveness
@@ -232,8 +272,8 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   `Connection timeout triggered after 30027ms` vs `timeout of 30000ms`). One-shot,
   no retry; the host abandons the connection. **Self-heals on restart** — warm
   boot is `Test-Ok → exit 0` (~2 s), well inside budget, and connects cleanly.
-  Fix options, ascending invasiveness: (a) **fail-fast** in `launch.cmd` when bun
-  is absent — a clear error beats a silent 30 s hang, but it only makes cold start
+  Fix options, ascending invasiveness: (a) **fail-fast** in `launch.mjs` when the
+  pinned bun is absent — a clear error beats a silent 30 s hang, but it only makes cold start
   legible, it does not remove it; (b) **generous first-run budget** — document /
   ship a larger `MCP_TIMEOUT` so the cold download fits (safe, but a real hang now
   surfaces slower; uncertain the plugin manifest can set the client-side
@@ -245,6 +285,12 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   newer-but-different bun can load an incompatible `sqlite-vec` and fail later at a
   far harder-to-diagnose point than a clean timeout. Not implemented blind — pick
   the approach, then validate on Windows.
+  **Note (2026-06-05 bun-unification):** the launcher is now `bun` itself, so an
+  on-PATH bun is already required to run the shim. That makes option (a)'s
+  fail-fast naturally live in `launch.mjs`, and collapses option (c) to a cheap
+  check the shim can do before dispatching to `ensure-bun` (if the on-PATH
+  `bun --version` *equals* the pin, skip the download). Still pick + validate on
+  Windows before implementing.
 - **`launch.cmd` CRLF + non-ASCII — RESOLVED 2026-06-05 (Cowork field test).**
   The shipped `bin/launch.cmd` was LF-only with em-dashes in its `rem` header.
   cmd.exe seeks batch files by byte offset assuming CRLF, so LF-only lines
@@ -259,3 +305,8 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   is 20/20 CRLF with no non-ASCII; the linux `.plugin` is unaffected (ships
   `launch.sh`). The one leg that can only run on the target — does cmd.exe stop
   emitting the noise — is the user's next Cowork session.
+  **Now moot (bun-launcher unification, 2026-06-05):** `bin/launch.cmd` was deleted
+  — the unified launcher is `bun launch.mjs`, no `.cmd` ships in any bundle, and the
+  `*.cmd text eol=crlf` `.gitattributes` rule was removed (its only target was
+  gone). cmd.exe never parses a scholar batch file now, so the CRLF byte-offset
+  mangle class can no longer occur. Retained as the diagnosis record.

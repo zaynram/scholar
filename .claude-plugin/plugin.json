@@ -13,7 +13,7 @@
     "license": "MIT",
     "mcpServers": {
         "scholar": {
-            "command": "node",
+            "command": "bun",
             "args": ["${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs"],
             "env": {
                 "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",
@@ -28,7 +28,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs\" --provision-only"
+                        "command": "bun \"${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs\" --provision-only"
                     }
                 ]
             }
