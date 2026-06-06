@@ -89,6 +89,25 @@ root). So the provisioning + spawn + migrate + activate spine is no longer an
 assumption — the **only** unproven leg is the PDF *viewer* (`displayPdf`/`getText`,
 step 7), which can only be exercised by a human at the desktop.
 
+> **Superseded 2026-06-06 — bun-launcher unification.** The 2026-06-03 proof above
+> was of the now-retired `/bin/sh launch.sh` path (`exec`-replace into bun). Both
+> targets now launch via `bun ${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs`; `launch.sh` and
+> `launch.cmd` are deleted. The new Linux entry paths are **not** an assumption —
+> **both** were re-driven **end-to-end headless (2026-06-06)** under a *non-pinned*
+> on-PATH bun (1.3.14), each cold-provisioning the pinned **1.3.11** into a fresh
+> `CLAUDE_PLUGIN_DATA` and returning a clean single-line MCP `initialize` (pdf child
+> `Ready`, graceful exit on stdin-EOF): (a) the **built-bundle** path (`dist/server.js`
+> present), and (b) the **source-sync from-src** path — `CLAUDE_PLUGIN_ROOT` set to the
+> git-tracked ship set (no `dist/`, no `node_modules`), where `launch.mjs` falls through
+> to `src/server/index.ts` and the pinned bun **cold-auto-installs the whole import
+> graph** into the `BUN_INSTALL` cache under `CLAUDE_PLUGIN_DATA` (~67 MB) **without
+> writing a local `node_modules`** into the shipped tree. That second path is exactly
+> what the Cowork Linux sandbox runs, so the launcher's auto-install assumption is now
+> validated empirically, not on faith. `ensure-bun.sh` and the server spine are
+> unchanged. The **only** leg this does NOT cover is Windows — a bare `bun` resolving on
+> PATH at the Claude Desktop spawn (CreateProcess PATH semantics differ from POSIX
+> `execvp`); that is now the dominant residual risk, tracked in **§5 leg 2**.
+
 > **Note (2026-06-04, updated):** the PDF viewer is an **MCP App** the Claude Code
 > terminal can't render — the actual home for that leg is **Claude Desktop** via the
 > `.mcpb` extension. See **§5** for the build + install + the Windows verification
@@ -121,9 +140,9 @@ can't be simulated from Linux. See leg 6.
 bun run build:mcpb        # -> out/scholar.mcpb (win32, ~2.9 MB, 20 files)
 ```
 The build runs `mcpb validate` then `mcpb pack`. The manifest is `manifest.json`
-at the bundle root (mcpb schema **0.2**), `server.type:"binary"`, command
-`cmd.exe /c ${__dirname}\bin\launch.cmd`. It does **not** modify the launcher: the
-manifest `env` aliases the two vars `launch.cmd`/`ensure-bun.ps1` already read —
+at the bundle root (mcpb schema **0.2**), `server.type:"binary"` (`bun` is a binary
+on PATH), command `bun` with args `[${__dirname}\bin\launch.mjs]`. It does **not**
+modify the launcher: the manifest `env` aliases the two vars `launch.mjs`/`ensure-bun.ps1` already read —
 `CLAUDE_PLUGIN_ROOT := ${__dirname}` and `CLAUDE_PLUGIN_DATA := ${user_config.data_dir}`
 — so the win32 launch chain runs byte-identical to the Claude Code plugin.
 
@@ -141,9 +160,10 @@ different host, set the Ollama URL field at install.
 
 Proven from Linux: the manifest validates against the real `mcpb` schema (0.1–0.4
 all pass — no version-specific field), packs + unpacks to the correct structure
-(manifest at root; `bin/launch.cmd`, `dist/server.js`, `dist/pdf-server/{index.js,
-mcp-app.html}`, `build/vendor/sqlite-vec/vec0.dll`, `ui/`, `nu/`, migrations all
-present; no `.claude-plugin/` cruft), and the source path-resolution chain reads
+(manifest at root; `bin/launch.mjs`, `bin/ensure-bun.ps1`, `dist/server.js`,
+`dist/pdf-server/{index.js, mcp-app.html}`, `build/vendor/sqlite-vec/vec0.dll`,
+`ui/`, `nu/`, migrations all present; no `.claude-plugin/` cruft), and the source
+path-resolution chain reads
 the two aliased vars (vec0 + pdf entry off `CLAUDE_PLUGIN_ROOT`, bun off
 `process.execPath`). **None of that proves Desktop runs it.** These legs can only
 be checked on Windows — each with the symptom to watch for:
@@ -151,20 +171,31 @@ be checked on Windows — each with the symptom to watch for:
 1. **Desktop accepts manifest_version 0.2** — *symptom:* the Install dialog rejects
    the extension up front. *Fix:* bump `MCPB_MANIFEST_VERSION` in
    `scripts/build-plugin.ts` (0.2 → 0.3 → 0.4), `bun run build:mcpb`, reinstall.
-2. **Desktop spawns `cmd.exe`/`type:"binary"`** — *symptom:* extension installs but
-   the MCP never connects ("server failed to start"). Means Desktop won't launch an
-   arbitrary command for this extension type.
+2. **Desktop spawns `bun`/`type:"binary"` AND a bare `bun` resolves on PATH** — the
+   **dominant residual risk** of the bun-launcher unification. On POSIX the host's
+   `execvp` searches PATH; Windows `CreateProcess` does not search PATH the same way,
+   so a bare `bun` resolves only if Desktop passes a PATH-aware spawn env. *symptom:*
+   extension installs but the MCP never connects ("server failed to start") — either
+   Desktop won't launch this command for `type:"binary"`, or `bun` was not found on
+   PATH. *First check:* `bun --version` in a fresh Windows shell (bun must be
+   installed system-wide — it is a dependency of these servers). *Fallback if PATH is
+   the problem:* edit the manifest `command` to an absolute `bun.exe` path (e.g.
+   `%USERPROFILE%\.bun\bin\bun.exe`) and reinstall.
 3. **Variable substitution** (`${__dirname}`, `${user_config.data_dir}`, `${HOME}`)
-   — *symptom:* `ensure-bun: CLAUDE_PLUGIN_DATA unset` on stderr, or launch.cmd
-   can't find `dist\server.js`. Means a `${…}` token wasn't expanded. (`${HOME}`
+   — *symptom:* `ensure-bun: CLAUDE_PLUGIN_DATA unset` on stderr, or `launch.mjs`
+   dies with `CLAUDE_PLUGIN_ROOT is unset` / can't find `dist\server.js`. Means a
+   `${…}` token wasn't expanded. (`${HOME}`
    is confirmed a documented mcpb substitution var, usable in `user_config`
    defaults — mcpb `MANIFEST.md` — and Desktop maps it to the Windows user
    profile, so the `data_dir` default `${HOME}\scholar` is portable, not a bug.)
 4. **bun provisioning** (ensure-bun.ps1 downloads bun-windows-x64 **1.3.11** into
    `%CLAUDE_PLUGIN_DATA%\bun`) — *symptom:* long first-launch then `bun.exe` not
-   found; or PowerShell blocked by ExecutionPolicy (the hook passes
-   `-ExecutionPolicy Bypass`, but Desktop spawns via cmd.exe, not the hook). Check
-   `%data_dir%\bun\bun.exe --version` prints `1.3.11`.
+   found; or PowerShell blocked by ExecutionPolicy. (Improved by the bun
+   unification: `launch.mjs` now invokes the provisioner as `powershell -NoProfile
+   -ExecutionPolicy Bypass -File ensure-bun.ps1` on **both** the server-spawn path
+   *and* the `--provision-only` SessionStart pre-warm — the old cmd.exe launcher
+   only bypassed on the hook — so a machine ExecutionPolicy should not block it.)
+   Check `%data_dir%\bun\bun.exe --version` prints `1.3.11`.
    **Field-confirmed 2026-06-05 (Cowork):** on a *brand-new* data dir the first
    connect can time out *during* this download — the ~110 MB fetch overran the
    host's 30 s MCP connect budget (`Connection timeout triggered after 30027ms`),
@@ -257,9 +288,12 @@ be checked on Windows — each with the symptom to watch for:
    *Caveat (salient uncertainty):* the conformance reading is grounded in SEP-1865 +
    the version-matched pdf-server reference + the ext-apps `.d.ts`, but the live
    render path has not been exercised on a real Claude Desktop from this environment.
-7. **Clean shutdown / no orphaned lock** — `launch.cmd` runs `bun.exe` as a *child*
-   of cmd.exe (no exec-replace on Windows). *symptom:* after quitting/restarting
-   Desktop, the next launch refuses with `SCHOLAR_LOCKED`. The pid-liveness reclaim
+7. **Clean shutdown / no orphaned lock** — `bun launch.mjs` spawns `bun.exe` as a
+   *child* (the same parent+child shape on both OSes now — the prior Linux
+   `exec`-replace is gone; launch.mjs forwards SIGINT/SIGTERM/SIGHUP and exits when
+   the child does; see slim-plugin-pivot.md "Launch orphan"). *symptom:* after
+   quitting/restarting Desktop, the next launch refuses with `SCHOLAR_LOCKED`. The
+   pid-liveness reclaim
    in `session-lock.ts` should clear a stale `runtime\scholar.lock` on the next
    start (unless the OS reused the pid) — confirm a restart recovers cleanly.
 

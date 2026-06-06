@@ -5,14 +5,14 @@
 # ${CLAUDE_PLUGIN_DATA} persists across plugin updates (unlike CLAUDE_PLUGIN_ROOT,
 # which is replaced each version), so bun is downloaded at most once per machine.
 #
-# Called synchronously by launch.sh BEFORE it execs the server — this is the
+# Called synchronously by launch.mjs BEFORE it spawns the server — this is the
 # correctness guarantee that bun exists before the MCP server needs it (Claude
 # Code's SessionStart hooks do NOT block MCP spawn, so provisioning cannot live
-# there alone). May also be pre-warmed by a SessionStart hook; the flock below
-# serializes concurrent invocations.
+# there alone). May also be pre-warmed by a SessionStart hook (launch.mjs
+# --provision-only); the flock below serializes concurrent invocations.
 #
 # ALL diagnostic output goes to stderr — stdout is reserved for the MCP server's
-# JSON-RPC stream once launch.sh execs into it.
+# JSON-RPC stream once launch.mjs spawns it.
 set -eu
 
 PIN="1.3.11"   # keep in sync with package.json scholar.bundledBunVersion (vec0 ABI)

@@ -2,7 +2,7 @@
 #
 # Mirror of ensure-bun.sh. Idempotently provisions the PINNED bun.exe into
 # ${CLAUDE_PLUGIN_DATA}\bun (persists across plugin updates). Called
-# synchronously by launch.cmd before it launches the server.
+# synchronously by launch.mjs before it launches the server.
 #
 # ALL diagnostic output goes to stderr (Write-Error / $host.UI write to stderr;
 # we use [Console]::Error) — stdout must stay clean for the MCP JSON-RPC stream.

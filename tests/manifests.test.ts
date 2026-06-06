@@ -6,16 +6,21 @@ import pluginManifest from '^.claude-plugin/plugin.json'
 // source-sync pivot (cowork-marketplace distribution) SUPERSEDES the prior M2
 // per-OS shell-launcher form for THIS file: the marketplace installs by
 // copy-only and serves one committed manifest to every OS, so the committed
-// manifest must use a single cross-OS command. That command is `node`, which
-// runs `bin/launch.mjs` — the shim provisions the pinned bun then spawns the
-// server from source (auto-installing the reached import graph). The per-OS
-// GENERATED manifest used by the built `.plugin`/`.mcpb` bundles (cmd.exe |
-// /bin/sh, launch.{cmd,sh}, SCHOLAR_RUNTIME_ROOT pinned per-OS) is produced by
+// manifest must use a single cross-OS command. That command is `bun` (the
+// system-wide runtime these servers already depend on — and the replacement for
+// the now-removed "use bundled node" Claude Desktop option), which runs
+// `bin/launch.mjs`: the shim provisions the pinned bun then spawns the server
+// from source (auto-installing the reached import graph). The per-OS GENERATED
+// manifest used by the built `.plugin`/`.mcpb` bundles runs the SAME
+// `bun bin/launch.mjs` launcher; it differs only in pinning SCHOLAR_RUNTIME_ROOT
+// per-OS and shipping the matching ensure-bun provisioner. It is produced by
 // scripts/build-plugin.ts buildManifest() and covered separately in
 // build-plugin.test.ts — changing this committed manifest does NOT affect those
 // bundles, because buildManifest rebuilds mcpServers + hooks from scratch.
-// (Earlier history: the slim-plugin pivot 2026-06-01 dropped the §7.1 `bun build
-// --compile` binary; the §7.1 `.mcp.json` was removed in 84a292c.)
+// (Earlier history: the launcher was a per-OS shell pair (cmd.exe/launch.cmd |
+// /bin/sh/launch.sh) until the 2026-06-05 bun-unification; the slim-plugin pivot
+// 2026-06-01 dropped the §7.1 `bun build --compile` binary; the §7.1 `.mcp.json`
+// was removed in 84a292c.)
 import { test, expect } from 'bun:test'
 
 test('plugin manifest matches spec §7.1 (identity fields)', () => {
@@ -24,11 +29,12 @@ test('plugin manifest matches spec §7.1 (identity fields)', () => {
     expect(pluginManifest.keywords).toContain('literature-review')
 })
 
-test('mcpServers.scholar uses the cross-OS node launcher (source-sync supersedes the per-OS shell launcher)', () => {
+test('mcpServers.scholar uses the cross-OS bun launcher (source-sync supersedes the per-OS shell launcher)', () => {
     const scholar = pluginManifest.mcpServers.scholar
-    // Source-sync: `node` is the one command present on every host; it runs the
-    // launch.mjs shim (provision bun → spawn server from source).
-    expect(scholar.command).toBe('node')
+    // Source-sync: `bun` is the one command present on every host (the systemwide
+    // bun install these servers already depend on); it runs the launch.mjs shim
+    // (provision pinned bun → spawn server from source).
+    expect(scholar.command).toBe('bun')
     expect(scholar.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs'])
     // SCHOLAR_RUNTIME_ROOT is NOT pinned in the committed env: launch.mjs derives
     // it cross-OS from CLAUDE_PLUGIN_DATA (the POSIX-only ${HOME} default would

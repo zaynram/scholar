@@ -1,30 +1,37 @@
 // bin/launch.mjs — cross-OS MCP launcher for the source-sync (cowork-marketplace)
-// install.
+// install AND the built per-OS .plugin/.mcpb bundles (one launcher, all targets).
 //
 // The marketplace installs by copy-only and serves ONE committed manifest to
 // every OS, so the launcher cannot be a per-OS shell script — it must invoke a
-// single command present on all hosts. `node` is that command.
+// single command present on all hosts. `bun` is that command: the rest of these
+// servers already depend on a system-wide bun install, so requiring it here is
+// consistent with that convention (and it sidesteps the "use bundled node"
+// Claude Desktop option that has since been removed from settings). bun runs
+// this `.mjs` directly under its node-compat runtime (process.argv,
+// process.platform, node:child_process all work).
 //
-// KEYSTONE ASSUMPTION: `node` must be on PATH at MCP spawn. On POSIX the host's
-// execvp resolves a bare `node` against PATH; on Windows, CreateProcess does NOT
-// search PATH the same way, so a bare `node` resolves only if the host passes a
-// PATH-aware environment to the spawn. If Windows MCP spawn cannot find `node`,
-// source-sync is dead on arrival there — this is the dominant unproven risk and
-// must be validated on Windows hardware.
+// KEYSTONE ASSUMPTION: `bun` must be on PATH at MCP spawn. On POSIX the host's
+// execvp resolves a bare `bun` against PATH; on Windows, CreateProcess does NOT
+// search PATH the same way, so a bare `bun` resolves only if the host passes a
+// PATH-aware environment to the spawn. The Claude Desktop spawn env is the most
+// locked-down, so bun-on-PATH at Desktop MCP spawn is the dominant unproven risk
+// and must be validated on Windows hardware.
 //
-// node cannot exec-replace itself, so it PROVISIONS the pinned bun, then SPAWNS
-// it as a child with stdio:"inherit". The MCP JSON-RPC stream therefore flows
-// client <-> bun directly on fd 0/1; node never touches the protocol bytes. The
+// The on-PATH bun that runs THIS shim need NOT be the pinned ABI version: it
+// only executes launch.mjs. The shim then PROVISIONS the pinned bun (vec0-ABI
+// matched, see ensure-bun) and SPAWNS *that* bun as a child with stdio:"inherit"
+// to run the server. The MCP JSON-RPC stream therefore flows client <-> pinned
+// bun directly on fd 0/1; the launcher bun never touches the protocol bytes. The
 // F1 graceful-teardown invariant (makeServerTeardown: stdin-EOF / SIGINT /
-// SIGTERM) holds on the PRIMARY path because bun inherits fd0 and sees the
+// SIGTERM) holds on the PRIMARY path because the child inherits fd0 and sees the
 // client's stdin-close EOF itself. The signal forwarding below is a secondary
 // net (Windows has no catchable SIGTERM; graceful shutdown there rides the
 // stdin-EOF path, and a hard kill only leaves a pidfile reclaimed on next start
 // via pid-liveness).
 //
 // Modes:
-//   node launch.mjs                  provision bun, then run the server
-//   node launch.mjs --provision-only pre-warm bun and exit (SessionStart hook)
+//   bun launch.mjs                  provision bun, then run the server
+//   bun launch.mjs --provision-only pre-warm bun and exit (SessionStart hook)
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

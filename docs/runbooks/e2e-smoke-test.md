@@ -31,12 +31,14 @@ Two ways to drive the tools below:
 ## G3 — Install + spawn (do this first, in a real session)
 
 1. Install the built plugin (`out/scholar.plugin`) into Claude Code, or run from
-   source. On first launch `bin/launch.sh` calls `ensure-bun.sh`, which provisions
-   the pinned bun 1.3.11 into `${CLAUDE_PLUGIN_DATA}/bun` (one-time download).
+   source. On first launch `bun bin/launch.mjs` calls `ensure-bun.sh`, which
+   provisions the pinned bun 1.3.11 into `${CLAUDE_PLUGIN_DATA}/bun` (one-time
+   download).
 2. Confirm the `scholar` MCP server appears connected and tools are listed.
-   - *Already proven on Linux at pivot time:* manifest → `launch.sh` → ensure-bun →
-     clean MCP `initialize` (slim-pivot spec §"linux"). The **un**proven part is
-     everything below — a real corpus workflow — plus the Windows launch path.
+   - *Already proven on Linux at pivot time:* manifest → `bun launch.mjs` →
+     ensure-bun → clean MCP `initialize` (slim-pivot spec §"linux"). The
+     **un**proven part is everything below — a real corpus workflow — plus the
+     Windows launch path.
 
 **If the server doesn't spawn:** check `${CLAUDE_PLUGIN_DATA}` is set (ensure-bun
 hard-fails without it) and that `curl`/`unzip` are available for the bun download.

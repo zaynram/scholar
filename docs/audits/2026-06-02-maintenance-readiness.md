@@ -29,6 +29,17 @@ been run** against a live server. Everything else is tidiness.
 | UI bundle (`measure-bundle`) | 1014 KB single-file, within budget |
 | Launch chain | `plugin.json` → `/bin/sh bin/launch.sh` → `ensure-bun.sh` (pins bun 1.3.11) → `exec bun dist/server.js` — statically sound, vec0-ABI pin intact |
 
+> **Superseded 2026-06-06 (bun-launcher unification, PR #4).** The launch chain is
+> now `plugin.json` → `bun ${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs` →
+> `ensure-bun.{sh,ps1}` (pins bun 1.3.11) → **child** `bun {dist/server.js | src/server/index.ts}`.
+> The retired per-OS `launch.{sh,cmd}` pair and its `exec`-replace shape are gone;
+> the spawned bun is now a child (signal-forwarded, fd0-inherited). Unlike the
+> static 2026-06-02 snapshot above, **both** entry paths are now verified live,
+> headless, on Linux: the built `dist/server.js` path *and* the source-sync
+> `src/server/index.ts` path (cold pinned-bun provision + cold bun auto-install of
+> the import graph into the `CLAUDE_PLUGIN_DATA` cache, leaving the shipped tree
+> pristine → clean MCP `initialize`). vec0-ABI pin unchanged.
+
 ---
 
 ## GATES — do these before relying on it for real reviews
