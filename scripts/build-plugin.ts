@@ -210,9 +210,22 @@ export function buildManifest(
         // spawn, so this is a latency optimization only — `bun launch.mjs` (no
         // flag) is the correctness gate. --provision-only runs the same shim,
         // which dispatches to the per-OS ensure-bun (idempotent + lock-guarded).
+        //
+        // Scoped to the `startup` matcher: provisioning the pinned bun into
+        // CLAUDE_PLUGIN_DATA is a first-session concern, so there's no point
+        // re-firing it on resume/clear/compact (the bun already exists by then).
+        // The `Setup` event is deliberately NOT used — it fires only on explicit
+        // `claude --init-only` / `-p --init|--maintenance` ("one-time preparation
+        // in CI or scripts"), never on install or normal startup, so it would skip
+        // the pre-warm for ordinary users. The plugins reference prescribes the
+        // SessionStart-into-CLAUDE_PLUGIN_DATA *mechanism* (install a dependency once,
+        // reuse across sessions and updates) but its example is UNSCOPED, guarding
+        // idempotency with an in-hook `diff`; the `startup` narrowing is scholar's own
+        // call, justified by ensure-bun's guard + launch.mjs being the correctness gate.
         hooks: {
             SessionStart: [
                 {
+                    matcher: 'startup',
                     hooks: [
                         {
                             type: 'command',

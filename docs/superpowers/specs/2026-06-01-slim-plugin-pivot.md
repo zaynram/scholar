@@ -127,9 +127,21 @@ selects target. Both packages build on the Linux host:
 
 Launch is **M2** (see `bin/`): on both OSes `bun` runs `bin/launch.mjs`, which
 calls the idempotent `ensure-bun` provisioner then spawns the pinned bun on the
-server entry. A `SessionStart` hook pre-warms `ensure-bun` via `bun launch.mjs
---provision-only` (latency only — the launcher is the correctness gate, because
-SessionStart does not block MCP spawn). **Shape change (2026-06-05):** the old
+server entry. A `SessionStart` hook (scoped to the `startup` matcher) pre-warms
+`ensure-bun` via `bun launch.mjs --provision-only` (latency only — the launcher is
+the correctness gate, because SessionStart does not block MCP spawn). **Hook scope
+(2026-06-06):** the pre-warm is `startup`-only — provisioning the pinned bun into
+`CLAUDE_PLUGIN_DATA` is a first-session concern, so it need not re-fire on
+resume/clear/compact. The plugins reference prescribes the *mechanism* — a
+SessionStart hook that installs a dependency into `CLAUDE_PLUGIN_DATA` once and
+reuses it across sessions and updates — but its example is *unscoped*, leaning on an
+in-hook `diff` guard for idempotency. The `startup` narrowing is scholar's own
+decision, not a doc prescription: scholar's guard-equivalent already exists
+(`ensure-bun` is idempotent + flock-guarded) and `launch.mjs` (no flag) is the real
+correctness gate, so re-firing on resume/clear/compact buys nothing. `Setup` is
+deliberately *not* used: it fires only on explicit `claude --init-only` /
+`-p --init|--maintenance` ("one-time preparation in CI or scripts"), never on
+install or normal startup, so it would skip the pre-warm for ordinary users. **Shape change (2026-06-05):** the old
 Linux launcher `exec`ed into bun, so the PID Claude Code spawned *became* the
 server (no wrapper); `bun launch.mjs` instead spawns the pinned bun as a **child**
 on both OSes — always a parent+child pair cross-OS. Mitigated, not a regression:
