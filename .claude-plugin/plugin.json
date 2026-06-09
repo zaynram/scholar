@@ -1,7 +1,10 @@
 {
     "name": "scholar",
+    "version": "0.1.0",
+    "displayName": "Scholar",
+    "repository": "https://github.com/zaynram/scholar.git",
     "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a vendored pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
-    "author": { "name": "zayn" },
+    "author": { "name": "Zayn Ramdass", "email": "ramdasszayn@gmail.com" },
     "keywords": [
         "literature-review",
         "research",
