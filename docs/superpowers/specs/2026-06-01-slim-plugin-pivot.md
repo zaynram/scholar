@@ -250,7 +250,12 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   §5 leg 7 — confirm a Desktop restart recovers cleanly.
 - **ensure-bun.ps1**: the PowerShell download/extract path is unexecuted on the
   dev host. Validate `Invoke-WebRequest`/`Expand-Archive` + the lock-dir guard.
-- **koffi.node (win32-x64) — KNOWN REGRESSION (decided: accept + document).**
+- **koffi.node (win32-x64) — KNOWN REGRESSION (decided: accept + document).
+  FIELD-CONFIRMED 2026-06-10 (Cowork Windows):** the predicted `require("koffi")`
+  failure surfaced live as `Cannot find native Koffi module` on pdf-child spawn —
+  exactly the swallowed-throw path below, now observed rather than inferred. The
+  prediction held; no behaviour change is required (it remains best-effort, off by
+  default), only this status flip from "predicted" to "observed."
   `attachJobObject` does a runtime `require("koffi")` inside `server.js`. `bun
   build --target=bun` keeps native modules external, and the slim package ships
   **no `node_modules`**, so on Windows that `require` throws and is swallowed by
@@ -268,6 +273,27 @@ enumerated with its failure symptom in **HUMAN.md §5**.
   `node_modules/koffi`), *or* tree-kill the pdf child from the cmd-side launcher.
   Not done blind here — koffi's native-binding resolution cannot be validated off
   the target.
+- **Pinned-bun SIGILL on pdf-child spawn — NEW, field-observed 2026-06-10
+  (intermittent; single occurrence).** On one Cowork Windows boot the **pinned**
+  `bun.exe` (`bun-windows-x64` `1.3.11`, the vec0-ABI-matched runtime ensure-bun
+  provisions) crashed with `Illegal instruction` as the pdf child was spawned, so
+  `spawnPdfChild` saw the child die immediately. It did not reproduce on the next
+  boot. **Mechanism — hypothesis, NOT confirmed:** the default `bun-windows-x64`
+  release is built for a modern x86-64 baseline (uses AVX2-class instructions); on
+  a CPU/VM that does not expose them, the process traps `SIGILL`. The intermittency
+  fits a host that sometimes schedules the MCP onto a constrained vCPU, or a flaky
+  download leaving a corrupt `bun.exe` (Expand-Archive over a partial zip) — both
+  are guesses pending a Windows repro. **Remediation hypotheses (unvalidated, do
+  NOT ship blind):** (a) if it is the instruction-set mismatch, provision bun's
+  **`-baseline`** Windows build (`bun-windows-x64-baseline.zip`) instead of / as a
+  SIGILL-triggered fallback — it targets older CPUs and is the canonical bun fix
+  for `Illegal instruction`, but it must still carry the **same vec0 ABI** as the
+  pin, so the swap has to be version-locked the way the current pin is; (b) if it
+  is download corruption, have ensure-bun verify the extracted `bun.exe`
+  (size/hash, or the very `cmd /c "<bun>" --version` probe the connect-timeout fix
+  added) before declaring provision success, and re-download on mismatch. Pick the
+  branch only after a Windows repro distinguishes them — a `--version` that itself
+  SIGILLs points at (a); a `--version` that mismatches the pin points at (b).
 - **UI bundling** — *RESOLVED 2026-06-04 (`eda8026`+`306e3f8`).* This bullet predicted the
   defect: `build:ui` emits a multi-file `ui/index.html` + `chunk-*.js`, and the
   sandboxed MCP-App iframe (SEP-1865) cannot fetch sibling chunks — so the

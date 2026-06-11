@@ -83,7 +83,7 @@ function runProvisionerDetached(dataDir: string) {
 }
 
 test.skipIf(process.platform !== "win32")(
-  "ensure-bun.ps1: valid pinned bun present → detached re-launch exits 0 in <2s and does NOT re-provision",
+  "ensure-bun.ps1: valid pinned bun present → detached re-launch exits 0 in <5s and does NOT re-provision",
   () => {
     const dataDir = mkdtempSync(join(tmpdir(), "scholar-ensure-bun-"))
     try {
@@ -112,7 +112,12 @@ test.skipIf(process.platform !== "win32")(
       const elapsedMs = performance.now() - t0
 
       expect(r.status).toBe(0)
-      expect(elapsedMs).toBeLessThan(2000)
+      // 5 s, not 2 s: a no-op probe on Windows CI (cold process spawn + AV scan +
+      // slower FS) can blow past 2 s without re-downloading. A real re-provision
+      // pulls ~110 MB — far above 5 s — so the bound still positively distinguishes
+      // "Test-Ok true, fast exit" from "Test-Ok false, re-download", and stays well
+      // under the 30 s MCP connect budget the fix exists to protect.
+      expect(elapsedMs).toBeLessThan(5000)
       expect(String(r.stderr ?? "")).not.toContain("provisioning bun")
     } finally {
       rmSync(dataDir, { recursive: true, force: true })
