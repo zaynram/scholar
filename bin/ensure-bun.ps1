@@ -15,9 +15,21 @@ if (-not $env:CLAUDE_PLUGIN_DATA) { [Console]::Error.WriteLine("ensure-bun: CLAU
 $BunDir = Join-Path $env:CLAUDE_PLUGIN_DATA "bun"
 $BunBin = Join-Path $BunDir "bun.exe"
 
+# Probe the pinned bun's --version. MUST route through `cmd /c`, NOT the PS call
+# operator `& $BunBin`: under the host's detached/no-console spawn (launch.mjs
+# stdio:"ignore"/inherit with no attached console) PowerShell refuses to activate
+# a native .exe in the pipeline (CantActivateDocumentInPipeline) and `& $BunBin`
+# yields EMPTY — so the version compare fails even for a valid pinned bun, and
+# every launch re-downloads ~110 MB, overrunning the 30 s MCP connect budget
+# (Cowork Windows field finding, 2026-06-10). `cmd /c` invokes the exe via the
+# command interpreter, which has no such restriction. POSIX ensure-bun.sh uses
+# $(...) capture and is unaffected.
 function Test-Ok {
   if (-not (Test-Path $BunBin)) { return $false }
-  try { return ((& $BunBin --version 2>$null) -eq $Pin) } catch { return $false }
+  try {
+    $v = (cmd /c "`"$BunBin`" --version" 2>$null | Select-Object -First 1)
+    return ("$v".Trim() -eq $Pin)
+  } catch { return $false }
 }
 
 if (Test-Ok) { exit 0 }
@@ -43,7 +55,10 @@ try {
   Expand-Archive -Path $Zip -DestinationPath $Tmp -Force
   Move-Item -Force (Join-Path $Tmp "bun-windows-x64\bun.exe") $BunBin
   Remove-Item -Recurse -Force $Tmp
-  [Console]::Error.WriteLine("ensure-bun: provisioned $(& $BunBin --version)")
+  # Same cmd /c routing as Test-Ok — a bare `& $BunBin` prints blank under the
+  # detached spawn, making this success line read "provisioned " with no version.
+  $ver = (cmd /c "`"$BunBin`" --version" 2>$null | Select-Object -First 1)
+  [Console]::Error.WriteLine("ensure-bun: provisioned $("$ver".Trim())")
 } finally {
   if ($haveLock) { Remove-Item -Recurse -Force $Lock -ErrorAction SilentlyContinue }
 }
