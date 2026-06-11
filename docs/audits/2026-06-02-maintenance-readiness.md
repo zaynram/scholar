@@ -39,6 +39,14 @@ been run** against a live server. Everything else is tidiness.
 > `src/server/index.ts` path (cold pinned-bun provision + cold bun auto-install of
 > the import graph into the `CLAUDE_PLUGIN_DATA` cache, leaving the shipped tree
 > pristine → clean MCP `initialize`). vec0-ABI pin unchanged.
+>
+> **Refactor note (2026-06-10, `fix/windows-connect-timeout`).** That live run
+> exercised the *pre-refactor* `launch.mjs`. `launch.mjs` was since refactored to
+> extract a pure `resolveEntry(root)` and gate the side-effectful launch sequence
+> behind `import.meta.main` — a **behaviour-preserving relocation** (provision /
+> resolve / spawn logic byte-identical, only re-indented), now pinned by
+> `tests/launch.test.ts` (entry resolution: `dist/server.js` when built, else
+> `src/server/index.ts`). The live entry-path verification above still stands.
 
 ---
 
