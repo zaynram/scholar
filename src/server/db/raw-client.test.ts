@@ -8,7 +8,12 @@ import { openWithPragmas } from "./migrations.ts";
 import { rawClient } from "./raw-client.ts";
 
 let dir: string | undefined;
-afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  if (dir) {
+    Bun.gc(true); // finalize local-scope Drizzle wrappers before rmSync (Windows WAL lock)
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("rawClient returns the bun:sqlite Database backing a BunSQLiteDatabase", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-rawclient-"));

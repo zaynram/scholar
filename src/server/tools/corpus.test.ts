@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { buildServer, type BuiltServer } from "../index.ts";
 import { openWithPragmas, applyMigrations } from "../db/migrations.ts";
+import { rawClient } from "../db/raw-client.ts";
 import { reopenPersistedCorpus } from "./corpus.ts";
 import type { PdfChild } from "./registry.ts";
 
@@ -17,6 +18,8 @@ import type { PdfChild } from "./registry.ts";
 let dir: string;
 let built: BuiltServer;
 let setRootsMock: ReturnType<typeof mock>;
+// Extra raw DB handle to close in afterEach for tests that drop built.ctx.db mid-test.
+let extraRawToClose: ReturnType<typeof rawClient> | undefined;
 const origRuntimeRoot = process.env.SCHOLAR_RUNTIME_ROOT;
 
 beforeEach(() => {
@@ -45,6 +48,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Drop Drizzle refs before GC so their statement caches are collected → no
+  // zombie-state SQLite handles → WAL/SHM files released on Windows before rmSync.
+  const rawConfig = rawClient(built.ctx.configDb);
+  const rawCorpus = built.ctx.db ? rawClient(built.ctx.db) : undefined;
+  // Snapshot module-level tracker before clearing it (Bug #3: test drops ctx.db mid-test).
+  const extraRaw = extraRawToClose;
+  extraRawToClose = undefined;
+  ;(built as any) = undefined;
+  Bun.gc(true);
+  rawConfig.close();
+  if (rawCorpus) rawCorpus.close();
+  if (extraRaw) extraRaw.close();
   rmSync(dir, { recursive: true, force: true });
   if (origRuntimeRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
   else process.env.SCHOLAR_RUNTIME_ROOT = origRuntimeRoot;
@@ -300,6 +315,12 @@ test("corpus.status reports db_open:true with a numeric count for the active, op
 test("corpus.status reports db_open:false (not a misleading 0) when the active corpus DB isn't open in this process (Bug #3)", async () => {
   await createCorpus("restart-sim");
   await dispatch("scholar.corpus.activate", { slug: "restart-sim" });
+  // Register the raw Database handle with afterEach BEFORE dropping ctx.db.
+  // Closing it inside this async test function's scope (while the generator is
+  // still live) may leave W (Drizzle wrapper) incompletely GC'd — zombie-state
+  // WAL lock → EBUSY in rmSync. afterEach runs after the generator is done and
+  // applies the same drop-GC-close sequence that works for all other tests.
+  extraRawToClose = rawClient(built.ctx.db!);
   // Simulate a fresh process / failed startup rehydration: activeCorpusId is still
   // persisted in config, but ctx.db is unset (no open handle this process).
   built.ctx.db = undefined;
@@ -366,10 +387,16 @@ test("reopenPersistedCorpus rehydrates ctx.db from the on-disk corpus DB across 
   // A new openWithPragmas handle on the same config-DB file reads A's persisted
   // activeCorpusId + corpora rows back off disk — no shared in-memory state. B
   // never calls activate; reopenPersistedCorpus is the only recovery path.
-  const freshConfigDb = openWithPragmas(join(dir, "dbs", "scholar-config.db"));
+  //
+  // `let` (not `const`) so we can set it to undefined before Bun.gc(true) in the
+  // explicit cleanup below — a closure captures the variable BINDING, so nulling it
+  // releases the reference the async continuation holds, letting GC collect the
+  // Drizzle wrapper and finalize its statement cache (Windows EBUSY guard).
+  let freshConfigDb: ReturnType<typeof openWithPragmas> | undefined =
+    openWithPragmas(join(dir, "dbs", "scholar-config.db"));
   const builtB = buildServer({
     runtimeRoot: dir,
-    openConfigDb: () => freshConfigDb,
+    openConfigDb: () => freshConfigDb!,
     spawnPdfChild: () => ({
       interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
       getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
@@ -401,6 +428,20 @@ test("reopenPersistedCorpus rehydrates ctx.db from the on-disk corpus DB across 
   };
   expect(status.db_open).toBe(true);
   expect(status.paper_count).toBe(1);
+
+  // builtB was created inside this test body — afterEach only handles the shared
+  // `built` from beforeEach. Close builtB's DBs explicitly here to avoid zombie-
+  // state WAL locks on Windows. Null ALL Drizzle refs (ctx fields + freshConfigDb
+  // binding) before Bun.gc(true): the async continuation captures `freshConfigDb`
+  // by binding, so setting it to undefined releases that reference too.
+  const rawBConfig = rawClient(builtB.ctx.configDb);
+  const rawBCorpus = builtB.ctx.db ? rawClient(builtB.ctx.db) : undefined;
+  (builtB.ctx as any).configDb = undefined;
+  (builtB.ctx as any).db = undefined;
+  freshConfigDb = undefined;
+  Bun.gc(true);
+  rawBConfig.close();
+  if (rawBCorpus) rawBCorpus.close();
 });
 
 test("corpus.reset-init clears initOnce slot allowing re-create after failure", async () => {
@@ -421,6 +462,10 @@ test("scholar.dashboard returns structuredContent with view: dashboard", async (
 // ─── H1: corpus.export argv-only spawn (no shell interpolation) ─────────────
 
 test("corpus.export survives a runtime-root path containing shell metacharacters", async () => {
+  // Windows: `"` is not a legal filename character — mkdtempSync with a `"` prefix
+  // fails with ENOENT. The H1 injection risk is a POSIX-shell concern (sh -c quoting)
+  // and is already guarded on the platform where it matters. Skip on win32.
+  if (process.platform === "win32") return;
   // Audit H1: handleExport previously built `sh -c "tar ... | zstd -o ${dest}"`
   // with double-quoted interpolated paths. A path containing `"` unbalances
   // the shell quoting, so the export either errors (best case) or executes
@@ -479,12 +524,18 @@ test("corpus.create writes the per-corpus DB under ctx.runtimeRoot, ignoring a d
   mkdirSync(join(rootB, "dbs"), { recursive: true }); // exists so a buggy handler *succeeds* under B → clean discrimination
   const origRoot = process.env.SCHOLAR_RUNTIME_ROOT;
   process.env.SCHOLAR_RUNTIME_ROOT = rootB; // decoy — must NOT win
+  // Declared as `let` OUTSIDE try so finally can access them AND null them before
+  // Bun.gc(true). Closures capture the variable BINDING, so nulling `configDbA`
+  // here releases all references (including the one in `() => configDbA!`) before
+  // GC runs — required to avoid zombie-state WAL locks on Windows.
+  let configDbA: ReturnType<typeof openWithPragmas> | undefined;
+  let builtA: ReturnType<typeof buildServer> | undefined;
   try {
-    const configDbA = openWithPragmas(join(rootA, "dbs", "scholar-config.db"));
+    configDbA = openWithPragmas(join(rootA, "dbs", "scholar-config.db"));
     applyMigrations(configDbA);
-    const builtA = buildServer({
+    builtA = buildServer({
       runtimeRoot: rootA,
-      openConfigDb: () => configDbA,
+      openConfigDb: () => configDbA!,
       spawnPdfChild: () => ({
         interact: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
         getText: async () => { throw new Error("PDF_CHILD_UNAVAILABLE"); },
@@ -504,6 +555,17 @@ test("corpus.create writes the per-corpus DB under ctx.runtimeRoot, ignoring a d
     // … and NOT under the divergent env (B).
     expect(existsSync(join(rootB, "dbs", "scholar-ctxroot.db"))).toBe(false);
   } finally {
+    if (builtA) {
+      const rawConfigA = rawClient(builtA.ctx.configDb);
+      const rawCorpusA = builtA.ctx.db ? rawClient(builtA.ctx.db) : undefined;
+      (builtA.ctx as any).configDb = undefined;
+      (builtA.ctx as any).db = undefined;
+      configDbA = undefined;  // drops all remaining references to the Drizzle wrapper
+      builtA = undefined;
+      Bun.gc(true);
+      rawConfigA.close();
+      if (rawCorpusA) rawCorpusA.close();
+    }
     rmSync(rootA, { recursive: true, force: true });
     rmSync(rootB, { recursive: true, force: true });
     if (origRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;

@@ -25,7 +25,7 @@ test('buildManifest(linux): bun launch.mjs + HOME runtime root + bun pre-warm', 
     expect(m.bin).toBeUndefined() // compiled-binary leftover stripped
     const s = m.mcpServers.scholar
     expect(s.command).toBe('bun')
-    expect(s.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs'])
+    expect(s.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/launcher/launch.mjs'])
     expect(s.env.SCHOLAR_RUNTIME_ROOT).toBe('${HOME}/mcp-data/scholar/runtime')
     expect(s.env.SCHOLAR_OLLAMA_EMBED_MODEL).toBe('nomic-embed-text:v1.5')
     expect(s.env.SCHOLAR_OLLAMA_CHAT_MODEL).toBe('qwen3:8b')
@@ -43,7 +43,7 @@ test('buildManifest(win32): bun launch.mjs + USERPROFILE root + bun pre-warm', (
     const s = m.mcpServers.scholar
     // Same cross-OS launcher as linux; only the runtime root differs per-OS.
     expect(s.command).toBe('bun')
-    expect(s.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs'])
+    expect(s.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/launcher/launch.mjs'])
     expect(s.env.SCHOLAR_RUNTIME_ROOT).toBe(
         '${USERPROFILE}\\mcp-data\\scholar\\runtime',
     )
@@ -77,9 +77,9 @@ test('buildMcpbManifest: base metadata passthrough + version', () => {
 test('buildMcpbManifest: bun launch.mjs entry under type:binary, win32-only', () => {
     const m = buildMcpbManifest(base, '0.1.0') as any
     expect(m.server.type).toBe('binary') // bun is a binary on PATH
-    expect(m.server.entry_point).toBe('bin/launch.mjs')
+    expect(m.server.entry_point).toBe('launcher/launch.mjs')
     expect(m.server.mcp_config.command).toBe('bun')
-    expect(m.server.mcp_config.args).toEqual(['${__dirname}\\bin\\launch.mjs'])
+    expect(m.server.mcp_config.args).toEqual(['${__dirname}\\launcher\\launch.mjs'])
     expect(m.compatibility.platforms).toEqual(['win32'])
 })
 

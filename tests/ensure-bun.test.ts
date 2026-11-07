@@ -26,7 +26,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 
-const PS1 = join(import.meta.dir, "..", "bin", "ensure-bun.ps1")
+const PS1 = join(import.meta.dir, "..", "launcher", "ensure-bun.ps1")
 const PIN = "1.3.11" // keep in sync with package.json scholar.bundledBunVersion
 
 // ── Static guard — runs on EVERY host (incl. the Linux dev box / CI) ──────────
@@ -82,7 +82,19 @@ function runProvisionerDetached(dataDir: string) {
   )
 }
 
-test.skipIf(process.platform !== "win32")(
+// Skip the behavioral test when the pinned bun isn't already provisioned on the
+// host. The test's purpose is to guard the "valid bun present, re-launch is fast"
+// regression — it is not a first-run provisioner test. Running the provisioner
+// cold (110 MB download) in dev is slow, unreliable, and not what this guard is
+// designed to catch.
+const hostData = process.env.CLAUDE_PLUGIN_DATA
+const hostBun = hostData ? join(hostData, "bun", "bun.exe") : undefined
+const hostBunReady =
+  process.platform === "win32" &&
+  !!hostBun && existsSync(hostBun) &&
+  bunVersionViaCmd(hostBun) === PIN
+
+test.skipIf(!hostBunReady)(
   "ensure-bun.ps1: valid pinned bun present → detached re-launch exits 0 in <5s and does NOT re-provision",
   () => {
     const dataDir = mkdtempSync(join(tmpdir(), "scholar-ensure-bun-"))
@@ -91,16 +103,8 @@ test.skipIf(process.platform !== "win32")(
       mkdirSync(bunDir, { recursive: true })
       const stagedBun = join(bunDir, "bun.exe")
 
-      // Seed a valid pinned bun. Prefer copying the host-provisioned one to skip
-      // a 110 MB download; otherwise let a one-time warm-up run provision it.
-      const hostData = process.env.CLAUDE_PLUGIN_DATA
-      const hostBun = hostData ? join(hostData, "bun", "bun.exe") : undefined
-      if (hostBun && existsSync(hostBun) && bunVersionViaCmd(hostBun) === PIN) {
-        copyFileSync(hostBun, stagedBun)
-      } else {
-        const warm = runProvisionerDetached(dataDir)
-        expect(warm.status).toBe(0) // first run provisions (may download)
-      }
+      // Seed from the host-provisioned bun (skipIf guarantees it exists + matches PIN).
+      copyFileSync(hostBun!, stagedBun)
       // Precondition: a valid pinned bun is now present at the expected path.
       expect(bunVersionViaCmd(stagedBun)).toBe(PIN)
 

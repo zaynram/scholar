@@ -51,6 +51,12 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  const rawConfig = rawClient(built.ctx.configDb);
+  const rawCorpus = built.ctx.db ? rawClient(built.ctx.db) : undefined;
+  ;(built as any) = undefined;
+  Bun.gc(true);
+  rawConfig.close();
+  if (rawCorpus) rawCorpus.close();
   rmSync(dir, { recursive: true, force: true });
   if (origRuntimeRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
   else process.env.SCHOLAR_RUNTIME_ROOT = origRuntimeRoot;

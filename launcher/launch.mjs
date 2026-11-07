@@ -74,10 +74,10 @@ function main() {
   const provision = isWin
     ? spawnSync(
         "powershell",
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(root, "bin", "ensure-bun.ps1")],
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(root, "launcher", "ensure-bun.ps1")],
         { stdio: ["ignore", 2, 2], windowsHide: true },
       )
-    : spawnSync("sh", [join(root, "bin", "ensure-bun.sh")], { stdio: ["ignore", 2, 2] });
+    : spawnSync("sh", [join(root, "launcher", "ensure-bun.sh")], { stdio: ["ignore", 2, 2] });
   if (provision.error) die(`failed to launch provisioner: ${provision.error.message}`);
   if (provision.status !== 0) die(`provisioner exited with status ${provision.status}`);
 

@@ -14,7 +14,14 @@ import { applyMigrations, openWithPragmas, countBundledMigrations } from "./migr
 import { rawClient } from "./raw-client.ts";
 
 let dir: string | undefined;
-afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  if (dir) {
+    // Force GC so local-scope Drizzle wrappers from tests are finalized before
+    // rmSync. On Windows, zombie-state SQLite handles keep WAL/SHM locked.
+    Bun.gc(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("openWithPragmas sets PRAGMA foreign_keys = ON on every open", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-mig-"));

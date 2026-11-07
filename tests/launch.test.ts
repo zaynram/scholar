@@ -16,7 +16,7 @@ import { test, expect } from "bun:test"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { resolveEntry } from "../bin/launch.mjs"
+import { resolveEntry } from "../launcher/launch.mjs"
 
 test("resolveEntry: prefers dist/server.js when the built bundle is present", () => {
   const root = mkdtempSync(join(tmpdir(), "scholar-launch-dist-"))

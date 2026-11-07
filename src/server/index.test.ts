@@ -296,6 +296,9 @@ let testRuntimeRoot: string | null = null;
 
 afterEach(() => {
   if (testRuntimeRoot && existsSync(testRuntimeRoot)) {
+    // Force GC so Drizzle statement caches are finalized before rmSync.
+    // On Windows, zombie-state SQLite handles keep WAL/SHM files locked otherwise.
+    Bun.gc(true);
     rmSync(testRuntimeRoot, { recursive: true, force: true });
   }
   testRuntimeRoot = null;

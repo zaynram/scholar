@@ -1,6 +1,6 @@
 {
     "name": "scholar",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "displayName": "Scholar",
     "repository": "https://github.com/zaynram/scholar.git",
     "description": "Literature review workspace. Multi-corpus reading, annotation, semantic search, Ollama-powered syntheses, and a vendored pdf MCP. Inspired by but independent of the Daisy Lit Review artifact.",
@@ -17,7 +17,7 @@
     "mcpServers": {
         "scholar": {
             "command": "bun",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs"],
+            "args": ["${CLAUDE_PLUGIN_ROOT}/launcher/launch.mjs"],
             "env": {
                 "SCHOLAR_OLLAMA_URL": "http://127.0.0.1:11434",
                 "SCHOLAR_OLLAMA_EMBED_MODEL": "nomic-embed-text:v1.5",
@@ -32,7 +32,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bun \"${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs\" --provision-only"
+                        "command": "bun \"${CLAUDE_PLUGIN_ROOT}/launcher/launch.mjs\" --provision-only"
                     }
                 ]
             }

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer, type BuiltServer } from "../index.ts";
 import { openWithPragmas, applyMigrations } from "../db/migrations.ts";
+import { rawClient } from "../db/raw-client.ts";
 import type { PdfChild } from "./registry.ts";
 import { papers, citations } from "../db/schema.ts";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
@@ -85,6 +86,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  const rawConfig = rawClient(built.ctx.configDb);
+  // built.ctx.db is in-memory here (buildInMemoryCorpusDb), no WAL files, but
+  // drop Drizzle refs consistently for the same zombie-state reason.
+  ;(built as any) = undefined;
+  Bun.gc(true);
+  rawConfig.close();
   rmSync(dir, { recursive: true, force: true });
   if (origRuntimeRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
   else process.env.SCHOLAR_RUNTIME_ROOT = origRuntimeRoot;

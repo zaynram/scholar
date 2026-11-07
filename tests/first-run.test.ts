@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildServer, type BuiltServer } from "#server/index.ts"
 import { openWithPragmas, applyMigrations } from "#server/db/migrations.ts"
+import { rawClient } from "#server/db/raw-client.ts"
 import type { PdfChild } from "#server/tools/registry.ts"
 import { runFirstRun } from "^scripts/first-run.ts" // Will fail Red — not exported yet
 
@@ -45,6 +46,16 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Capture raw DB refs before dropping Drizzle. On Windows, Drizzle's statement
+  // cache keeps SQLite handles in zombie state → WAL/SHM files stay locked →
+  // rmSync EBUSY. Fix: capture raws, drop all Drizzle refs via built, force GC
+  // to finalize statements, then close the native handles.
+  const rawConfig = rawClient(built.ctx.configDb)
+  const rawCorpus = built.ctx.db ? rawClient(built.ctx.db) : undefined
+  ;(built as any) = undefined  // drop all Drizzle references held by ctx
+  Bun.gc(true)
+  rawConfig.close()
+  if (rawCorpus) rawCorpus.close()
   rmSync(dir, { recursive: true, force: true })
   if (origRuntimeRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT
   else process.env.SCHOLAR_RUNTIME_ROOT = origRuntimeRoot

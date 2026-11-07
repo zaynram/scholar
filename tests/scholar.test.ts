@@ -14,12 +14,15 @@ import { join } from 'node:path'
 // or fail with "Cannot find module" at Red phase.
 import { test, expect } from 'bun:test'
 
-const SCRIPT_PATH = util.subpath('bin', 'scholar.nu')
+const SCRIPT_PATH = util.subpath('launcher', 'scholar.nu')
+// Forward-slash form for nushell command strings — avoids Windows backslash
+// escaping and cmd.exe mis-parsing `^launcher/scholar.nu` as command `launcher`.
+const SCRIPT_NU_PATH = SCRIPT_PATH.replace(/\\/g, '/')
 const SCRIPT_FILE = Bun.file(SCRIPT_PATH)
 const SCRIPT_TEXT = await SCRIPT_FILE.text()
 
 const ESEP = env.dynamic({ win32: ';', default: ':' })
-const PATH = [util.subpath('bin'), ...(process.env.PATH ?? '').split(ESEP)].join(ESEP)
+const PATH = [util.subpath('launcher'), ...(process.env.PATH ?? '').split(ESEP)].join(ESEP)
 
 if (!Bun.which('nu')) {
     await Bun.stderr.write('WARNING: nu not on PATH — running minimal grep suite')
@@ -52,7 +55,7 @@ function runScript(
     const script: string[] = [
         JSON.stringify(pipe),
         `| to json --raw`,
-        `| ^bin/scholar.nu ${args.join(' ')}`,
+        `| nu "${SCRIPT_NU_PATH}" ${args.join(' ')}`,
         ...lines,
     ]
     return Bun.$`nu --commands ${script.join('\n')};`

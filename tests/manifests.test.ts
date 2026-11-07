@@ -35,7 +35,7 @@ test('mcpServers.scholar uses the cross-OS bun launcher (source-sync supersedes 
     // bun install these servers already depend on); it runs the launch.mjs shim
     // (provision pinned bun → spawn server from source).
     expect(scholar.command).toBe('bun')
-    expect(scholar.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/bin/launch.mjs'])
+    expect(scholar.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/launcher/launch.mjs'])
     // SCHOLAR_RUNTIME_ROOT is NOT pinned in the committed env: launch.mjs derives
     // it cross-OS from CLAUDE_PLUGIN_DATA (the POSIX-only ${HOME} default would
     // break on Windows). Its absence here is the contract, not an oversight.

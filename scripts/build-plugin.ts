@@ -156,17 +156,17 @@ async function stageVec0(): Promise<void> {
 
 // ── nu module + per-OS launcher set ───────────────────────────────────────────
 function stageBin(): void {
-    mkdirSync(join(DIR, 'bin'), { recursive: true })
+    mkdirSync(join(DIR, 'launcher'), { recursive: true })
     mkdirSync(join(DIR, 'nu'), { recursive: true })
     const nu = existsSync(util.subpath('nu', 'scholar.nu'))
         ? util.subpath('nu', 'scholar.nu')
-        : util.subpath('bin', 'scholar.nu')
+        : util.subpath('launcher', 'scholar.nu')
     copyFileSync(nu, join(DIR, 'nu', 'scholar.nu'))
     // launch.mjs is the single cross-OS launcher (run via `bun`); only the
     // ensure-bun provisioner it dispatches to is per-OS.
     const launchers = ['launch.mjs', WIN ? 'ensure-bun.ps1' : 'ensure-bun.sh']
     for (const f of launchers)
-        copyFileSync(util.subpath('bin', f), join(DIR, 'bin', f))
+        copyFileSync(util.subpath('launcher', f), join(DIR, 'launcher', f))
 }
 
 // ── Generate the per-OS plugin.json (M2 launch + pre-warm hook) ────────────────
@@ -190,7 +190,7 @@ export function buildManifest(
         ? '${USERPROFILE}\\mcp-data\\scholar\\runtime'
         : '${HOME}/mcp-data/scholar/runtime'
     const command = 'bun'
-    const args = [`${ROOT}/bin/launch.mjs`]
+    const args = [`${ROOT}/launcher/launch.mjs`]
 
     const manifest = {
         ...base,
@@ -229,7 +229,7 @@ export function buildManifest(
                     hooks: [
                         {
                             type: 'command',
-                            command: `bun "${ROOT}/bin/launch.mjs" --provision-only`,
+                            command: `bun "${ROOT}/launcher/launch.mjs" --provision-only`,
                         },
                     ],
                 },
@@ -278,10 +278,10 @@ export function buildMcpbManifest(
         keywords: (base.keywords as string[]) ?? [],
         server: {
             type: 'binary',
-            entry_point: 'bin/launch.mjs',
+            entry_point: 'launcher/launch.mjs',
             mcp_config: {
                 command: 'bun',
-                args: [`${DIRNAME}\\bin\\launch.mjs`],
+                args: [`${DIRNAME}\\launcher\\launch.mjs`],
                 env: {
                     CLAUDE_PLUGIN_ROOT: DIRNAME,
                     CLAUDE_PLUGIN_DATA: DATA,
@@ -376,7 +376,7 @@ async function assemble(): Promise<void> {
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
         'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
-        'bin/launch.mjs',
+        'launcher/launch.mjs',
     ]
     const missing = required.filter(r => !(r in fileMap))
     if (missing.length)
@@ -416,8 +416,8 @@ async function assembleMcpb(): Promise<void> {
         'dist/pdf-server/mcp-app.html',
         `build/vendor/sqlite-vec/vec0.${VEC0_EXT}`,
         'ui/app.html', // single-file MCP-App UI — resource.ts serves <root>/ui/app.html
-        'bin/launch.mjs',
-        'bin/ensure-bun.ps1',
+        'launcher/launch.mjs',
+        'launcher/ensure-bun.ps1',
     ]
     const missing = required.filter(r => !existsSync(join(DIR, r)))
     if (missing.length)

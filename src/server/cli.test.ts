@@ -8,8 +8,9 @@ import { test, expect, mock } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseEntryArgv, buildServer } from "./index.ts";
+import { parseEntryArgv, buildServer, type BuiltServer } from "./index.ts";
 import { reopenPersistedCorpus } from "./tools/corpus.ts";
+import { rawClient } from "./db/raw-client.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -197,25 +198,41 @@ test("(e) unit: reopenPersistedCorpus rehydrates ctx.db from the persisted activ
   // corpus DB to a different root than the config DB.
   const prevRoot = process.env.SCHOLAR_RUNTIME_ROOT;
   process.env.SCHOLAR_RUNTIME_ROOT = dir;
+  // Declared outside try so the finally block can close DBs explicitly.
+  // Async closures keep locals alive across await points, so variables inside
+  // try remain reachable during finally — Bun.gc(true) alone can't collect them.
+  let empty: BuiltServer | undefined;
+  let s1: BuiltServer | undefined;
+  let s2: BuiltServer | undefined;
   try {
     // Negative: a fresh server over an empty runtime root has nothing to rehydrate.
-    const empty = buildServer({ runtimeRoot: dir, quiet: true });
+    empty = buildServer({ runtimeRoot: dir, quiet: true });
     expect(empty.ctx.db).toBeUndefined();
     expect(reopenPersistedCorpus(empty.ctx, dir)).toBeUndefined();
     expect(empty.ctx.db).toBeUndefined();
 
     // Simulate the prior session: create + activate persists activeCorpusId + corpus DB.
-    const s1 = buildServer({ runtimeRoot: dir, quiet: true });
+    s1 = buildServer({ runtimeRoot: dir, quiet: true });
     await s1.dispatch("scholar.corpus.create", { slug: "t", display_name: "T", initial_pdf_root: dir });
     await s1.dispatch("scholar.corpus.activate", { slug: "t" });
     expect(s1.ctx.db).toBeDefined();
 
     // Fresh process simulation: a new server starts with ctx.db undefined, then rehydrates.
-    const s2 = buildServer({ runtimeRoot: dir, quiet: true });
+    s2 = buildServer({ runtimeRoot: dir, quiet: true });
     expect(s2.ctx.db).toBeUndefined();
     expect(reopenPersistedCorpus(s2.ctx, dir)).toBe("t");
     expect(s2.ctx.db).toBeDefined();
   } finally {
+    // Collect raw DB refs, then drop all Drizzle wrappers before GC.
+    const raws: ReturnType<typeof rawClient>[] = [];
+    for (const s of [empty, s1, s2]) {
+      if (!s) continue;
+      raws.push(rawClient(s.ctx.configDb));
+      if (s.ctx.db) raws.push(rawClient(s.ctx.db));
+    }
+    empty = s1 = s2 = undefined;
+    Bun.gc(true);
+    raws.forEach(r => r.close());
     if (prevRoot === undefined) delete process.env.SCHOLAR_RUNTIME_ROOT;
     else process.env.SCHOLAR_RUNTIME_ROOT = prevRoot;
     rmSync(dir, { recursive: true, force: true });
@@ -241,6 +258,8 @@ test("(c) mode-mutex: main(['--call', ...]) does NOT bind stdio MCP transport", 
     expect(exitCode).toBe(2); // unknown_tool → exit 2
     expect(stdioConstructed).toBe(0); // ← THE assertion: CLI mode never touches stdio transport
   } finally {
+    // Force GC to finalize Drizzle statement caches (zombie-state WAL lock on Windows).
+    Bun.gc(true);
     rmSync(dir, { recursive: true, force: true });
     mock.restore();
   }

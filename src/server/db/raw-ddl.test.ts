@@ -11,15 +11,26 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openWithPragmas } from "./migrations.ts"
+import { rawClient } from "./raw-client.ts"
 import { runRawDdl, RawDdlInvariantError } from "./raw-ddl.ts"
 import { ensureVec0Path } from "%/util"
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite"
 // Ensure vec0 path is discoverable by `Database.loadExtension`. The build
 // pipeline (foundation's `bun run build:vec`) is expected to land a copy at
 // build/vendor/sqlite-vec/vec0.so; in dev we fall back to the npm package's
 // platform binary so tests run before that script is wired.
 
 let dir: string | undefined
+let fileDb: BunSQLiteDatabase | undefined
 afterEach(() => {
+  if (fileDb) {
+    // Drop Drizzle ref first → GC finalizes its statement cache → no zombie-DB
+    // state → WAL/SHM file handles released on Windows. See schema.test.ts.
+    const raw = rawClient(fileDb);
+    fileDb = undefined;
+    Bun.gc(true);
+    raw.close();
+  }
   if (dir) rmSync(dir, { recursive: true, force: true })
   dir = undefined
 })
@@ -28,8 +39,8 @@ afterEach(() => {
 
 test("runRawDdl is callable on a fresh corpus DB without settings (no throw)", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-rawddl-"))
-  const db = openWithPragmas(join(dir, "t.db"))
-  expect(() => runRawDdl(db)).not.toThrow()
+  fileDb = openWithPragmas(join(dir, "t.db"))
+  expect(() => runRawDdl(fileDb!)).not.toThrow()
 })
 
 // ─── vec0 ABI canary (Task 6.5.1) ─────────────────────────────────────────────

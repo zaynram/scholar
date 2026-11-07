@@ -10,9 +10,27 @@ import { join } from "node:path";
 import { openWithPragmas, applyMigrations } from "./migrations.ts";
 import { rawClient } from "./raw-client.ts";
 import { nowIso, ulid } from "./nowIso.ts";
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 let dir: string | undefined;
-afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
+let db: BunSQLiteDatabase | undefined;
+afterEach(() => {
+  if (db) {
+    // On Windows, Drizzle's prepared-statement cache holds internal SQLite
+    // references that keep the WAL/SHM file handles locked even after
+    // rawClient(db).close(). Fix: drop the Drizzle ref first so its statement
+    // cache becomes GC-eligible, force a synchronous GC sweep to finalize those
+    // statements (removing the zombie-DB state), then close the raw handle.
+    const raw = rawClient(db);
+    db = undefined;
+    Bun.gc(true);
+    raw.close();
+  }
+  if (dir) {
+    rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  }
+});
 
 test("nowIso returns ISO-8601 with millisecond precision in UTC", () => {
   const s = nowIso();
@@ -37,7 +55,7 @@ test("ulid re-export produces 26-char Crockford-base32 ids that are monotonic", 
 
 test("applyMigrations creates the per-corpus tables enumerated in §8.2", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-schema-"));
-  const db = openWithPragmas(join(dir, "corpus.db"));
+  db = openWithPragmas(join(dir, "corpus.db"));
   applyMigrations(db);
   const tables = rawClient(db)
     .query("SELECT name FROM sqlite_master WHERE type='table'")
@@ -53,7 +71,7 @@ test("applyMigrations creates the per-corpus tables enumerated in §8.2", () => 
 
 test("applyMigrations creates the config DB tables enumerated in §8.1", () => {
   dir = mkdtempSync(join(tmpdir(), "scholar-schema-"));
-  const db = openWithPragmas(join(dir, "config.db"));
+  db = openWithPragmas(join(dir, "config.db"));
   applyMigrations(db);
   const tables = rawClient(db)
     .query("SELECT name FROM sqlite_master WHERE type='table'")
